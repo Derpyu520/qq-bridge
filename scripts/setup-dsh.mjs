@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -94,8 +95,15 @@ function patchCordis() {
     log(`cordis.patch.yml already contains mcp-snowluma entries; skipped auto-insert. Please check manually if they point to this repo.`);
     return;
   } else {
-    if (text.length > 0 && !text.endsWith('\n')) text += '\n';
-    text += `\n${block}`;
+    // 剥离 DSH 模板自带、独立成行的空数组 `[]`，否则追加的 block 列表会与它组成
+    // 两个 YAML 根节点，DSH 启动时报 “end of the stream or a document separator is expected”。
+    text = text.replace(/^[ \t]*\[\][ \t]*(?:\r?\n|$)/gm, '');
+    if (text.trim().length > 0) {
+      if (!text.endsWith('\n')) text += '\n';
+      text += `\n${block}`;
+    } else {
+      text += block;
+    }
     log(`cordis.patch.yml: qq-bridge MCP block appended`);
   }
   fs.writeFileSync(patchFile, text, 'utf8');
@@ -191,10 +199,31 @@ function ensureLocalModeFile() {
   log(`state/mode.json created with mode=reserved2 (fallback if DSH settings are not available)`);
 }
 
+// qq-mode-console 以 link: 依赖注册进 profile package.json 后，DSH 首次启动需要先安装一次
+// 才能解析该 bundle（否则 cold start 报 "cannot resolve profile bundle"）。dsh CLI 可用时自动执行。
+function autoInstallProfileBundles() {
+  const cmd = process.platform === 'win32' ? 'dsh.cmd' : 'dsh';
+  const r = spawnSync(cmd, ['plugin', '--profile', PROFILE, 'install'], {
+    encoding: 'utf8',
+    timeout: 120000,
+  });
+  if (r.error) {
+    log(`auto-install skipped: dsh CLI 未找到（${r.error.code || r.error.message}）。`);
+    log(`若 DSH 启动报“cannot resolve profile bundle \\"qq-mode-console\\"”，请手动执行：dsh plugin --profile ${PROFILE} install`);
+    return;
+  }
+  if (r.status === 0) {
+    log(`dsh plugin --profile ${PROFILE} install: OK`);
+  } else {
+    log(`dsh plugin --profile ${PROFILE} install 返回退出码 ${r.status}（若 DSH 启动报 bundle 解析失败，请手动重跑该命令）`);
+  }
+}
+
 copyPreset('qq-chat');
 copyPreset('qq-chat-v2');
 patchCordis();
 const pluginLink = ensurePluginLink();
 patchProfilePackage(pluginLink);
 ensureLocalModeFile();
+autoInstallProfileBundles();
 log('Done. Please restart DSH (or reload the profile) for the new presets/MCP to take effect.');

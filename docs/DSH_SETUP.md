@@ -58,6 +58,7 @@
    - 在 `~/.dsh/profiles/web/package.json` 注册 `qq-mode-console` 插件
    - 把 `qq-mode-console` 插件的默认模式设为 `reserved2`（二代仿真）
    - 创建本地 `state/mode.json`（`mode: reserved2`）作为 DSH settings 不可用时的兜底
+   - 尝试自动执行 `dsh plugin --profile web install`（当 `dsh` CLI 在 PATH 中可用时），注册 `qq-mode-console` 的 bundle 依赖；若 `dsh` 不在 PATH，缺失依赖时 DSH 会提示补跑
 
    > 脚本可重复运行；它会覆盖 `~/.dsh/.agent-presets/qq-chat*`、更新 MCP 路径并重建失效的插件链接。
    > 已存在的 `qq-bridge/state/mode.json` 会被保留（不覆盖用户设置）；全新安装才会写入 `mode: reserved2`。
@@ -83,6 +84,9 @@
 - **看不到 `qq-mode` 设置卡片**：确认 `setup-dsh.mjs` 已把 `qq-mode-console` 加入 profile 的 `package.json` bundles，并重启 DSH。
 - **MCP 工具没有出现**：确认 `cordis.patch.yml` 中三个 MCP 条目的路径指向当前仓库，并重启 DSH。
 - **preset 没有出现**：确认 `~/.dsh/.agent-presets/qq-chat` 和 `~/.dsh/.agent-presets/qq-chat-v2` 存在，并重启 DSH。
+- **启动 DSH 报 `failed to parse overlay cordis.patch.yml: YAMLException`**：多为历史版脚本残留的空数组 `[]` 引发。重新运行最新版脚本（会自动剥离）即可，或手动删除该文件里独立成行的 `[]` 后重启 DSH。
+- **启动 DSH 报 `cannot resolve profile bundle "qq-mode-console"`**：profile 的 bundle 依赖尚未安装。运行 `dsh plugin --profile web install`（`web` 换成你的实际 profile 名）后重启 DSH；新版脚本会尝试自动执行这一步。
+- **发送消息报 `unauthorized` / HTTP 401**：`config.json` 的 `snowluma.accessToken` 与 SnowLuma 的 OneBot 实例 token 不一致。将 SnowLuma WebUI 中 HTTP 与 WebSocket 两端的 accessToken 设为相同，再填入 `config.json`，然后重启桥。
 - **发送消息报 HTTP 426（Upgrade Required）**：说明 `config.json` 里的 `snowluma.httpUrl` 指向了 **WebSocket 端口**。`httpUrl` 必须是 OneBot 的 **HTTP API 地址**（例如 `http://127.0.0.1:3000`），而 `wsUrl` 才是 WebSocket 地址（例如 `ws://127.0.0.1:3001`）。请在 SnowLuma WebUI 的 OneBot 配置里分别确认 HTTP 和 WebSocket 的端口。也可以运行诊断脚本：
    ```bash
    node scripts/check-onebot-status.mjs
