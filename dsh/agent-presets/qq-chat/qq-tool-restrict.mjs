@@ -42,8 +42,6 @@ const SAFE_PREFIXES = [
 const SAFE_EXACT = new Set([
   'ask_user_question',
   'todo_write',
-  'web_search',
-  'web_fetch',
 ])
 
 export function apply(ctx) {

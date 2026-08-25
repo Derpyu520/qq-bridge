@@ -55,6 +55,8 @@ npm install        # 安装依赖（postinstall 会自动修补 @snowluma/sdk �
 
 复制 `config.example.json` 为 `config.json` 后编辑：
 
+> Windows CMD 用户请用：`copy config.example.json config.json`
+
 > ⚠️ 真实 `config.json` 与 `state/` 不会进入公开仓库，仓库只提供脱敏的 `config.example.json` 模板。
 
 | 字段 | 说明 |

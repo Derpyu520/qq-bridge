@@ -27,6 +27,8 @@
    cp config.example.json config.json
    ```
 
+   > Windows CMD 用户请用：`copy config.example.json config.json`
+
    然后编辑 `config.json`，填写：
 
    - `snowluma.wsUrl` / `httpUrl`
