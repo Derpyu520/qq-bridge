@@ -1,5 +1,7 @@
 # QQ ↔ DeepSeek Harness 桥接
 
+**English**: [README.en.md](README.en.md) | **中文**: [README.md](README.md)
+
 > 📘 详细内外核说明书见 **[docs/PROJECT_GUIDE.md](docs/PROJECT_GUIDE.md)**（架构、数据流、配置全解、调试与改进指南）。
 
 把 QQ 消息接入 DSH agent：QQ 好友/群发来的消息会变成 DSH 会话里的用户消息，agent 的回复（含提问、工具审批）会发回 QQ。
