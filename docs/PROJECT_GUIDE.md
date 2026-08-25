@@ -69,11 +69,14 @@ qq-bridge/
 │   ├── 傲娇助手.md
 │   └── README.md
 ├── docs/
-│   └── PROJECT_GUIDE.md        # 本文档（公开版）
+│   ├── PROJECT_GUIDE.md        # 本文档（公开版）
+│   └── DSH_SETUP.md            # DSH 端安装说明（另一台设备）
+├── dsh/
+│   └── agent-presets/          # qq-chat / qq-chat-v2 的 DSH preset 模板
 ├── assets/
 │   ├── deepseek娘.png          # AI 自我形象图（qq_get_self_image）
 │   └── project-intro.mp4       # 项目介绍视频（README 可查看）
-├── scripts/                    # 通用测试/辅助脚本
+├── scripts/                    # 通用测试/辅助脚本（含 setup-dsh.mjs）
 ├── config.example.json         # 配置模板（占位符，不含真实凭据）
 ├── package.json
 ├── README.md

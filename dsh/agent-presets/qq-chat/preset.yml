@@ -1,0 +1,3 @@
+﻿name: QQ 聊天角色
+description: 桥接到 QQ 群的聊天智能体。性格/说话方式在 agent.cordis.yml 的 persona 段自定义。
+order: 10

@@ -66,6 +66,22 @@ npm start
 
 Or double-click `start.bat` on Windows (guard mode with auto-restart).
 
+## DSH Setup on Another Device
+
+The bridge and console can run without extra DSH setup, but the two DSH chat presets (`qq-chat` and `qq-chat-v2`) and the MCP servers must be installed into DSH once per machine:
+
+```bash
+node scripts/setup-dsh.mjs
+```
+
+This installs:
+
+- `~/.dsh/.agent-presets/qq-chat` and `~/.dsh/.agent-presets/qq-chat-v2`
+- MCP entries in `~/.dsh/profiles/web/cordis.patch.yml`
+- `qq-mode-console` in the profile `package.json`
+
+Then restart DSH. See [docs/DSH_SETUP.md](docs/DSH_SETUP.md) for details.
+
 ## Security Notes
 
 - `config.json` and `state/` are **never committed**; the repository only ships `config.example.json`.

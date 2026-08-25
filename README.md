@@ -73,6 +73,16 @@ npm install        # 安装依赖（postinstall 会自动修补 @snowluma/sdk �
 
 > ⚠️ `allowAllWhenEmpty: true` 表示「白名单没填就全部放行」——把 agent 接入 QQ 等于把账号控制权交给了模型，建议先填白名单。
 
+### DSH 端安装（另一台设备 / 新环境）
+
+桥接和控制台能跑起来还不够，DSH 端还需要安装两个聊天 preset（`qq-chat` / `qq-chat-v2`）并挂载 MCP：
+
+```bash
+node scripts/setup-dsh.mjs
+```
+
+详细步骤见 **[docs/DSH_SETUP.md](docs/DSH_SETUP.md)**。
+
 ## 完整启动流程（从零开始）
 
 共 5 步，DSH 和桥接都已就绪，缺的只是 SnowLuma 本体：
