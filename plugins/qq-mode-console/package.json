@@ -1,7 +1,7 @@
 {
   "name": "qq-mode-console",
   "version": "0.1.0",
-  "description": "QQ bridge mode console for DeepSeek Harness settings UI (chat / closed-agent / reserved)",
+  "description": "QQ bridge mode console for DeepSeek Harness settings UI (chat / closed-agent / reserved / reserved2)",
   "type": "module",
   "main": "./lib/index.js",
   "license": "MIT",

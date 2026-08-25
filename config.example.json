@@ -6,11 +6,12 @@
     "reasoningEffort": "max"
   },
   "snowluma": {
-    "wsUrl": "ws://127.0.0.1:3000",
+    "wsUrl": "ws://127.0.0.1:3001",
     "httpUrl": "http://127.0.0.1:3000",
     "accessToken": "",
     "launcherPath": "C:\\path\\to\\SnowLuma\\launcher.bat",
-    "homeDir": "C:\\path\\to\\SnowLuma"
+    "homeDir": "C:\\path\\to\\SnowLuma",
+    "allowProcessControl": false
   },
   "ownerQQ": 123456789,
   "sessionCwd": "",
@@ -33,6 +34,7 @@
   "sendDelayMs": 300,
   "questionTimeoutMs": 300000,
   "consolePort": 3100,
+  "consoleToken": "",
   "security": {
     "interceptNotify": true
   },

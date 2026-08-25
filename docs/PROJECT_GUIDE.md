@@ -73,6 +73,8 @@ qq-bridge/
 │   └── DSH_SETUP.md            # DSH 端安装说明（另一台设备）
 ├── dsh/
 │   └── agent-presets/          # qq-chat / qq-chat-v2 的 DSH preset 模板
+├── plugins/
+│   └── qq-mode-console/        # DSH 设置页 qq-mode 卡片插件
 ├── assets/
 │   ├── deepseek娘.png          # AI 自我形象图（qq_get_self_image）
 │   └── project-intro.mp4       # 项目介绍视频（README 可查看）
@@ -124,8 +126,8 @@ DSH 事件流（api.events.mux）→ pumpMux()
 
 - 群聊里的 `@` 段会解析成群名片/昵称（带缓存），解析失败时回退为 QQ 号。
 - 引用/回复段会解析成被引用人的群名片/昵称 + 原文，注入 prompt。
-- 仿真模式下，模型可以只输出 `[SILENT]` 表示“潜水/不接话”，桥接会静默不发送。
-- 分条方式为“按空格分句”：AI 用空格表示下一条消息，桥接按空格拆条。
+- 一代仿真模式（`reserved`）下，模型可以只输出 `[SILENT]` 表示“潜水/不接话”，桥接会静默不发送。
+- 一代仿真模式（`reserved`）的分条方式为“按空格分句”：AI 用空格表示下一条消息，桥接按空格拆条；`reserved2` 不适用，分条请用 `qq_send_message` 数组。
 
 ### 4.2 DSH 事件流 / turn 收集
 
@@ -284,7 +286,7 @@ DSH 事件流（api.events.mux）→ pumpMux()
 - `start.bat`：守护启动（自动拉起、崩溃重启）。
 - `restart.bat`：停止旧 bridge 进程并重新拉起。
 - 控制台：`http://127.0.0.1:3100`（模式、人格、社交参数、白名单/管理员、黑话管理、控制台访问令牌、会话/挂起/日志）。
-- 模式：`state/mode.json` 或 DSH settings 的 `qq-mode`。
+- 模式：`state/mode.json` 或 DSH settings 的 `qq-mode`；运行 `scripts/setup-dsh.mjs` 的全新环境默认 `reserved2`。
 
 ### 常用调试/测试脚本
 

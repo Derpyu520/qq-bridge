@@ -106,19 +106,44 @@ function ensurePluginLink() {
   const pluginLink = path.join(DSH_HOME, 'plugins', 'qq-mode-console');
   if (!fs.existsSync(repoPlugin)) fatal(`plugin not found: ${repoPlugin}`);
   ensureDir(path.dirname(pluginLink));
-  if (!fs.existsSync(pluginLink)) {
-    try {
-      if (process.platform === 'win32') {
-        fs.symlinkSync(repoPlugin, pluginLink, 'junction');
-      } else {
-        fs.symlinkSync(repoPlugin, pluginLink, 'dir');
-      }
-      log(`plugin link created: ${pluginLink}`);
-    } catch (e) {
-      fatal(`failed to create plugin link: ${e.message}`);
+
+  let existing = null;
+  try {
+    existing = fs.lstatSync(pluginLink);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') fatal(`failed to inspect plugin link: ${error?.message ?? error}`);
+  }
+
+  if (existing) {
+    if (!existing.isSymbolicLink()) {
+      fatal(`plugin path already exists and is not a symlink/junction: ${pluginLink}. Please remove it manually or move it out of the way, then rerun.`);
     }
-  } else {
-    log(`plugin link already exists: ${pluginLink}`);
+    // 符号链接/junction 存在时，校验是否指向当前仓库；指向旧路径/失效时自动重建。
+    let sameTarget = false;
+    try {
+      const target = fs.realpathSync(pluginLink);
+      const expected = fs.realpathSync(repoPlugin);
+      sameTarget = process.platform === 'win32'
+        ? String(target).toLowerCase() === String(expected).toLowerCase()
+        : String(target) === String(expected);
+    } catch {}
+    if (sameTarget) {
+      log(`plugin link already exists and points to this repo: ${pluginLink}`);
+      return pluginLink;
+    }
+    log(`plugin link exists but points elsewhere/broken, recreating: ${pluginLink}`);
+    fs.rmSync(pluginLink, { recursive: true, force: true });
+  }
+
+  try {
+    if (process.platform === 'win32') {
+      fs.symlinkSync(repoPlugin, pluginLink, 'junction');
+    } else {
+      fs.symlinkSync(repoPlugin, pluginLink, 'dir');
+    }
+    log(`plugin link created: ${pluginLink}`);
+  } catch (e) {
+    fatal(`failed to create plugin link: ${e.message}`);
   }
   return pluginLink;
 }
@@ -127,7 +152,7 @@ function patchProfilePackage(pluginLink) {
   const profileDir = path.join(DSH_HOME, 'profiles', PROFILE);
   const pkgFile = path.join(profileDir, 'package.json');
   ensureDir(profileDir);
-  let pkg = { dependencies: {}, dsh: { profile: { bundles: [] } } };
+  let pkg = { name: `dsh-profile-${PROFILE}`, private: true, dependencies: {}, dsh: { profile: { bundles: [] } } };
   if (fs.existsSync(pkgFile)) {
     try {
       pkg = JSON.parse(fs.readFileSync(pkgFile, 'utf8'));
@@ -135,10 +160,12 @@ function patchProfilePackage(pluginLink) {
       fatal(`failed to parse ${pkgFile}: ${e.message}`);
     }
   }
-  pkg.dependencies = pkg.dependencies || {};
+  pkg.name = pkg.name || `dsh-profile-${PROFILE}`;
+  pkg.private = pkg.private !== false;
+  if (!pkg.dependencies || typeof pkg.dependencies !== 'object' || Array.isArray(pkg.dependencies)) pkg.dependencies = {};
   pkg.dsh = pkg.dsh || {};
   pkg.dsh.profile = pkg.dsh.profile || {};
-  pkg.dsh.profile.bundles = pkg.dsh.profile.bundles || [];
+  if (!Array.isArray(pkg.dsh.profile.bundles)) pkg.dsh.profile.bundles = [];
   const linkVal = `link:${pluginLink.replace(/\\/g, '/')}`;
   if (pkg.dependencies['qq-mode-console'] !== linkVal) {
     pkg.dependencies['qq-mode-console'] = linkVal;

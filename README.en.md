@@ -33,7 +33,7 @@ QQ messages ──► SnowLuma (OneBot v11 WS) ──► qq-bridge ──► DSH
 
 - Node.js >= 22.13
 - Running DeepSeek Harness Web (default `http://127.0.0.1:3080`)
-- Running SnowLuma with OneBot v11 WebSocket enabled
+- Running SnowLuma with OneBot v11 WebSocket and HTTP API enabled
 
 ## Quick Start
 
@@ -99,6 +99,8 @@ qq-bridge/
   config.example.json   # sanitized config template (real config.json is not in repo)
   docs/
     PROJECT_GUIDE.md    # detailed Chinese guide
+  dsh/agent-presets/    # qq-chat / qq-chat-v2 DSH agent preset templates
+  plugins/qq-mode-console  # DSH settings qq-mode card plugin
   src/                  # bridge core and MCP servers
   public/
     console.html        # local web console

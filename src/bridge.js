@@ -307,7 +307,7 @@ function loadConfig() {
     socialV2: {
       enabled: true,
       autoReplyCheckMs: 30000,
-      agentPreset: '',
+      agentPreset: 'qq-chat-v2',
       provideRecommendations: true,
       tools: {
         getPrompt: true,

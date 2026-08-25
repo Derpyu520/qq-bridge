@@ -31,7 +31,7 @@
 
    然后编辑 `config.json`，填写：
 
-   - `snowluma.wsUrl` / `httpUrl`
+   - `snowluma.wsUrl` / `httpUrl`（例如 `ws://127.0.0.1:3001` / `http://127.0.0.1:3000`，分别对应 OneBot WebSocket 与 HTTP API 端口）
    - `snowluma.accessToken`
    - `ownerQQ`
    - `allow.private` / `allow.groups`
@@ -58,6 +58,11 @@
    - 在 `~/.dsh/profiles/web/package.json` 注册 `qq-mode-console` 插件
    - 把 `qq-mode-console` 插件的默认模式设为 `reserved2`（二代仿真）
    - 创建本地 `state/mode.json`（`mode: reserved2`）作为 DSH settings 不可用时的兜底
+
+   > 脚本可重复运行；它会覆盖 `~/.dsh/.agent-presets/qq-chat*`、更新 MCP 路径并重建失效的插件链接。
+   > 已存在的 `qq-bridge/state/mode.json` 会被保留（不覆盖用户设置）；全新安装才会写入 `mode: reserved2`。
+   > 如果之后把 `qq-bridge` 目录移动/重新 clone 到别的路径，请重新运行一次本脚本，否则 DSH 里的 MCP/插件绝对路径会指向旧位置。
+   > 也可用环境变量指定 DSH 根目录：`DSH_HOME=/path/to/.dsh node scripts/setup-dsh.mjs <profile>`。
 
 5. **重启 DSH**：
 
