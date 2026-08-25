@@ -79,6 +79,7 @@ This installs:
 - `~/.dsh/.agent-presets/qq-chat` and `~/.dsh/.agent-presets/qq-chat-v2`
 - MCP entries in `~/.dsh/profiles/web/cordis.patch.yml`
 - `qq-mode-console` in the profile `package.json`
+- Default DSH mode set to `reserved2` (second-generation simulation), with a local `state/mode.json` fallback
 
 Then restart DSH. See [docs/DSH_SETUP.md](docs/DSH_SETUP.md) for details.
 

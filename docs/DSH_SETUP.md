@@ -56,10 +56,14 @@
      - `mcp-snowluma-host`（`src/mcp-host-server.js`）
      - `mcp-web-search-safe`（`src/mcp-web-search-safe.js`）
    - 在 `~/.dsh/profiles/web/package.json` 注册 `qq-mode-console` 插件
+   - 把 `qq-mode-console` 插件的默认模式设为 `reserved2`（二代仿真）
+   - 创建本地 `state/mode.json`（`mode: reserved2`）作为 DSH settings 不可用时的兜底
 
 5. **重启 DSH**：
 
    必须重启 DSH（或让 DSH 重新加载 profile），新 preset 和 MCP 工具才会生效。
+
+   > 默认模式为 **`reserved2`（二代仿真）**，即“文本不自动转发、AI 通过工具自主收发”。如果你想改用 `chat` / `closed-agent` / `reserved`，可在 DSH 设置页的 `qq-mode` 卡片切换，或修改 `state/mode.json` 后重启桥接。
 
 ## 验证是否装好
 

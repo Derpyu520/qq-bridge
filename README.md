@@ -83,6 +83,8 @@ npm install        # 安装依赖（postinstall 会自动修补 @snowluma/sdk �
 node scripts/setup-dsh.mjs
 ```
 
+> 脚本会把 DSH 默认模式设为 **`reserved2`（二代仿真）**，并创建本地 `state/mode.json` 兜底；这样 AI 使用 `qq_send_message` 等工具收发消息时，DSH 会自动使用 `qq-chat-v2` 模式。如需其他模式，可在 DSH 设置页的 `qq-mode` 卡片切换。
+
 详细步骤见 **[docs/DSH_SETUP.md](docs/DSH_SETUP.md)**。
 
 ## 完整启动流程（从零开始）

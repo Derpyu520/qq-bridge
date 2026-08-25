@@ -25,7 +25,7 @@ export const inject = ['settings'];
 export const QQMODE_NAMESPACE = 'qq-mode';
 
 export const QqModeSchema = z.object({
-  mode: z.union([z.const('chat'), z.const('closed-agent'), z.const('reserved'), z.const('reserved2')]).default('chat'),
+  mode: z.union([z.const('chat'), z.const('closed-agent'), z.const('reserved'), z.const('reserved2')]).default('reserved2'),
   ownerQQ: z.string().description('管理员 QQ（ownerQQ）；留空表示不通过 DSH 设置覆盖 config.json'),
 });
 
@@ -38,7 +38,7 @@ export function apply(ctx, config = {}) {
       return;
     }
     const scope = settings.register(QQMODE_NAMESPACE, QqModeSchema, {
-      base: { mode: 'chat' },
+      base: { mode: 'reserved2' },
       applies: 'live'
     });
     diag(`registered ${QQMODE_NAMESPACE} scope=${typeof scope}`);

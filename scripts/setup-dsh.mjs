@@ -152,9 +152,22 @@ function patchProfilePackage(pluginLink) {
   log(`profile package.json ensured: ${pkgFile}`);
 }
 
+function ensureLocalModeFile() {
+  const stateDir = path.join(REPO_ROOT, 'state');
+  const modeFile = path.join(stateDir, 'mode.json');
+  if (fs.existsSync(modeFile)) {
+    log(`state/mode.json already exists; leave as-is (current mode may be user-configured)`);
+    return;
+  }
+  ensureDir(stateDir);
+  fs.writeFileSync(modeFile, `${JSON.stringify({ mode: 'reserved2', closedAgentPreset: 'router-standard' }, null, 2)}\n`, 'utf8');
+  log(`state/mode.json created with mode=reserved2 (fallback if DSH settings are not available)`);
+}
+
 copyPreset('qq-chat');
 copyPreset('qq-chat-v2');
 patchCordis();
 const pluginLink = ensurePluginLink();
 patchProfilePackage(pluginLink);
+ensureLocalModeFile();
 log('Done. Please restart DSH (or reload the profile) for the new presets/MCP to take effect.');
