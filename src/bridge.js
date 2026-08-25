@@ -822,7 +822,8 @@ async function main() {
         });
         const body = await res.json().catch(() => ({}));
         if (!res.ok || body.status !== 'ok' || body.retcode !== 0) {
-          throw new Error(`OneBot ${action} 失败: ${body.wording || body.retcode || res.status}`);
+          const hint = res.status === 426 ? '（HTTP 426：snowluma.httpUrl 可能指向了 WebSocket 端口，请检查 config.json 的 snowluma.httpUrl 是否为 OneBot HTTP API 地址）' : '';
+          throw new Error(`OneBot ${action} 失败: ${body.wording || body.retcode || res.status}${hint}`);
         }
         sendResolve(body.data);
       } catch (error) {
@@ -4610,7 +4611,8 @@ async function main() {
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok || body.status !== 'ok' || body.retcode !== 0) {
-      throw new Error(`OneBot ${action} 失败: ${body.wording || body.retcode || res.status}`);
+      const hint = res.status === 426 ? '（HTTP 426：snowluma.httpUrl 可能指向了 WebSocket 端口，请检查 config.json 的 snowluma.httpUrl 是否为 OneBot HTTP API 地址）' : '';
+      throw new Error(`OneBot ${action} 失败: ${body.wording || body.retcode || res.status}${hint}`);
     }
     return body.data;
   }

@@ -93,7 +93,10 @@ async function gatewayInfo() {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       signal: AbortSignal.timeout(5000)
     });
-    if (!res.ok) return { reachable: false, httpStatus: res.status };
+    if (!res.ok) {
+      const hint = res.status === 426 ? '（HTTP 426：snowluma.httpUrl 可能指向了 WebSocket 端口，请改为 OneBot HTTP API 地址）' : '';
+      return { reachable: false, httpStatus: res.status, ...(hint ? { hint } : {}) };
+    }
     const body = await res.json();
     if (body?.status === 'ok' && body?.retcode === 0) {
       return { reachable: true, online: true, user_id: body.data?.user_id, nickname: body.data?.nickname };

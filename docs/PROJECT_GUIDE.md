@@ -240,7 +240,7 @@ DSH 事件流（api.events.mux）→ pumpMux()
 | 字段 | 说明 |
 |---|---|
 | `dsh.baseUrl` | DSH Web API，默认 `http://127.0.0.1:3080` |
-| `snowluma.wsUrl` / `httpUrl` | OneBot WebSocket / HTTP 地址 |
+| `snowluma.wsUrl` / `httpUrl` | OneBot WebSocket / HTTP API 地址；`httpUrl` 不要填 WebSocket 端口，否则会报 HTTP 426 |
 | `snowluma.accessToken` | OneBot 鉴权 token，未配置留空 |
 | `snowluma.launcherPath` / `homeDir` | SnowLuma 启动脚本与安装目录（进程管理用，默认禁用） |
 | `ownerQQ` | 管理员 QQ（最高权限，可在控制台「白名单 / 管理员」设置） |

@@ -105,7 +105,10 @@ async function onebot(action, params = {}) {
     body: JSON.stringify(params),
     signal: AbortSignal.timeout(15000)
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) {
+    const hint = res.status === 426 ? '；HTTP 426 通常表示 httpUrl 指向了 WebSocket 端口，请检查 config.json 的 snowluma.httpUrl 是否为 OneBot HTTP API 地址' : '';
+    throw new Error(`HTTP ${res.status}${hint}`);
+  }
   const body = await res.json();
   if (body.status !== 'ok' || body.retcode !== 0) {
     throw new Error(`OneBot ${action} 失败: retcode=${body.retcode} ${body.wording ?? ''}`);

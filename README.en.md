@@ -52,8 +52,9 @@ Key settings:
 | Field | Description |
 | --- | --- |
 | `dsh.baseUrl` | DSH Web API URL, default `http://127.0.0.1:3080` |
-| `snowluma.wsUrl` | SnowLuma OneBot WebSocket URL |
+| `snowluma.wsUrl` | SnowLuma OneBot **WebSocket** URL (e.g. `ws://127.0.0.1:3001`) |
 | `snowluma.accessToken` | OneBot access token, leave empty if not configured |
+| `snowluma.httpUrl` | OneBot **HTTP API** URL (e.g. `http://127.0.0.1:3000`); do not point this at the WebSocket port or you will get HTTP 426 |
 | `ownerQQ` | Administrator QQ (highest privilege) |
 | `allow.private` / `allow.groups` | Whitelist of QQ/group IDs |
 | `consolePort` | Local console port, default `3100` |
