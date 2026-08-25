@@ -10,6 +10,12 @@ QQ 消息 ──► SnowLuma（OneBot v11 WS）──► 本桥接进程 ──�
                                                 └── agent 回复/提问/审批 ┘
 ```
 
+## 项目展示
+
+📽️ [AI 仿真群友 - 项目介绍视频](assets/project-intro.mp4)
+
+> 视频文件位于 `assets/project-intro.mp4`，可直接下载观看。
+
 ## 架构
 
 - **QQ 侧**：`@snowluma/sdk` 的 `SnowLumaWebSocketClient`（OneBot v11 WebSocket 客户端，自动重连）
@@ -142,7 +148,7 @@ qq-bridge/
     dsh-client.js       # Node 版 DSH API 客户端（WS 下行）
     md-to-plain.js      # Markdown → QQ 纯文本
     self-test.js        # DSH 侧自测
-  scripts/
+  scripts/              # 测试/运维脚本（含 postinstall 的 patch-snowluma-sdk.mjs）
     patch-snowluma-sdk.mjs  # 修补 SDK 的 ESM 打包 bug（postinstall 自动执行）
   state/                # 运行时数据（不入库）
 ```

@@ -71,7 +71,8 @@ qq-bridge/
 ├── docs/
 │   └── PROJECT_GUIDE.md        # 本文档（公开版）
 ├── assets/
-│   └── deepseek娘.png          # AI 自我形象图（qq_get_self_image）
+│   ├── deepseek娘.png          # AI 自我形象图（qq_get_self_image）
+│   └── project-intro.mp4       # 项目介绍视频（README 可查看）
 ├── scripts/                    # 通用测试/辅助脚本
 ├── config.example.json         # 配置模板（占位符，不含真实凭据）
 ├── package.json
