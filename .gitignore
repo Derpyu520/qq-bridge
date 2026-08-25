@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+.npm-cache/
+
+# Runtime state and local config (never publish)
+state/
+config.json
+*.log
+*.bak
+*.bak-*
+
+# Local development / planning / research docs (not part of public project)
+/PROJECT_GUIDE.md
+/ARCH_REVIEW.md
+/DSH_QQ_TOOLS_PLAN.md
+/GEN2_SIMULATION_PLAN.md
+/SOCIAL_MODE_PLAN.md
+/RESEARCH_QQ_MESSAGE_DND.md
+/RESEARCH_SNOWLUMA_EMOJI_STICKER.md
+/SnowLuma功能调研.md
+/真人语感策略.md
+
+# Local one-off dev/debug/patch scripts (contain machine-specific paths/IDs)
+/scripts/cleanup-test-sessions.mjs
+/scripts/debug-whitelist.mjs
+/scripts/patch-qq-chat-v2-collect-memory.mjs
+/scripts/patch-qq-chat-v2-presleep.mjs
+/scripts/patch-qq-chat-v2-stickers.mjs
+/scripts/patch-web-mcp-timeout.mjs
