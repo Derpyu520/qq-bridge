@@ -2,6 +2,8 @@
 
 > Connect QQ messages to DeepSeek Harness (DSH) agents: QQ friends/groups become DSH conversations, and agent replies (including questions and tool approvals) are sent back to QQ.
 
+> ⚠️ **This branch/version is the DSH 0.1.2-alpha.1 adaptation.** It uses the new Cookie auth, slash RPC endpoints, and `/api/remote.mux` event stream, and is not compatible with older DSH protocols. For the old version use the `main` branch.
+
 For the detailed Chinese guide, see **[docs/PROJECT_GUIDE.md](docs/PROJECT_GUIDE.md)**.
 
 ## Architecture
@@ -13,7 +15,7 @@ QQ messages ──► SnowLuma (OneBot v11 WS) ──► qq-bridge ──► DSH
 ```
 
 - **QQ side**: `@snowluma/sdk` provides the OneBot v11 WebSocket client.
-- **DSH side**: reuses `@deepseek-ai/dsh-host-apiproxy` and implements the Node transport layer.
+- **DSH side**: adapted for DSH 0.1.2-alpha.1 — launch-token Cookie auth, `/api/<namespace>/<method>` slash RPC, and `/api/remote.mux` + `session/follow` event stream.
 - **Agent tools**: safe MCP servers expose a restricted QQ toolset (`qq_status`, `qq_list_groups`, `qq_get_group_history`, `qq_send_group_message`, `qq_reply`, etc.).
 - **Console**: a local web console at `http://127.0.0.1:3100` for mode switching, role management, whitelist/admin settings, slang management, memory, stickers and more.
 
@@ -52,6 +54,8 @@ Key settings:
 | Field | Description |
 | --- | --- |
 | `dsh.baseUrl` | DSH Web API URL, default `http://127.0.0.1:3080` |
+| `dsh.authToken` | DSH launch token used to exchange for a browser-session cookie in DSH 0.1.2. Leave empty to auto-discover from `~/.dsh/guard/logs/server-*.out.log`; the bridge also re-discovers it automatically after a DSH restart / 401 |
+| `dsh.authHeader` / `dsh.authPrefix` | Legacy fields kept for compatibility; the current DSH 0.1.2 path uses Cookie exchange and does not send this header |
 | `snowluma.wsUrl` | SnowLuma OneBot **WebSocket** URL (e.g. `ws://127.0.0.1:3001`) |
 | `snowluma.accessToken` | OneBot access token, leave empty if not configured |
 | `snowluma.httpUrl` | OneBot **HTTP API** URL (e.g. `http://127.0.0.1:3000`); do not point this at the WebSocket port or you will get HTTP 426 |

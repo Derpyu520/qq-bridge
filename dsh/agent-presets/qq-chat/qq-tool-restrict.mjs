@@ -16,12 +16,7 @@ const KNOWN_DANGEROUS_GLOBAL_TOOLS = [
   'dev_inject_plugin',
   'dev_injected_list',
   'dev_install_package',
-  'dev_mode_set',
-  'dev_mode_status',
-  'dev_mode_subagent',
   'dev_plugin_status',
-  'dev_router_mode',
-  'dev_router_status',
   'dev_release_plugin',
   'dev_reload_package',
   'dev_scaffold_plugin',
@@ -47,6 +42,8 @@ const SAFE_PREFIXES = [
 const SAFE_EXACT = new Set([
   'ask_user_question',
   'todo_write',
+  'web_search',
+  'web_fetch',
 ])
 
 export function apply(ctx) {

@@ -3,7 +3,10 @@
     "baseUrl": "http://127.0.0.1:3080",
     "provider": "deepseek-official",
     "model": "deepseek-v4-flash-vision-exp",
-    "reasoningEffort": "max"
+    "reasoningEffort": "max",
+    "authToken": "",
+    "authHeader": "authorization",
+    "authPrefix": "Bearer"
   },
   "snowluma": {
     "wsUrl": "ws://127.0.0.1:3001",

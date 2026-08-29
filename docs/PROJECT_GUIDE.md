@@ -117,7 +117,7 @@ ensureSession(key)  →  DSH session（工作区“QQ 聊天”）
 api.sessions.prompt({ mode: 'queue' })
   │
   ▼
-DSH 事件流（api.events.mux）→ pumpMux()
+DSH 事件流（api.events.mux → /api/remote.mux + session/follow + $events）→ pumpMux()
   ├─ turn collector 收集模型输出
   ├─ 安全审计（SENSITIVE_RE）
   ├─ 社交模式：planSocialTimeline 分条 → sendBurstToQQ
@@ -131,7 +131,7 @@ DSH 事件流（api.events.mux）→ pumpMux()
 
 ### 4.2 DSH 事件流 / turn 收集
 
-- `dsh-client.js` 的 `readWebSocket` 保持长连接 `events.mux`。
+- `dsh-client.js` 通过 `/api/remote.mux` WebSocket 保持长连接；对每个需要接收的会话显式 `session/follow`，并自动打开 `$events` 流接收提问/审批等 Remote Event。
 - `createTurnCollector` 按 `assistant/message` 累加文本，`turn/end` 时产出完整结果。
 - 摘要投喂会产生“静默 turn”：结果不发给 QQ，只作为记忆。
 
@@ -242,6 +242,8 @@ DSH 事件流（api.events.mux）→ pumpMux()
 | 字段 | 说明 |
 |---|---|
 | `dsh.baseUrl` | DSH Web API，默认 `http://127.0.0.1:3080` |
+| `dsh.authToken` | DSH launch token；新版 DSH 用它换取 Cookie。留空时自动从 DSH guard 日志发现，401 后自动重新发现 |
+| `dsh.authHeader` / `dsh.authPrefix` | 保留字段；当前新版 DSH 链路使用 Cookie 交换，不再直接发送该鉴权头 |
 | `snowluma.wsUrl` / `httpUrl` | OneBot WebSocket / HTTP API 地址；`httpUrl` 不要填 WebSocket 端口，否则会报 HTTP 426 |
 | `snowluma.accessToken` | OneBot 鉴权 token，未配置留空 |
 | `snowluma.launcherPath` / `homeDir` | SnowLuma 启动脚本与安装目录（进程管理用，默认禁用） |

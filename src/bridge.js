@@ -11,7 +11,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { SnowLumaWebSocketClient, text } from '@snowluma/sdk';
-import { NodeApiClient, unwrap, createTurnCollector } from './dsh-client.js';
+import { NodeApiClient, unwrap, createTurnCollector, discoverDshLaunchToken } from './dsh-client.js';
 import { mdToPlain, splitForQQ } from './md-to-plain.js';
 import { SENSITIVE_RE } from './sensitive.js';
 import { looksLikeUnfinished } from './v2-wait.js';
@@ -227,6 +227,11 @@ function loadConfig() {
       provider: 'deepseek-official',
       model: 'deepseek-v4-flash-vision-exp',
       reasoningEffort: 'max',
+      // 兼容新版 DSH 的 API 鉴权：如果 DSH 升级后要求非浏览器客户端带 token，
+      // 在这里配置 token；默认走 Authorization: Bearer <token>。
+      authToken: '',
+      authHeader: 'authorization',
+      authPrefix: 'Bearer',
       ...(file.dsh ?? {})
     },
     snowluma: { wsUrl: 'ws://127.0.0.1:3001', accessToken: '', ...(file.snowluma ?? {}) },
@@ -474,6 +479,9 @@ function loadConfig() {
       ...((cfg.socialV2?.sticker?.collect) ?? {})
     }
   };
+
+  // 新版 DSH 的 launch token 每次启动会变；配置里没填时自动从 DSH guard 日志发现。
+  if (!cfg.dsh.authToken) cfg.dsh.authToken = discoverDshLaunchToken();
 
   return cfg;
 }
@@ -928,12 +936,14 @@ async function main() {
   async function ensureSlangLearnerSession() {
     if (slangLearnerSessionId) {
       learnerSessions.add(slangLearnerSessionId);
+      api.events.follow(slangLearnerSessionId);
       return slangLearnerSessionId;
     }
     const saved = readJsonSafe(SLANG_SESSION_FILE, null);
     if (saved?.sessionId) {
       slangLearnerSessionId = String(saved.sessionId);
       learnerSessions.add(slangLearnerSessionId);
+      api.events.follow(slangLearnerSessionId);
       return slangLearnerSessionId;
     }
     const dir = path.join(STATE_DIR, 'slang-agent');
@@ -949,6 +959,7 @@ async function main() {
     const value = unwrap(await api.sessions.create(params), 'slang session.create');
     slangLearnerSessionId = value.sessionId;
     learnerSessions.add(slangLearnerSessionId);
+    api.events.follow(slangLearnerSessionId);
     fs.mkdirSync(STATE_DIR, { recursive: true });
     atomicWriteJson(SLANG_SESSION_FILE, { sessionId: slangLearnerSessionId });
     log(`黑话学习会话已创建：${slangLearnerSessionId}`);
@@ -1182,7 +1193,11 @@ async function main() {
   }
 
   // DSH 侧
-  const api = new NodeApiClient(cfg.dsh.baseUrl);
+  const api = new NodeApiClient(cfg.dsh.baseUrl, undefined, {
+    token: cfg.dsh.authToken,
+    header: cfg.dsh.authHeader,
+    prefix: cfg.dsh.authPrefix
+  });
   const collectors = new Map(); // sessionId -> turn collector
   const sendToolSucceededSessions = new Set(); // sessionId：当前 turn 内 MCP 发送类工具至少成功一次
   const v2TurnStartAt = new Map(); // sessionId -> timestamp：reserved2 turn 开始时间，用于判断是否“无行动”
@@ -1197,6 +1212,8 @@ async function main() {
   const wakeConfigMissCount = new Map();
   const reverse = new Map(); // sessionId -> conv key
   for (const [key, sessionId] of Object.entries(state.sessions)) reverse.set(sessionId, key);
+  // 新版 DSH 事件流需要显式 follow；启动时为已持久化的 QQ 会话补上。
+  for (const sessionId of Object.values(state.sessions)) api.events.follow(sessionId);
   const sessionPromises = new Map(); // key -> create promise（防并发重复创建）
   const promptQueues = new Map(); // key -> { queue: [], running: false }：每个 QQ 会话串行投递 DSH prompt，保证 turn 顺序
 
@@ -1365,7 +1382,7 @@ async function main() {
   const checkDsh = async () => {
     let ok = false;
     try {
-      await api.host.describe({});
+      await api.settings.describe({});
       ok = true;
     } catch {}
     if (ok) {
@@ -4315,13 +4332,21 @@ async function main() {
           sessionEpoch++;
           let archivedCount = 0;
           try {
-            const ws = unwrap(await api.workspace.list({}), 'workspace.list');
-            const qq = ws.items.find((w) => w.title === cfg.workspaceTitle);
-            if (qq) {
-              for (const sid of qq.sessionIds) {
-                try { await api.workspace.archiveSession({ sessionId: sid }); archivedCount += 1; } catch {}
+            // 新版 DSH 不再提供 workspace.list；改为扫描本桥接创建的会话目录并归档。
+            // 只处理 cwd 位于 qq-bridge state/ 下的根会话；子代理会话由父会话管理，不能误归档。
+            const list = unwrap(await api.sessions.list({}), 'session.list');
+            const stateDir = path.resolve(STATE_DIR);
+            const statePrefix = path.normalize(stateDir + path.sep);
+            const normPath = (p) => path.normalize(String(p ?? '').replace(/\//g, path.sep));
+            const isUnderState = (cwd) => process.platform === 'win32'
+              ? cwd.toLowerCase().startsWith(statePrefix.toLowerCase())
+              : cwd.startsWith(statePrefix);
+            for (const item of list.items ?? []) {
+              if (item.origin === 'subagent' || item.parentSessionId) continue;
+              const cwd = normPath(item.cwd);
+              if (isUnderState(cwd)) {
+                try { await api.workspace.archiveSession({ sessionId: item.sessionId }); archivedCount += 1; } catch {}
               }
-              try { await api.workspace.delete({ workspaceId: qq.workspaceId }); } catch {}
             }
           } catch {}
           for (const entry of pending.values()) {
@@ -5118,6 +5143,8 @@ async function main() {
         const value = unwrap(await api.sessions.create({}), 'session.create');
         sessionId = value.sessionId;
       }
+      // 新版 DSH 事件流需要显式 follow 该会话，否则收不到 turn 事件。
+      api.events.follow(sessionId);
       // reset/清空工作区期间创建完成：丢弃，防止旧会话复活
       if (epoch !== sessionEpoch) {
         log(`会话创建期间发生 reset，丢弃 ${key} 的新会话（${sessionId}）`);
@@ -7434,18 +7461,18 @@ async function main() {
     try {
       if (entry.kind === 'approval') {
         await withTimeout(api.respond({
-          type: 'client-response',
-          rpcId: entry.rpcId,
-          result: { ok: true, value: { sessionId: entry.sessionId, approvalId: entry.approvalId, outcome: 'rejected' } }
+          clientId: entry.clientId,
+          eventId: entry.eventId,
+          outcome: { kind: 'result', value: 'rejected' }
         }), 5000, '取消挂起回执');
-        log(`已取消挂起审批（拒绝回执）: ${entry.rpcId}`);
+        log(`已取消挂起审批（拒绝回执）: ${entry.eventId ?? entry.rpcId}`);
       } else if (entry.kind === 'question') {
         await withTimeout(api.respond({
-          type: 'client-response',
-          rpcId: entry.rpcId,
-          result: { ok: true, value: { sessionId: entry.sessionId, answer: { answers: [] } } }
+          clientId: entry.clientId,
+          eventId: entry.eventId,
+          outcome: { kind: 'result', value: { answers: [] } }
         }), 5000, '取消挂起回执');
-        log(`已取消挂起提问（空答案回执）: ${entry.rpcId}`);
+        log(`已取消挂起提问（空答案回执）: ${entry.eventId ?? entry.rpcId}`);
       }
     } catch (error) {
       log('取消挂起请求回执失败:', error?.message ?? error);
@@ -7464,9 +7491,9 @@ async function main() {
       }
       try {
         const receipt = await api.respond({
-          type: 'client-response',
-          rpcId: p.rpcId,
-          result: { ok: true, value: { sessionId: p.sessionId, answer: { answers } } }
+          clientId: p.clientId,
+          eventId: p.eventId,
+          outcome: { kind: 'result', value: { answers } }
         });
         log(`已回答提问 (${key}):`, receipt);
         // 只有回执成功才移除挂起，且必须仍是同一个挂起（防止期间被新请求覆盖）
@@ -7492,9 +7519,9 @@ async function main() {
       }
       try {
         const receipt = await api.respond({
-          type: 'client-response',
-          rpcId: p.rpcId,
-          result: { ok: true, value: { sessionId: p.sessionId, approvalId: p.approvalId, outcome } }
+          clientId: p.clientId,
+          eventId: p.eventId,
+          outcome: { kind: 'result', value: outcome }
         });
         log(`已处理审批 (${key}): ${outcome}`, receipt);
         await sendToQQ(key, outcome === 'allowed-once' ? '✅ 已通过审批' : '❌ 已拒绝审批');
@@ -7941,15 +7968,15 @@ async function main() {
             try {
               if (frame.type === 'question/requested') {
                 await api.respond({
-                  type: 'client-response',
-                  rpcId: envelope.rpcId,
-                  result: { ok: true, value: { sessionId: frame.sessionId, answer: { answers: frame.questions.map((q) => ({ id: q.id, selected: [], custom: '' })) } } }
+                  clientId: frame.clientId,
+                  eventId: frame.eventId,
+                  outcome: { kind: 'result', value: { answers: frame.questions.map((q) => ({ id: q.id, selected: [], custom: '' })) } }
                 });
               } else {
                 await api.respond({
-                  type: 'client-response',
-                  rpcId: envelope.rpcId,
-                  result: { ok: true, value: { sessionId: frame.sessionId, approvalId: frame.approvalId, outcome: 'rejected' } }
+                  clientId: frame.clientId,
+                  eventId: frame.eventId,
+                  outcome: { kind: 'result', value: 'rejected' }
                 });
               }
               log('黑话学习会话自动跳过提问/审批');
@@ -7977,7 +8004,7 @@ async function main() {
               return s;
             });
             await sendToQQ(key, '❓ agent 需要你回答：\n' + lines.join('\n') + '\n（直接回复选项文字或输入你的回答）');
-            await registerPending(key, { kind: 'question', rpcId: envelope.rpcId, sessionId: frame.sessionId, questions: frame.questions });
+            await registerPending(key, { kind: 'question', rpcId: envelope.rpcId, sessionId: frame.sessionId, clientId: frame.clientId, eventId: frame.eventId, questions: frame.questions });
           } else if (frame.type === 'approval/requested') {
             const key = reverse.get(frame.sessionId);
             if (!key) continue;
@@ -7991,13 +8018,16 @@ async function main() {
             if (sensitiveTool) log(`⚠️ 审批工具名含敏感信息，已隐藏 (${key})`);
             const safeToolName = sensitiveTool ? '（含敏感信息，已隐藏）' : rawToolName;
             await sendToQQ(key, `🔐 agent 请求审批：${safeToolName}${reason}\n回复「通过」或「拒绝」`);
-            await registerPending(key, { kind: 'approval', rpcId: envelope.rpcId, sessionId: frame.sessionId, approvalId: frame.approvalId, toolName: frame.toolName });
+            await registerPending(key, { kind: 'approval', rpcId: envelope.rpcId, sessionId: frame.sessionId, clientId: frame.clientId, eventId: frame.eventId, toolName: frame.toolName });
           } else if (frame.type === 'stream/error') {
             log('事件流错误:', frame.error);
           }
         }
       } catch (error) {
         log('事件流中断:', error?.message ?? error);
+      } finally {
+        // WebSocket 正常关闭和异常中断都会走到这里；必须清掉旧 turn 相关状态，
+        // 否则重连后旧 collector/标记残留会导致回复重复累加或误判。
         collectors.clear(); // 清除旧 turn collector，避免重连后残留导致重复累加
         social.silentTurns.clear(); // 清除未消费的摘要静默名额，避免重连后吞掉正常回复
         sendToolSucceededSessions.clear();
@@ -8034,19 +8064,23 @@ async function main() {
     try { await handlePokeNotice(event); } catch (error) { log('处理拍一拍事件出错:', error?.message ?? error); }
   });
 
-  bot.on('open', () => log(`SnowLuma 已连接：${cfg.snowluma.wsUrl}`));
+  bot.on('open', () => {
+    log(`SnowLuma 已连接：${cfg.snowluma.wsUrl}`);
+    // 读取机器人昵称（用于社交模式"被提到"识别）；重连后也会刷新
+    bot.getLoginInfo().then((login) => {
+      if (login?.nickname) {
+        selfNickname = String(login.nickname).toLowerCase();
+        log(`机器人昵称: ${login.nickname}`);
+      }
+    }).catch(() => {});
+  });
   bot.on('close', (info) => log(`SnowLuma 连接断开（code=${info?.code ?? '?'}），重连中…`));
   bot.on('error', (error) => log('SnowLuma 错误:', error));
 
-  await bot.connect();
-  // 读取机器人昵称（用于社交模式"被提到"识别）
-  try {
-    const login = await bot.getLoginInfo();
-    if (login?.nickname) {
-      selfNickname = String(login.nickname).toLowerCase();
-      log(`机器人昵称: ${login.nickname}`);
-    }
-  } catch {}
+  // SnowLuma 尚未就绪时不阻塞桥接启动：SDK 自带后台重连，DSH 侧照常连接。
+  bot.connect().catch((error) => {
+    log(`SnowLuma 初始连接失败（将在后台自动重连）: ${error?.message ?? error}`);
+  });
   log('桥接已启动。按 Ctrl+C 退出。');
   // 预热表情库：启动时同步一次 QQ 收藏表情，失败不阻塞（AI 首次调用工具时还会再试）。
   if (cfg.socialV2?.sticker?.enabled !== false) {

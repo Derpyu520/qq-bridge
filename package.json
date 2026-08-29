@@ -1,8 +1,8 @@
 {
   "name": "qq-bridge",
-  "version": "0.1.0",
+  "version": "0.1.2-alpha.1",
   "private": true,
-  "description": "Bridge between SnowLuma (OneBot v11 / QQ) and DeepSeek Harness Web API: QQ messages become DSH agent prompts, agent replies go back to QQ.",
+  "description": "Bridge between SnowLuma (OneBot v11 / QQ) and DeepSeek Harness Web API: QQ messages become DSH agent prompts, agent replies go back to QQ. This branch is adapted for DSH 0.1.2-alpha.1 (new Cookie auth, slash RPC, remote.mux event stream).",
   "type": "module",
   "engines": {
     "node": ">=22.13.0"

@@ -8,17 +8,26 @@
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
-import { NodeApiClient, unwrap, createTurnCollector } from './dsh-client.js';
+import { NodeApiClient, unwrap, createTurnCollector, discoverDshLaunchToken } from './dsh-client.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 
 async function main() {
   const baseUrl = process.argv[2] ?? 'http://127.0.0.1:3080';
-  const api = new NodeApiClient(baseUrl);
+  let auth;
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
+    auth = {
+      token: cfg.dsh?.authToken || discoverDshLaunchToken(),
+      header: cfg.dsh?.authHeader,
+      prefix: cfg.dsh?.authPrefix
+    };
+  } catch {}
+  const api = new NodeApiClient(baseUrl, undefined, auth);
   const promptText = process.argv[3] ?? '只回复两个字：收到';
 
-  const desc = unwrap(await api.host.describe({}), 'host.describe');
+  const desc = unwrap(await api.settings.describe({}), 'settings.describe');
   console.log('✅ DSH 连接成功:', JSON.stringify(desc).slice(0, 200));
 
   // 独立测试会话，cwd 用临时目录
@@ -37,10 +46,11 @@ async function main() {
     openTimer = setTimeout(() => reject(new Error('等待 WebSocket open 超时（10s）')), 10_000);
     resolveOpened = () => { clearTimeout(openTimer); resolve(); };
   });
+  const stream = api.events.mux({}, undefined, () => resolveOpened());
   const done = new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('等待回复超时（60s）')), 60_000);
     (async () => {
-      for await (const envelope of api.events.mux({}, undefined, () => resolveOpened())) {
+      for await (const envelope of stream) {
         const frame = envelope.payload;
         if (frame.type === 'session/event' && frame.sessionId === sessionId) {
           const ended = collector.push(frame.event);
@@ -59,6 +69,8 @@ async function main() {
     })().catch((error) => { clearTimeout(timer); reject(error); });
   });
   await opened;
+  // 新版 DSH 需要显式 follow 该会话，事件才会通过 remote.mux 推过来。
+  stream.follow(sessionId);
 
   const accepted = unwrap(await api.sessions.prompt({ sessionId, mode: 'queue', content: [{ type: 'text', text: promptText }] }), 'session.prompt');
   console.log('✅ prompt 已接受:', JSON.stringify(accepted));
