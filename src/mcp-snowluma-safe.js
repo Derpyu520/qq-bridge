@@ -206,7 +206,7 @@ server.tool(
 
 server.tool(
   'qq_get_group_members',
-  '列出指定群的成员列表（只读）：QQ 号、昵称、群名片。',
+  '列出指定群的成员列表（只读）：QQ 号、昵称、群名片，以及 is_robot（是否机器人，来自 SnowLuma 的权威判定）。判断群里谁不是真人时看这个字段。',
   { groupId: z.union([z.number(), z.string()]).describe('群号') },
   async ({ groupId }) => {
     const g = String(groupId);
@@ -219,7 +219,7 @@ server.tool(
     }
     try {
       const data = await onebot('get_group_member_list', { group_id: Number(g) });
-      const list = (Array.isArray(data) ? data : (data?.data ?? [])).map((m) => ({ user_id: m.user_id, nickname: m.nickname, card: m.card }));
+      const list = (Array.isArray(data) ? data : (data?.data ?? [])).map((m) => ({ user_id: m.user_id, nickname: m.nickname, card: m.card, is_robot: m.is_robot === true || m.is_robot === 1 }));
       return { content: [{ type: 'text', text: JSON.stringify(list, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `查询失败：${error?.message ?? error}` }], isError: true };
@@ -258,14 +258,15 @@ server.tool(
     groupId: z.union([z.number(), z.string()]).describe('群号（必须在白名单内）'),
     message: z.string().describe('消息文本，纯文本，不要用 Markdown 或 CQ 码'),
     replyToMessageId: z.union([z.number(), z.string()]).optional().describe('要引用/回复的消息 id（非零整数，可为负数，可选）'),
+    atUserId: z.union([z.number(), z.string()]).optional().describe('可选：要 @ 的群成员 QQ 号（不能是 all）'),
     token: z.string().optional().describe('二代会话令牌（reserved2 模式下必填；closed-agent 模式不需要）')
   },
-  async ({ groupId, message, replyToMessageId, token }) => {
+  async ({ groupId, message, replyToMessageId, atUserId, token }) => {
     try {
       const cleanMessage = unquoteJsonString(message);
       const data = await agentApi('/api/send/group', {
         method: 'POST',
-        body: JSON.stringify({ groupId: String(groupId), message: cleanMessage, replyToMessageId, token: token || undefined })
+        body: JSON.stringify({ groupId: String(groupId), message: cleanMessage, replyToMessageId, atUserId: atUserId ?? null, token: token || undefined })
       });
       return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
     } catch (error) {
@@ -281,14 +282,15 @@ server.tool(
     groupId: z.union([z.number(), z.string()]).describe('群号（必须在白名单内）'),
     replyToMessageId: z.union([z.number(), z.string()]).describe('被引用/回复的消息 id（非零整数，可为负数）'),
     message: z.string().describe('要发送的文本，纯文本，不要用 Markdown 或 CQ 码'),
+    atUserId: z.union([z.number(), z.string()]).optional().describe('可选：同时 @ 的群成员 QQ 号。引用某人并想让他收到提醒时传被引用人的 QQ 号（用 qq_get_recent_messages 结果里的 userId）。'),
     token: z.string().optional().describe('二代会话令牌（reserved2 模式下必填；closed-agent 模式不需要）')
   },
-  async ({ groupId, replyToMessageId, message, token }) => {
+  async ({ groupId, replyToMessageId, message, atUserId, token }) => {
     try {
       const cleanMessage = unquoteJsonString(message);
       const data = await agentApi('/api/send/reply', {
         method: 'POST',
-        body: JSON.stringify({ groupId: String(groupId), replyToMessageId, message: cleanMessage, token: token || undefined })
+        body: JSON.stringify({ groupId: String(groupId), replyToMessageId, message: cleanMessage, atUserId: atUserId ?? null, token: token || undefined })
       });
       return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
     } catch (error) {
@@ -432,13 +434,15 @@ server.tool(
 
 server.tool(
   'qq_send_burst',
-  '在指定 QQ 群分多条发送消息（二代仿真模式专用），桥接会按真人化随机间隔发送。暂不支持引用，需要引用请用 qq_reply。注意：数组里的每个字符串就是一条 QQ 消息，字符串内部不要用空格分隔中文短句，需要多条请用数组元素；每条消息要读起来完整，不要把同一句话拆到两条里。',
+  '在指定 QQ 群分多条发送消息（二代仿真模式专用），桥接会按真人化随机间隔发送。可选 replyToMessageId（引用某条消息，只作用于第一条）与 atUserId（@ 某人，只作用于第一条）。注意：数组里的每个字符串就是一条 QQ 消息，字符串内部不要用空格分隔中文短句，需要多条请用数组元素；每条消息要读起来完整，不要把同一句话拆到两条里。',
   {
     groupId: z.union([z.number(), z.string()]).describe('群号（必须在白名单内）'),
     token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
-    messages: z.union([z.array(z.string()).min(1), z.string()]).describe('要发送的消息数组，每条为纯文本；也兼容传入 JSON 数组字符串')
+    messages: z.union([z.array(z.string()).min(1), z.string()]).describe('要发送的消息数组，每条为纯文本；也兼容传入 JSON 数组字符串'),
+    replyToMessageId: z.union([z.number(), z.string()]).optional().describe('可选：引用/回复的消息 id（只作用于第一条）'),
+    atUserId: z.union([z.number(), z.string()]).optional().describe('可选：@ 的群成员 QQ 号（只作用于第一条，不能是 all）')
   },
-  async ({ groupId, token, messages }) => {
+  async ({ groupId, token, messages, replyToMessageId, atUserId }) => {
     try {
       const key = `group:${groupId}`;
       let finalMessages = messages;
@@ -461,7 +465,7 @@ server.tool(
       }
       const data = await agentApi('/api/socialV2/send-burst', {
         method: 'POST',
-        body: JSON.stringify({ key, messages: finalMessages }),
+        body: JSON.stringify({ key, messages: finalMessages, replyToMessageId: replyToMessageId ?? null, atUserId: atUserId ?? null }),
         headers: { 'x-agent-token': token },
         timeoutMs: 300000
       });
@@ -1087,6 +1091,58 @@ if (cfg.socialV2?.tools?.getForwardMsg !== false) {
       }
     }
   );
+  if (cfg.socialV2?.tools?.listBots !== false) {
+    server.tool(
+      'qq_list_group_bots',
+      '列出当前群里识别到的**其他 QQ 机器人**（不是你自己）。数据来自 SnowLuma 群成员列表的 is_robot 字段（权威判定）；若网关不提供该字段则退化为昵称关键词启发式，此时 authoritative=false，结果只是猜测、不要当真。想跟群里别的机器人互动、或想知道谁不是真人时调用。',
+      {
+        key: z.string().describe('会话 key，格式 group:群号'),
+        token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+        refresh: z.boolean().optional().describe('true=强制重新拉取群成员列表（默认用缓存，约 10 分钟过期）')
+      },
+      async ({ key, token, refresh }) => {
+        try {
+          const q = new URLSearchParams({ key });
+          if (refresh) q.set('refresh', '1');
+          const data = await agentApi(`/api/socialV2/bots?${q.toString()}`, { headers: { 'x-agent-token': token } });
+          return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+        } catch (error) {
+          return { content: [{ type: 'text', text: `获取机器人名单失败：${error?.message ?? error}` }], isError: true };
+        }
+      }
+    );
+  }
+
+  if (cfg.socialV2?.tools?.callBot !== false) {
+    server.tool(
+      'qq_call_bot',
+      '调用群里**另一个机器人**的指令：桥接会以你的身份在群里发一条 "@那个机器人 + 指令内容" 的消息，把它的功能当工具用（签到/点歌/查询/翻译/抽签等）。'
+        + 'bot 传机器人的昵称（可模糊匹配）或 QQ 号——先用 qq_list_group_bots 查清楚；不确定它的指令格式时，先发 command="帮助" 问它一句。'
+        + '注意：这是真的在群里发消息，所有人都看得见，所以别刷屏、别发无意义内容；有每小时次数上限。'
+        + '对方是机器人，回得快：发完用 qq_wait_for_messages 或 qq_get_recent_messages 去看它回了什么，再决定要不要接话。',
+      {
+        key: z.string().describe('会话 key，格式 group:群号'),
+        token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+        bot: z.string().describe('目标机器人：昵称（可模糊匹配）或 QQ 号'),
+        command: z.string().describe('要发给它的指令内容，例如「签到」「点歌 起风了」，最多 200 字'),
+        mention: z.boolean().optional().describe('是否 @ 它（默认 true；false 则只把指令文本发到群里）')
+      },
+      async ({ key, token, bot, command, mention }) => {
+        try {
+          const data = await agentApi('/api/socialV2/call-bot', {
+            method: 'POST',
+            body: JSON.stringify({ key, bot, command, mention: mention !== false }),
+            headers: { 'x-agent-token': token },
+            timeoutMs: 60000
+          });
+          return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+        } catch (error) {
+          return { content: [{ type: 'text', text: `调用机器人失败：${error?.message ?? error}` }], isError: true };
+        }
+      }
+    );
+  }
+
 }
 
 await server.connect(new StdioServerTransport());

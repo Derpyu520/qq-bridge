@@ -10,6 +10,9 @@
   "scripts": {
     "start": "node src/bridge.js",
     "self-test": "node src/self-test.js",
+    "test-commands": "node scripts/test-qq-commands.mjs",
+    "test-bots": "node scripts/test-bot-registry.mjs",
+    "test-e2e": "node scripts/test-e2e-qq-commands.mjs",
     "test-md": "node scripts/test-md-to-plain.mjs",
     "test-wait": "node scripts/test-v2-wait.mjs",
     "test-vision": "node scripts/test-vision-media.mjs",

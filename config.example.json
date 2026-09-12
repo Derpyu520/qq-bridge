@@ -122,7 +122,9 @@
       "setStickerRemark": false,
       "stickerNote": true,
       "collectSticker": true,
-      "getSelfImage": true
+      "getSelfImage": true,
+      "listBots": true,
+      "callBot": true
     },
     "wake": {
       "defaultMode": "diving",
@@ -215,5 +217,23 @@
       "unreadLimit": 30,
       "contextWindow": 20
     }
+  },
+  "commands": {
+    "enabled": true,
+    "groupMode": "always",
+    "prefixes": [
+      "/",
+      "／"
+    ],
+    "cooldownMs": 2000,
+    "defaultSleepMinutes": 60
+  },
+  "bots": {
+    "enabled": true,
+    "autoDetect": true,
+    "refreshMs": 600000,
+    "wakeOnBotMessages": true,
+    "maxCallPerHour": 10,
+    "known": []
   }
 }
