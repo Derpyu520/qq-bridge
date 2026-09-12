@@ -12,6 +12,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { SnowLumaWebSocketClient, text } from '@snowluma/sdk';
 import { NodeApiClient, unwrap, createTurnCollector } from './dsh-client.js';
+import { sliderToTier, tierToSlider, describeTier, TIER_NAMES, TIER_DESCRIPTIONS } from './tier-slider.js';
 import { mdToPlain, splitForQQ } from './md-to-plain.js';
 import { SENSITIVE_RE } from './sensitive.js';
 import { looksLikeUnfinished } from './v2-wait.js';
@@ -225,8 +226,8 @@ function loadConfig() {
     dsh: {
       baseUrl: 'http://127.0.0.1:3080',
       provider: 'deepseek-official',
-      model: 'deepseek-v4-flash-vision-exp',
-      reasoningEffort: 'max',
+      model: 'deepseek-flash',
+      reasoningEffort: 'low',
       ...(file.dsh ?? {})
     },
     snowluma: { wsUrl: 'ws://127.0.0.1:3001', accessToken: '', ...(file.snowluma ?? {}) },
@@ -263,6 +264,9 @@ function loadConfig() {
       learnerPreset: 'qq-chat',
       workspaceTitle: 'QQ 黑话学习',
       autoResearch: true,
+      // 研究模型给出的 confirmed 直接决定状态：true → 已确认，false → 已拒绝。
+      // 关掉则只回填解释，状态留给管理员在控制台逐条决定。
+      autoReview: true,
       ...(file.slang ?? {})
     },
     social: {
@@ -309,6 +313,17 @@ function loadConfig() {
       autoReplyCheckMs: 30000,
       agentPreset: 'qq-chat-v2',
       provideRecommendations: true,
+      // ── 响应档位（复刻 QQ Agent 的 tier 语义）──
+      // 滑条位置 0~100 是唯一真相，档位与随机概率都由它派生：
+      //   1 档 仅艾特 / 2 档 +关键词 / 3 档 随机（概率随滑条线性增长）/ 4 档 全响应
+      // 它是管理员侧的硬上限：AI 用 qq_set_wake_config 设的唤醒条件不会越过当前档位。
+      tier: {
+        slider: 24,          // 全局滑条位置（默认 ≈ 3 档 5%，与既有 recommendedProbability 0.05 对齐）
+        unified: true,       // true=全局滑条对所有会话生效；false=可按群/私聊单独设置
+        groupSliders: {},    // { "群号": 0~100 }，unified=false 时生效；未设置的群跟随全局
+        privateSlider: null, // 私聊共用 0~100；null = 私聊始终唤醒（沿用原行为）
+        keywords: []         // 2 档关键词表；留空则用 wake.recommendedKeywords
+      },
       tools: {
         getPrompt: true,
         getUnread: true,
@@ -952,6 +967,19 @@ async function main() {
     fs.mkdirSync(STATE_DIR, { recursive: true });
     atomicWriteJson(SLANG_SESSION_FILE, { sessionId: slangLearnerSessionId });
     log(`黑话学习会话已创建：${slangLearnerSessionId}`);
+    // 与 QQ 会话一致：跟随 config.dsh 里配置的模型与推理等级
+    await ensureVisionModel(slangLearnerSessionId);
+    // DSH 界面不展示「从未产生过回合」的空会话（session/list 的 blank=true），
+    // 所以新建后立刻发一个自检回合把它点亮，否则「QQ 黑话学习」里会一直看不见它。
+    try {
+      await api.sessions.prompt({
+        sessionId: slangLearnerSessionId,
+        mode: 'queue',
+        content: [{ type: 'text', text: '自检：请只回复两个字「就绪」，不要调用任何工具。' }]
+      });
+    } catch (error) {
+      log('黑话学习会话自检回合投递失败（不影响学习）:', error?.message ?? error);
+    }
     return slangLearnerSessionId;
   }
 
@@ -1004,7 +1032,7 @@ async function main() {
         log(`黑话提取被拒 (${key}): ${accepted.result.error.code}: ${accepted.result.error.message}`);
         return;
       }
-      const output = await waitLearnerTurn(sessionId);
+      const output = await waitLearnerTurn(sessionId, 180000);
       const items = parseExtractionJson(output);
       if (!items.length) {
         log(`黑话提取：${key} 未发现候选`);
@@ -1037,7 +1065,7 @@ async function main() {
         queueSlangTask(() => runSlangResearch(researchCandidates));
       }
     } catch (error) {
-      if (/会话|session|not found|404/i.test(String(error?.message ?? error))) {
+      if (isLearnerSessionGone(error)) {
         invalidateSlangLearnerSession();
       }
       log(`黑话提取失败 (${key}):`, error?.message ?? error);
@@ -1067,17 +1095,20 @@ async function main() {
         log(`黑话研究被拒: ${accepted.result.error.code}: ${accepted.result.error.message}`);
         return;
       }
-      const output = await waitLearnerTurn(sessionId);
+      // 研究会联网查词义（每个候选可能多次 web_search / web_fetch），给足时间；
+      // 之前用默认 120s 必然超时，结果被丢弃。
+      const output = await waitLearnerTurn(sessionId, 360000);
       const results = parseResearchJson(output);
+      const autoReview = cfg.slang?.autoReview !== false;
+      let autoConfirmed = 0;
+      let autoRejected = 0;
+      let keptCandidate = 0;
       for (const r of results) {
         const entry = slangEntries.find((e) => e.content === r.content);
         if (!entry) continue;
-        // 只有明确确认（confirmed: true）的结果才写入解释字段；
-        // 不确定/未确认的结果保留原状，允许后续再次研究。
-        if (r.confirmed !== true) {
-          log(`黑话研究：${r.content} 未确认，保留候选待后续研究`);
-          continue;
-        }
+        // 研究模型自己给出的 confirmed 判定（兼容 "true"/"false" 字符串）
+        const confirmed = r.confirmed === true || String(r.confirmed ?? '').toLowerCase() === 'true';
+        // 解释字段：确认与否都回填（拒绝的条目不会注入，但保留内容便于事后复核）
         if (r.meaning) entry.meaning = r.meaning;
         if (r.usage) entry.usage = r.usage;
         if (r.example) entry.example = r.example;
@@ -1085,11 +1116,27 @@ async function main() {
         if (Array.isArray(r.sources) && r.sources.length) entry.sources = r.sources.map((s) => String(s ?? '').trim()).filter(Boolean).slice(0, 10);
         entry.lastInferenceCount = entry.count;
         entry.updatedAt = new Date().toISOString();
+        if (autoReview) {
+          // 自动判定：有解释且模型确认 → 已确认；否则 → 已拒绝
+          if (confirmed && entry.meaning) {
+            entry.status = SLANG_STATUS.CONFIRMED;
+            autoConfirmed += 1;
+          } else {
+            entry.status = SLANG_STATUS.REJECTED;
+            autoRejected += 1;
+          }
+          entry.reviewedBy = 'auto';
+          entry.reviewedAt = entry.updatedAt;
+        } else if (!confirmed) {
+          keptCandidate += 1;
+        }
       }
       saveSlangStore();
-      log(`黑话研究：已更新 ${results.length} 条候选解释`);
+      log(autoReview
+        ? `黑话研究：处理 ${results.length} 条（自动确认 ${autoConfirmed} / 自动拒绝 ${autoRejected}）`
+        : `黑话研究：已更新 ${results.length} 条候选解释（保留候选 ${keptCandidate} 条待人工确认）`);
     } catch (error) {
-      if (/会话|session|not found|404/i.test(String(error?.message ?? error))) {
+      if (isLearnerSessionGone(error)) {
         invalidateSlangLearnerSession();
       }
       log('黑话研究失败:', error?.message ?? error);
@@ -1374,6 +1421,12 @@ async function main() {
         dshReady = true;
         lastMode = currentMode;
         log(`DSH 已就绪（模式: ${currentMode}）`);
+        // 启动时补齐/刷新所有已知会话的标题（群名 / 私聊昵称），历史会话也能被改名
+        for (const [titleKey, titleSid] of Object.entries(state.sessions ?? {})) {
+          if (!titleSid) continue;
+          syncSessionTitle(titleKey, titleSid).catch(() => {});
+          resolvePeerName(titleKey).then(() => syncSessionTitle(titleKey, titleSid)).catch(() => {});
+        }
         if (currentMode === 'reserved2') {
           // 首次确定模式为 reserved2 后再恢复持久化的有限睡眠定时器，
           // 避免在 initial chat 模式下设置定时器导致 timeout 唤醒被模式守卫吞掉。
@@ -1506,8 +1559,23 @@ async function main() {
         req.on('error', () => fail(400, '请求体读取失败'));
         req.on('aborted', () => fail(400, '请求体读取中断'));
       });
-      // 控制台鉴权：所有请求需带 x-console-token 或 ?token=
-      const suppliedToken = url.searchParams.get('token') ?? req.headers['x-console-token'];
+      // 控制台鉴权：x-console-token / ?token= / 持久 cookie 三者取一。
+      // 用带 ?token= 的地址打开过一次后写入 cookie，之后刷新浏览器就不用再输令牌。
+      const CONSOLE_COOKIE = 'qqbridge-console';
+      const cookieToken = (() => {
+        for (const seg of String(req.headers.cookie ?? '').split(';')) {
+          const at = seg.indexOf('=');
+          if (at === -1) continue;
+          if (seg.slice(0, at).trim() === CONSOLE_COOKIE) {
+            const raw = seg.slice(at + 1).trim();
+            try { return decodeURIComponent(raw); } catch { return raw; }
+          }
+        }
+        return '';
+      })();
+      const queryToken = url.searchParams.get('token');
+      const suppliedToken = queryToken ?? req.headers['x-console-token'] ?? cookieToken;
+      const setConsoleCookie = Boolean(consoleToken) && queryToken !== null && queryToken === consoleToken;
       if (consoleToken && suppliedToken !== consoleToken) {
         if (req.method === 'GET' && url.pathname === '/') {
           res.writeHead(401, { 'content-type': 'text/html; charset=utf-8', ...SECURITY_HEADERS });
@@ -1569,7 +1637,11 @@ async function main() {
           return;
         }
         if (req.method === 'GET' && url.pathname === '/') {
-          res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', ...SECURITY_HEADERS });
+          res.writeHead(200, {
+            'content-type': 'text/html; charset=utf-8',
+            ...(setConsoleCookie ? { 'set-cookie': `${CONSOLE_COOKIE}=${encodeURIComponent(consoleToken)}; Path=/; Max-Age=31536000; SameSite=Strict; HttpOnly` } : {}),
+            ...SECURITY_HEADERS
+          });
           try {
             res.end(fs.readFileSync(path.join(ROOT, 'public', 'console.html'), 'utf8'));
           } catch {
@@ -1918,6 +1990,7 @@ async function main() {
           if (merged.extractCooldownMs !== undefined) merged.extractCooldownMs = Math.max(0, Math.round(Number(merged.extractCooldownMs) || 0));
           if (merged.injectMax !== undefined) merged.injectMax = Math.min(30, Math.max(1, Math.round(Number(merged.injectMax) || 1)));
           if (merged.autoResearch !== undefined) merged.autoResearch = merged.autoResearch === true;
+          if (merged.autoReview !== undefined) merged.autoReview = merged.autoReview === true;
           if (merged.learnerPreset !== undefined) merged.learnerPreset = String(merged.learnerPreset ?? '').trim();
           if (merged.workspaceTitle !== undefined) merged.workspaceTitle = String(merged.workspaceTitle ?? '').trim() || 'QQ 黑话学习';
           if (body.inferenceThresholds !== undefined) {
@@ -2205,7 +2278,7 @@ async function main() {
             const stV2 = getSocialV2State(key);
             tokenLine = `【会话令牌】${stV2.agentToken}（调用二代状态/发送工具时请在参数中带上此令牌）\n\n`;
           }
-          const promptText = `${roleLine}${tokenLine}【后台控制端提醒】（来自控制台/管理端，不是群友消息）\n${message}\n\n这是后台给你的引导或提醒，请据此调整你的行为。绝对不要复述、转发或原样发送这条后台提醒，也不要发送其中的会话令牌；它只用于你内部调整行为。${isV2 ? '当前是二代仿真模式：你的文本输出不会自动发送到 QQ；如果需要在群里发言，请使用发送工具（qq_send_message / qq_reply）。如果不需要发言，可以 qq_mark_read 或 qq_set_wake_config 收尾。' : '如果不需要在群里发言，请不要输出会发到 QQ 的内容。'}`;
+          const promptText = `${roleLine}${tokenLine}${tierLineV2(key)}【后台控制端提醒】（来自控制台/管理端，不是群友消息）\n${message}\n\n这是后台给你的引导或提醒，请据此调整你的行为。绝对不要复述、转发或原样发送这条后台提醒，也不要发送其中的会话令牌；它只用于你内部调整行为。${isV2 ? '当前是二代仿真模式：你的文本输出不会自动发送到 QQ；如果需要在群里发言，请使用发送工具（qq_send_message / qq_reply）。如果不需要发言，可以 qq_mark_read 或 qq_set_wake_config 收尾。' : '如果不需要在群里发言，请不要输出会发到 QQ 的内容。'}`;
           let sessionId = null;
           let popSilent = null;
           try {
@@ -2246,7 +2319,7 @@ async function main() {
           const current = file.socialV2 ?? {};
           const merged = { ...current, ...body };
           // 子对象必须是非 null 对象；null/数组/基本类型会覆盖默认值导致工具开关被绕过，这里直接保留当前值。
-          for (const sub of ['tools', 'wake', 'send', 'wait', 'proactive', 'sticker', 'feedback', 'context']) {
+          for (const sub of ['tools', 'wake', 'send', 'wait', 'proactive', 'sticker', 'feedback', 'context', 'tier']) {
             if (body[sub] !== undefined && (body[sub] === null || typeof body[sub] !== 'object' || Array.isArray(body[sub]))) {
               merged[sub] = current[sub] ?? {};
             }
@@ -2442,6 +2515,53 @@ async function main() {
           sendJson({ ok: true });
           return;
         }
+        // ── 响应档位（复刻 QQ Agent 的 tier 滑条）──────────────────────────────
+        if (req.method === 'GET' && url.pathname === '/api/socialV2/tier') {
+          const t = tierConfigV2();
+          const groups = [...socialV2.conversations.keys()].sort().map((k) => {
+            const info = resolveTierForV2(k);
+            const hasOverride = k.startsWith('private:')
+              ? t.privateSlider !== null
+              : Object.prototype.hasOwnProperty.call(t.groupSliders, k.slice('group:'.length));
+            return { key: k, slider: info.slider, tier: info.tier, randomPercent: info.randomPercent, source: info.source, hasOverride, label: describeTier(info.slider) };
+          });
+          sendJson({
+            ok: true,
+            config: t,
+            bands: { tier1End: 10, tier2End: 20, tier3End: 90 },
+            names: TIER_NAMES,
+            global: { slider: t.slider, ...sliderToTier(t.slider), label: describeTier(t.slider) },
+            groups
+          });
+          return;
+        }
+        if (req.method === 'POST' && url.pathname === '/api/socialV2/tier') {
+          const body = await readBody();
+          try {
+            const key = String(body.key ?? '').trim();
+            let next;
+            if (key) {
+              if (!/^(group|private):\d+$/.test(key)) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
+              if (body.clear === true) {
+                next = key.startsWith('private:') ? setTierConfigV2({ privateSlider: null }) : setTierConfigV2({ clearGroupKey: key.slice('group:'.length) });
+              } else {
+                if (body.slider === undefined) { sendJson({ ok: false, error: '缺少 slider（0~100）' }, 400); return; }
+                const v = Math.min(100, Math.max(0, Math.round(Number(body.slider))));
+                next = key.startsWith('private:')
+                  ? setTierConfigV2({ unified: false, privateSlider: v })
+                  : setTierConfigV2({ unified: false, groupSliders: { [key.slice('group:'.length)]: v } });
+              }
+            } else {
+              next = setTierConfigV2(body);
+            }
+            const info = key ? resolveTierForV2(key) : { slider: next.slider, ...sliderToTier(next.slider) };
+            log(`控制台：响应档位更新 → 滑条 ${info.slider}/100（${info.tier} 档${info.tier === 3 ? `，随机 ${info.randomPercent}%` : ''}）${key ? ` @ ${key}` : ''}`);
+            sendJson({ ok: true, config: next, derived: { slider: info.slider, tier: info.tier, randomPercent: info.randomPercent ?? 0, label: describeTier(info.slider) } });
+          } catch (error) {
+            sendJson({ ok: false, error: error?.message ?? String(error) }, 400);
+          }
+          return;
+        }
         if (req.method === 'GET' && url.pathname === '/api/socialV2/state') {
           const key = String(url.searchParams.get('key') ?? '').trim();
           if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
@@ -2453,6 +2573,10 @@ async function main() {
             ok: true,
             key,
             wakeConfig: st.wakeConfig,
+            tier: (() => {
+              const t = resolveTierForV2(key);
+              return { slider: t.slider, tier: t.tier, randomPercent: t.randomPercent, source: t.source, label: describeTier(t.slider) };
+            })(),
             wakeSafety: computeWakeSafetyV2(st.wakeConfig),
             unreadCount: st.unread.length,
             recentCount: st.recentMessages.length,
@@ -2516,7 +2640,15 @@ async function main() {
             time: new Date().toISOString(),
             role: { name: roleState.role ?? null, hint: currentMode === 'reserved2' ? currentRoleHintV2() : currentRoleHint() },
             recommended: cfg.socialV2?.provideRecommendations === false ? null : {
-              wake: cfg.socialV2?.wake ?? {},
+              // 推荐概率与「响应档位」对齐：否则 AI 会同时看到"推荐 0.05"和"档位 50%"两个矛盾数值。
+              wake: (() => {
+                const t = resolveTierForV2(key);
+                const w = { ...(cfg.socialV2?.wake ?? {}) };
+                if (t.tier < 3) w.recommendedProbability = 0;
+                else if (t.tier === 3) w.recommendedProbability = Math.round(t.randomPercent) / 100;
+                else w.recommendedProbability = 1;
+                return w;
+              })(),
               send: cfg.socialV2?.send ?? {},
               wait: cfg.socialV2?.wait ?? {},
               proactive: cfg.socialV2?.proactive ?? {}
@@ -2525,6 +2657,19 @@ async function main() {
             unreadCount: st.unread.length,
             recentCount: st.recentMessages.length,
             currentWakeConfig: st.wakeConfig,
+            tier: (() => {
+              const t = resolveTierForV2(key);
+              return {
+                slider: t.slider,
+                tier: t.tier,
+                name: TIER_NAMES[t.tier] ?? '',
+                randomPercent: t.randomPercent,
+                source: t.source,
+                description: TIER_DESCRIPTIONS[t.tier] ?? '',
+                bands: { tier1: '0~10 仅艾特', tier2: '10~20 +关键词', tier3: '20~90 随机响应（概率线性增长）', tier4: '90~100 全响应' },
+                note: '管理员设定的响应档位是硬上限，你设置的唤醒条件不会越过它。'
+              };
+            })(),
             wakeSafety: computeWakeSafetyV2(st.wakeConfig),
             memory: formatMemoryV2(st),
             participation: formatParticipationV2(st),
@@ -4173,8 +4318,8 @@ async function main() {
             sendJson({ ok: false, error: '发送工具仅限 closed-agent / reserved2 模式使用' }, 403);
             return;
           }
-          if (socialV2.paused && token) {
-            sendJson({ ok: false, error: 'AI 已暂停，当前不允许执行发送工具' }, 403);
+          if (socialV2.paused) {
+            sendJson({ ok: false, error: '机器人已暂停（控制台按钮或 QQ 里发 /继续 可恢复），当前不允许发送消息' }, 403);
             return;
           }
           if (!targetId || !message) { sendJson({ ok: false, error: '目标 id 和 message 不能为空' }, 400); return; }
@@ -4382,6 +4527,7 @@ async function main() {
     });
     server.listen(port, '127.0.0.1', () => {
       log(`本地控制台已启动：http://127.0.0.1:${port}`);
+      if (consoleToken) log(`控制台免输令牌：用 http://127.0.0.1:${port}/?token=<你的 consoleToken> 打开一次即可（浏览器会记住；令牌明文在 config.json 的 consoleToken，日志里被脱敏为 ***）。`);
     });
     // 端口被占用说明已有实例在跑：以 exit 2 退出，守护脚本会识别为"已有实例"而不是无限重启
     server.on('error', (error) => {
@@ -5056,13 +5202,13 @@ async function main() {
   }
 
   // 视觉模型应用去重：每个 DSH 会话在本进程内只 selectModel 一次。
-  // 四种 QQ 模式共用 DSH 会话，统一强制使用 DeepSeek-V4-Flash-Vision-Exp + max 思考强度。
+  // 四种 QQ 模式共用 DSH 会话，统一强制使用配置里指定的模型与推理强度（默认 low，省 token、聊天够用）。
   const visionModelAppliedSessions = new Set();
   async function ensureVisionModel(sessionId) {
     if (visionModelAppliedSessions.has(sessionId)) return;
     const provider = String(cfg.dsh?.provider || 'deepseek-official');
-    const model = String(cfg.dsh?.model || 'deepseek-v4-flash-vision-exp');
-    const effort = String(cfg.dsh?.reasoningEffort || 'max');
+    const model = String(cfg.dsh?.model || 'deepseek-flash');
+    const effort = String(cfg.dsh?.reasoningEffort || 'low');
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       try {
         const result = unwrap(await api.sessions.selectModel({ sessionId, provider, model, reasoningEffort: effort }), 'session.selectModel');
@@ -5073,6 +5219,78 @@ async function main() {
         log(`设置会话视觉模型失败 ${sessionId}（第 ${attempt}/2 次）: ${error?.message ?? error}`);
         if (attempt < 2) await sleep(1000);
       }
+    }
+  }
+
+  // ── QQ 会话在 DSH 里的标题：群名 / 私聊昵称 ──────────────────────────────
+  const peerNames = new Map();      // QQ key -> 显示名（群名或昵称）
+  const appliedTitles = new Map();  // sessionId -> 已写入 DSH 的标题
+
+  /** 轻量 OneBot HTTP 调用（只用于取元信息，如群名/昵称） */
+  async function onebotHttp(action, params = {}, timeoutMs = 8000) {
+    const httpUrl = String(cfg.snowluma?.httpUrl || 'http://127.0.0.1:3000').replace(/\/+$/, '');
+    const res = await fetch(`${httpUrl}/${action}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(cfg.snowluma?.accessToken ? { authorization: `Bearer ${cfg.snowluma.accessToken}` } : {})
+      },
+      body: JSON.stringify(params),
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || body.status !== 'ok' || body.retcode !== 0) {
+      throw new Error(`OneBot ${action} 失败: ${body.wording || body.retcode || res.status}`);
+    }
+    return body.data;
+  }
+
+  /** 取不到真名时的回退标题 */
+  function fallbackNameFor(key) {
+    const m = /^(group|private):(\d+)$/.exec(String(key ?? ''));
+    if (!m) return String(key ?? '');
+    return m[1] === 'group' ? `群 ${m[2]}` : `私聊 ${m[2]}`;
+  }
+
+  /** 该会话在 DSH 里应显示的标题 */
+  function displayNameFor(key) {
+    const cached = peerNames.get(key);
+    return cached ? String(cached).trim().slice(0, 60) : fallbackNameFor(key);
+  }
+
+  /** 通过 OneBot 取群名 / 私聊昵称并缓存（失败沿用回退名） */
+  async function resolvePeerName(key, { force = false } = {}) {
+    const m = /^(group|private):(\d+)$/.exec(String(key ?? ''));
+    if (!m) return null;
+    if (!force && peerNames.has(key)) return peerNames.get(key);
+    const id = Number(m[2]);
+    try {
+      if (m[1] === 'group') {
+        const info = await onebotHttp('get_group_info', { group_id: id, no_cache: false });
+        const name = info?.group_name ?? info?.groupName;
+        if (name) { peerNames.set(key, String(name)); return String(name); }
+      } else {
+        const info = await onebotHttp('get_stranger_info', { user_id: id });
+        const name = info?.nickname ?? info?.remark;
+        if (name) { peerNames.set(key, String(name)); return String(name); }
+      }
+    } catch (error) {
+      log(`取名称失败 ${key}（沿用回退名）: ${error?.message ?? error}`);
+    }
+    return peerNames.get(key) ?? null;
+  }
+
+  /** 把标题写进 DSH（值没变就跳过，避免无意义的重命名事件） */
+  async function syncSessionTitle(key, sessionId, { force = false } = {}) {
+    if (!sessionId) return;
+    const title = displayNameFor(key);
+    if (!force && appliedTitles.get(sessionId) === title) return;
+    try {
+      await api.sessions.rename({ sessionId, title });
+      appliedTitles.set(sessionId, title);
+      log(`会话标题 → ${title}（${key}）`);
+    } catch (error) {
+      log(`设置会话标题失败（${key}）: ${error?.message ?? error}`);
     }
   }
 
@@ -5111,6 +5329,11 @@ async function main() {
           break;
         } catch (error) {
           lastError = error;
+          // 安全相关：preset 挂载失败会退化成 DSH 默认 preset（standard，带完整本地工具），
+          // 而 QQ preset 的意义正是剥离这些工具。绝不能静默降级。
+          if (withPreset) {
+            log(`⚠️ 带 preset（${modePreset(key, currentMode, cfg) ?? '未配置'}）创建会话失败，将退化为默认 preset —— QQ 安全边界不生效，请检查 preset 是否与当前 DSH 兼容：${error?.message ?? error}`);
+          }
         }
       }
       if (!sessionId) {
@@ -5128,6 +5351,9 @@ async function main() {
       reverse.set(sessionId, key);
       saveState();
       await ensureVisionModel(sessionId);
+      // DSH 里的会话标题 = 群名 / 私聊昵称：先写回退名保证立刻可辨认，再异步换成真实名字
+      syncSessionTitle(key, sessionId).catch(() => {});
+      resolvePeerName(key).then(() => syncSessionTitle(key, sessionId)).catch(() => {});
       log(`新会话 ${key} -> ${sessionId}（模式 ${currentMode}，preset: ${modePreset(key, currentMode, cfg) ?? '默认'}）`);
       return sessionId;
     })();
@@ -5201,8 +5427,15 @@ async function main() {
     const hardMax = Number(w.sleepMaxMs) || 0;
     if (hardMin > 0 && finiteMs < hardMin) finiteMs = hardMin;
     if (hardMax > 0 && finiteMs > hardMax) finiteMs = hardMax;
+    // 默认唤醒配置要与「响应档位」保持一致：档位 <4 时 anyMessage 不生效、<3 时概率触发关闭，
+    // 所以这里直接按档位派生默认值，避免 AI 以为自己设了活跃/概率、实际却被档位压住。
+    const globalTier = (() => {
+      const t = tierConfigV2();
+      return { slider: t.slider, ...sliderToTier(t.slider) };
+    })();
+    const effectiveDefaultMode = (defaultMode === 'active' && globalTier.tier >= 4) ? 'active' : 'diving';
     return {
-      mode: defaultMode,
+      mode: effectiveDefaultMode,
       infinite: defaultInfinite,
       sleepUntil: defaultInfinite ? null : new Date(Date.now() + Math.round(finiteMs)).toISOString(),
       triggers: {
@@ -5212,8 +5445,8 @@ async function main() {
         keywords: Array.isArray(w.recommendedKeywords) ? w.recommendedKeywords.map(String) : [],
         question: w.recommendedQuestion !== false,
         poke: w.recommendedPoke !== false,
-        anyMessage: defaultMode === 'active',
-        probability: Math.min(1, Math.max(0, Number(w.recommendedProbability) || 0))
+        anyMessage: effectiveDefaultMode === 'active' && globalTier.tier >= 4,
+        probability: globalTier.tier >= 3 ? Math.min(1, Math.max(0, globalTier.randomPercent / 100)) : 0
       },
       batchWindowMs: Math.max(1000, Number(w.batchWindowMs) || 8000),
       lastWakeAt: 0,
@@ -6675,10 +6908,126 @@ async function main() {
     return text;
   }
 
+  // 只有“会话真的不存在/失效”才重建学习会话。
+  // 注意不能再用 /会话|session/ 这类宽松匹配错误**文本**：像“等待学习会话 turn 超时”
+  // 里也含“会话”二字，会把慢回合误判成会话失效，导致每轮研究都丢弃会话重建。
+  function isLearnerSessionGone(error) {
+    const code = String(error?.code ?? '');
+    if (/not-found|invalid|unknown/i.test(code)) return true;
+    const msg = String(error?.message ?? error ?? '');
+    return /session[^]{0,20}not[ -]?found|unknown session|会话不存在|会话已失效|无效的会话|session .*不存在/i.test(msg);
+  }
+
+  // ── 响应档位（复刻 QQ Agent 的 tier 语义）───────────────────────────────
+  // 滑条位置是唯一真相：档位与随机概率都由它派生，见 src/tier-slider.js。
+  /** 归一化档位配置 */
+  function tierConfigV2() {
+    const t = cfg.socialV2?.tier ?? {};
+    const sliderRaw = Number(t.slider);
+    const slider = Number.isFinite(sliderRaw) ? Math.min(100, Math.max(0, Math.round(sliderRaw))) : 24;
+    const rawKeywords = Array.isArray(t.keywords) && t.keywords.length
+      ? t.keywords
+      : (Array.isArray(cfg.socialV2?.wake?.recommendedKeywords) ? cfg.socialV2.wake.recommendedKeywords : []);
+    const keywords = rawKeywords.map((s) => String(s).trim()).filter(Boolean).slice(0, 50);
+    const groupSliders = {};
+    if (t.groupSliders && typeof t.groupSliders === 'object' && !Array.isArray(t.groupSliders)) {
+      for (const [k, v] of Object.entries(t.groupSliders)) {
+        if (!/^\d+$/.test(k)) continue;
+        const n = Number(v);
+        if (Number.isFinite(n)) groupSliders[k] = Math.min(100, Math.max(0, Math.round(n)));
+      }
+    }
+    const privateRaw = t.privateSlider;
+    const privateSlider = (privateRaw === null || privateRaw === undefined || !Number.isFinite(Number(privateRaw)))
+      ? null
+      : Math.min(100, Math.max(0, Math.round(Number(privateRaw))));
+    return { slider, unified: t.unified !== false, groupSliders, privateSlider, keywords };
+  }
+
+  /** 该会话当前生效的档位：{ slider, tier, randomPercent, source } */
+  function resolveTierForV2(key) {
+    const t = tierConfigV2();
+    const keyStr = String(key ?? '');
+    if (keyStr.startsWith('private:')) {
+      // 私聊未单独设置时沿用原行为：始终唤醒
+      if (t.privateSlider === null) return { slider: 100, tier: 4, randomPercent: 100, source: 'private-default', isPrivate: true, t };
+      const { tier, randomPercent } = sliderToTier(t.privateSlider);
+      return { slider: t.privateSlider, tier, randomPercent, source: 'private', isPrivate: true, t };
+    }
+    const id = keyStr.slice('group:'.length);
+    const hasGroup = Object.prototype.hasOwnProperty.call(t.groupSliders, id);
+    const useGroup = !t.unified && hasGroup;
+    const slider = useGroup ? t.groupSliders[id] : t.slider;
+    const { tier, randomPercent } = sliderToTier(slider);
+    return { slider, tier, randomPercent, source: useGroup ? 'group' : 'global', isPrivate: false, t };
+  }
+
+  /** 写入档位配置（config.json）并热更新内存中的 cfg；控制台 API 与 QQ 指令共用 */
+  function setTierConfigV2(patch = {}) {
+    const configFile = path.join(ROOT, 'config.json');
+    const file = readJsonSafe(configFile, null, true) ?? {};
+    const current = file.socialV2?.tier ?? {};
+    const next = {
+      slider: Number.isFinite(Number(current.slider)) ? Math.min(100, Math.max(0, Math.round(Number(current.slider)))) : 24,
+      unified: current.unified !== false,
+      groupSliders: (current.groupSliders && typeof current.groupSliders === 'object' && !Array.isArray(current.groupSliders)) ? { ...current.groupSliders } : {},
+      privateSlider: (current.privateSlider === null || current.privateSlider === undefined || !Number.isFinite(Number(current.privateSlider)))
+        ? null
+        : Math.min(100, Math.max(0, Math.round(Number(current.privateSlider)))),
+      keywords: Array.isArray(current.keywords) ? current.keywords.map(String) : []
+    };
+    if (patch.slider !== undefined) {
+      const n = Number(patch.slider);
+      if (!Number.isFinite(n)) throw new Error('slider 必须是 0~100 的数字');
+      next.slider = Math.min(100, Math.max(0, Math.round(n)));
+    }
+    if (patch.unified !== undefined) next.unified = patch.unified === true;
+    if (patch.privateSlider !== undefined) {
+      if (patch.privateSlider === null) next.privateSlider = null;
+      else {
+        const n = Number(patch.privateSlider);
+        next.privateSlider = Number.isFinite(n) ? Math.min(100, Math.max(0, Math.round(n))) : null;
+      }
+    }
+    if (patch.keywords !== undefined) {
+      next.keywords = (Array.isArray(patch.keywords) ? patch.keywords : String(patch.keywords).split(/[\n\r,，、;；]+/))
+        .map((s) => String(s).trim()).filter(Boolean).slice(0, 50);
+    }
+    if (patch.groupSliders && typeof patch.groupSliders === 'object' && !Array.isArray(patch.groupSliders)) {
+      for (const [k, v] of Object.entries(patch.groupSliders)) {
+        if (!/^\d+$/.test(k)) continue;
+        const n = Number(v);
+        if (!Number.isFinite(n)) { delete next.groupSliders[k]; continue; }
+        next.groupSliders[k] = Math.min(100, Math.max(0, Math.round(n)));
+      }
+    }
+    if (patch.clearGroupKey !== undefined) delete next.groupSliders[String(patch.clearGroupKey)];
+    file.socialV2 = { ...(file.socialV2 ?? {}), tier: next };
+    atomicWriteJson(configFile, file);
+    cfg.socialV2 = { ...(cfg.socialV2 ?? {}), tier: next };
+    return next;
+  }
+
+  /** 单会话快捷设置滑条（按群设置时自动切到"按群单独设置"模式） */
+  function setTierSliderForV2(key, slider) {
+    const v = Math.min(100, Math.max(0, Math.round(Number(slider) || 0)));
+    const keyStr = String(key ?? '');
+    if (keyStr.startsWith('private:')) return setTierConfigV2({ unified: false, privateSlider: v });
+    return setTierConfigV2({ unified: false, groupSliders: { [keyStr.slice('group:'.length)]: v } });
+  }
+
+  /**
+   * 判定这条消息是否唤醒 AI。档位（响应档位滑条）是**硬上限**：
+   *   4 档 → 任何消息都唤醒
+   *   1 档 → 只认点名类召唤（@ / 引用我 / 叫名字 / 被提问）
+   *   2 档 → 追加关键词与"指定成员发言"
+   *   3 档 → 追加随机概率（概率取档位派生值，AI 自己设的 probability 不越过档位）
+   * 都没命中就返回 null：调用方只入库、不建会话、不调模型（省 token 的关键）。
+   */
   function evaluateWakeTriggerV2(key, st, event, kind, textContent, plainContent, quoteTargetIsSelf) {
-    if (kind === 'private') return 'private';
+    const tierInfo = resolveTierForV2(key);
+    if (tierInfo.tier >= 4) return `tier4:${tierInfo.source}`;
     const tr = st.wakeConfig?.triggers ?? {};
-    if (tr.anyMessage) return 'anyMessage';
     if (tr.atMention) {
       const atSelf = Array.isArray(event?.message) && event.message.some((seg) => seg?.type === 'at' && String(seg.data?.qq) === String(event?.self_id ?? ''));
       if (atSelf || quoteTargetIsSelf) return 'atMention';
@@ -6687,7 +7036,7 @@ async function main() {
       const lower = String(textContent ?? '').toLowerCase();
       if (lower.includes('@' + selfNickname.toLowerCase()) || lower.includes(selfNickname.toLowerCase())) return 'nameMention';
     }
-    if (Array.isArray(tr.keywords) && tr.keywords.length) {
+    if (tierInfo.tier >= 2 && Array.isArray(tr.keywords) && tr.keywords.length) {
       const lower = String(plainContent ?? '').toLowerCase();
       for (const kw of tr.keywords) {
         const kwStr = String(kw ?? '').toLowerCase();
@@ -6701,15 +7050,23 @@ async function main() {
       }
     }
     if (tr.question && isDirectedAtAi(plainContent)) return 'question';
-    if (Array.isArray(tr.speakerIds) && tr.speakerIds.length) {
+    if (tierInfo.tier >= 2 && Array.isArray(tr.speakerIds) && tr.speakerIds.length) {
       const speakerId = String(event?.user_id ?? event?.sender?.user_id ?? '');
       if (speakerId && tr.speakerIds.some((id) => String(id) === speakerId)) {
         const senderLabel = event?.sender?.card || event?.sender?.nickname || speakerId;
         return `speaker:${senderLabel}`;
       }
     }
-    if (Number(tr.probability) > 0 && Math.random() < Number(tr.probability)) return 'probability';
+    if (tierInfo.tier >= 3 && tierInfo.randomPercent > 0 && Math.random() * 100 < tierInfo.randomPercent) {
+      return `probability:${tierInfo.randomPercent}%`;
+    }
     return null;
+  }
+
+  /** 【响应档位】提示行（唤醒 / 后台提醒 / 收尾提醒共用，保证 AI 看到的积极度始终一致） */
+  function tierLineV2(key) {
+    const t = resolveTierForV2(key);
+    return `【响应档位】${t.tier} 档 · ${TIER_NAMES[t.tier] ?? ''}${t.tier === 3 ? `（随机 ${t.randomPercent}%）` : ''}：${TIER_DESCRIPTIONS[t.tier] ?? ''}。档位由管理员设定，是硬上限——你设置的唤醒条件不会越过它。\n\n`;
   }
 
   function buildWakePromptV2(key, reason) {
@@ -6742,17 +7099,24 @@ async function main() {
     const wcTr = wc.triggers || {};
     const wcMode = wc.mode === 'active' ? '活跃' : '潜水';
     const wcTime = wc.infinite ? '无限' : (wc.sleepUntil && Number.isFinite(Date.parse(wc.sleepUntil)) ? `有限至 ${new Date(wc.sleepUntil).toLocaleString()}` : '未设时间');
+    const tierInfo = resolveTierForV2(key);
+    // 触发条件按“档位实际生效的结果”展示：否则 AI 会同时看到自己设的概率和档位概率两个矛盾数字。
     const wcTriggers = [];
     if (wcTr.atMention) wcTriggers.push('@');
     if (wcTr.nameMention) wcTriggers.push('名字');
-    if (Array.isArray(wcTr.keywords) && wcTr.keywords.length) wcTriggers.push('关键词');
+    if (tierInfo.tier >= 2 && Array.isArray(wcTr.keywords) && wcTr.keywords.length) wcTriggers.push('关键词');
     if (wcTr.question) wcTriggers.push('提问');
     if (wcTr.poke) wcTriggers.push('拍一拍');
-    if (Array.isArray(wcTr.speakerIds) && wcTr.speakerIds.length) wcTriggers.push(`指定成员(${wcTr.speakerIds.length}:${wcTr.speakerIds.join(',')})`);
-    if (wcTr.anyMessage) wcTriggers.push('任意消息');
-    if (Number(wcTr.probability) > 0) wcTriggers.push(`概率${wcTr.probability}`);
+    if (tierInfo.tier >= 2 && Array.isArray(wcTr.speakerIds) && wcTr.speakerIds.length) wcTriggers.push(`指定成员(${wcTr.speakerIds.length}:${wcTr.speakerIds.join(',')})`);
+    if (tierInfo.tier >= 4) wcTriggers.push('任意消息（4 档：全响应）');
+    else if (tierInfo.tier >= 3 && tierInfo.randomPercent > 0) wcTriggers.push(`概率 ${tierInfo.randomPercent}%（由档位决定）`);
+    else wcTriggers.push('不含随机响应（档位 <3 档）');
+    if (wcTr.anyMessage && tierInfo.tier < 4) wcTriggers.push('（你设的“任意消息”在当前档位下不生效）');
+    const ownProb = Number(wcTr.probability) > 0 ? Number(wcTr.probability) : 0;
+    if (ownProb > 0 && tierInfo.tier !== 3) wcTriggers.push(`（你设的概率 ${ownProb} 在当前档位下不生效）`);
     const wakeLine = `【当前唤醒】${wcMode}，${wcTime}${wcTriggers.length ? `；触发：${wcTriggers.join('/')}` : ''}\n\n`;
-    const base = roleLine + tokenLine + antiAiLine + proactiveLine + stickerLine + preSleepLine + statusLine + wakeLine + memoryLine + participationLine;
+    const tierLine = tierLineV2(key);
+    const base = roleLine + tokenLine + antiAiLine + proactiveLine + stickerLine + preSleepLine + statusLine + wakeLine + tierLine + memoryLine + participationLine;
     if (reason === 'bootstrap') {
       return `${base}【引导唤醒】你已接入 QQ 会话 ${key}。\n当前是二代仿真模式：你的文本输出不会自动发送到 QQ，所有发言必须通过工具完成。\n请先调用 qq_get_prompt 查看你的角色、推荐值、可用工具和当前状态，然后用 qq_set_wake_config 设置你希望如何被唤醒。`;
     }
@@ -6777,7 +7141,7 @@ async function main() {
     const st = getSocialV2State(key);
     const tokenLine = `【会话令牌】${st.agentToken}（调用二代状态工具时请在参数中带上此令牌）\n\n`;
     const preSleepMs = Math.max(0, Number(cfg.socialV2?.wake?.preSleepWaitMs) || 300000);
-    return `${roleLine}${tokenLine}【提醒】你还没有完成回合收尾。请调用 qq_set_wake_config 设置下一次唤醒条件（例如继续潜水多久、@/名字/关键词/提问/概率/指定成员等），或者调用 qq_mark_read 表示你看过且决定不接。这是为了防止你忘记收尾后进入“永眠”。注意：设置潜水前先用 qq_wait_for_messages(timeoutMs=${preSleepMs}) 完成沉睡前观察；等待期间有人说话时查看 newMessages，判断不需要你参与即可收尾。`;
+    return `${roleLine}${tokenLine}${tierLineV2(key)}【提醒】你还没有完成回合收尾。请调用 qq_set_wake_config 设置下一次唤醒条件（例如继续潜水多久、@/名字/关键词/提问/概率/指定成员等），或者调用 qq_mark_read 表示你看过且决定不接。这是为了防止你忘记收尾后进入“永眠”。注意：设置潜水前先用 qq_wait_for_messages(timeoutMs=${preSleepMs}) 完成沉睡前观察；等待期间有人说话时查看 newMessages，判断不需要你参与即可收尾。`;
   }
 
   async function sendWakePromptV2(key, reason) {
@@ -7153,10 +7517,28 @@ async function main() {
       return;
     }
 
+    // 私聊昵称能直接从消息事件拿到：顺手更新缓存与 DSH 标题（群名走 get_group_info）
+    if (kind === 'private') {
+      const nm = event.sender?.nickname || event.sender?.card;
+      if (nm && peerNames.get(key) !== String(nm)) {
+        peerNames.set(key, String(nm));
+        const sid = state.sessions[key];
+        if (sid) syncSessionTitle(key, sid).catch(() => {});
+      }
+    }
+
     // 静默模式：群友消息不投递给 agent（只记录）；管理员消息照常
     if (roleState.mode === 'silent' && !isOwner) {
       appendActivity(`${key}（静默模式）群友 ${event.user_id}：${textContent.slice(0, 80)}`);
       log(`静默模式，忽略群友消息 ${key}`);
+      return;
+    }
+
+    // 全局暂停（一键暂停机器人）：任何模式的会话都不再投递给 agent。
+    // 例外：管理员私聊仍放行，这样可以在 QQ 里直接发 /继续 恢复。
+    if (socialV2.paused && !(isOwner && kind === 'private')) {
+      appendActivity(`${key} [已暂停] 消息未处理：${textContent.slice(0, 80)}`);
+      log(`机器人已暂停，未处理消息 ${key}`);
       return;
     }
 
@@ -7238,6 +7620,34 @@ async function main() {
             await sendToQQ(key, `已切换角色：${name}。`);
           }
         }
+        return;
+      }
+      // ── 一键暂停 / 恢复 / 响应档位（管理员）─────────────────────────────
+      if (plainContent === '/暂停' || plainContent === '/pause' || plainContent === '/暂停机器人') {
+        socialV2.paused = true;
+        saveSocialV2State();
+        log('控制台/QQ：机器人已暂停');
+        await sendToQQ(key, '⏸ 机器人已暂停：所有会话不再回复，消息只记录。发送 /继续 恢复。');
+        return;
+      }
+      if (plainContent === '/继续' || plainContent === '/恢复' || plainContent === '/resume') {
+        socialV2.paused = false;
+        saveSocialV2State();
+        log('控制台/QQ：机器人已恢复');
+        await sendToQQ(key, '▶️ 机器人已恢复，正常回复。');
+        return;
+      }
+      if (plainContent === '/档位' || plainContent === '/tier' || plainContent.startsWith('/档位 ') || plainContent.startsWith('/tier ')) {
+        const m = /^\/(?:档位|tier)\s*(\d{1,3})?\s*$/.exec(plainContent);
+        if (!m || m[1] === undefined) {
+          const info = resolveTierForV2(key);
+          await sendToQQ(key, `当前响应档位：${info.tier} 档 · ${TIER_NAMES[info.tier]}${info.tier === 3 ? `（随机 ${info.randomPercent}%）` : ''}\n滑条位置 ${info.slider}/100（${info.source === 'group' ? '本群单独设置' : info.source === 'global' ? '跟随全局' : '私聊默认'}）\n说明：0~10 仅艾特，10~20 +关键词，20~90 随机（概率线性增长），90~100 全响应\n用法：/档位 55 设置本会话滑条`);
+          return;
+        }
+        const v = Math.min(100, Math.max(0, Math.round(Number(m[1]))));
+        setTierSliderForV2(key, v);
+        const after = resolveTierForV2(key);
+        await sendToQQ(key, `已设置响应档位：滑条 ${v}/100 → ${after.tier} 档 · ${TIER_NAMES[after.tier]}${after.tier === 3 ? `（随机 ${after.randomPercent}%）` : ''}（已切换为按会话单独设置）`);
         return;
       }
       if (plainContent === '/silent' || plainContent === '/quiet') {

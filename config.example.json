@@ -2,8 +2,8 @@
   "dsh": {
     "baseUrl": "http://127.0.0.1:3080",
     "provider": "deepseek-official",
-    "model": "deepseek-v4-flash-vision-exp",
-    "reasoningEffort": "max"
+    "model": "deepseek-flash",
+    "reasoningEffort": "low"
   },
   "snowluma": {
     "wsUrl": "ws://127.0.0.1:3001",
@@ -50,7 +50,8 @@
     "injectMax": 8,
     "learnerPreset": "qq-chat",
     "workspaceTitle": "QQ 黑话学习",
-    "autoResearch": true
+    "autoResearch": true,
+    "autoReview": true
   },
   "social": {
     "maxReplyChars": 500,
