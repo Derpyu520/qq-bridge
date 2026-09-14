@@ -184,6 +184,7 @@ export function buildStickerStrategyHint() {
     '- 选择：优先用备注（desc）和你的记忆（localNote/tags）能准确对上语境的；没有备注/不确定的表情，先 qq_get_sticker_image 看图再决定，不要瞎发。',
     '- 发送：用 qq_send_sticker；一条消息只能是一张表情，不能在同一气泡里附带文字；想说的话先用 qq_send_message / qq_reply 作为单独气泡发出，再单独发表情。需要引用/点名时传 replyToMessageId / atUserId（群聊）。',
     '- 不要：在严肃/正式/敏感话题硬塞表情；不要每次都用同一个；不要一条消息里塞多个表情；不要把文字和表情混在同一个气泡里；不要把表情包当回复的唯一内容（偶尔可以，但别让群友觉得你在敷衍）。',
+    '- 收藏：群友发了一张你真的很喜欢/戳中你的表情包，就调用 qq_collect_sticker 收藏到你的 QQ 收藏表情，并附一句简短备注（如"好图偷了"）。注意：要说"我收下了"就必须真的调用工具把表情收藏进去，不要只说不做、假装收藏；也不要频繁收藏（每分钟≤2、每小时≤10）。想收藏前先用 qq_get_message_images/qq_get_message_detail 看清是哪张，再收藏。',
     '- 学习：看到新表情不确定含义时，先用 qq_get_sticker_image 看图，再用 qq_sticker_note 记下你的理解，下次就能更准地选。'
   ].join('\n');
 }

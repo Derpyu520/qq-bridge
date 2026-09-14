@@ -38,10 +38,55 @@ QQ 消息 ──► SnowLuma（OneBot v11 WS）──► 本桥接进程 ──�
   - agent 通过 `ask_user_question` 提问时，问题会转发到 QQ，回复即自动应答
   - agent 请求工具审批时，转发到 QQ，回复「通过」/「拒绝」即可决策
   - 支持 DSH 斜杠命令（如 `/model`）与 `/reset`（重置会话上下文）
+  - **QQ 指令**：群友/管理员可在 QQ 里直接发 `/指令` `/状态` `/机器人` `/调机器人` 等，桥接本地响应，不进模型、不花 token（详见下文「QQ 指令」）
+  - **机器人互认**：能识别群里其他 QQ 机器人（SnowLuma `is_robot`），在消息里标记、在提示词里告知 AI，并可用 `qq_call_bot` 代你调用它们的指令（详见下文「机器人互认」）
   - 群聊引用/回复会解析成「被引用人 + 原文」注入 DSH（如 `[引用 Derp：El Psy Kongroo是啥]机关的走狗`），让 AI 判断这句话是对谁说的，不会把群友之间引用第三方的对话误当成指向自己；引用机器人自己时会被视为必回
   - MCP 发送工具支持可选 `replyToMessageId`，并新增专用 `qq_reply` 工具：AI 可以先用 `qq_get_group_history` 拿到真实消息 id，再引用/回复某条消息（是否允许 AI 主动使用由人格/策略决定；桥接会检测发送类工具调用并自动跳过该回合的重复自动转发）
   - 一代仿真模式（`reserved`）下，AI 可以只输出 `[SILENT]` 表示“潜水/不接话”，桥接会静默不发送
   - 一代仿真模式（`reserved`）按空格分句：AI 用空格表示拆成多条消息；中英文/数字之间的空格也会被当成分条信号，不想分条就不要加空格（`reserved2` 不适用，分条请用 `qq_send_message` 数组）
+
+### QQ 指令（桥接本地执行，不进模型、不花 token）
+
+群友/管理员可以直接在 QQ 里发指令，桥接**本地**回应：不进 DSH、不消耗 token，也不会污染未读/唤醒状态。
+
+| 指令 | 别名 | 说明 | 权限 |
+| --- | --- | --- | --- |
+| `/指令` | `/帮助` `/菜单` `/?` `/h` | 显示指令列表 | 所有人 |
+| `/状态` | `/status` | 运行模式/角色/唤醒/未读（管理员多一行模型与白名单） | 所有人 |
+| `/ping` | `/在吗` `/存活` | 探活 | 所有人 |
+| `/机器人` | `/bots` `/机器人列表` | 列出本群识别到的其他 QQ 机器人（带 `刷新` 强制重拉） | 所有人 |
+| `/我是谁` | `/whoami` `/身份` | 查看自己的 QQ 号与权限 | 所有人 |
+| `/潜水 [分钟]` | `/sleep` `/睡` | 让机器人潜水（默认 60 分钟） | 管理员 |
+| `/唤醒` | `/wake` `/起来` | 回到活跃（任何消息都唤醒） | 管理员 |
+| `/暂停` `/继续` | `/pause` `/resume` | 暂停/恢复 AI 回复（消息仍入库） | 管理员 |
+| `/重置` | `/reset` `/new` `/重开` | 重置本会话上下文 | 管理员 |
+| `/模型 [名称]` | `/model` | 查看/切换本会话模型（`/模型 reset` 恢复默认） | 管理员 |
+| `/角色 [名称\|off]` | `/role` | 查看/切换/清除角色扮演 | 管理员 |
+| `/静默` `/活跃` | `/silent` `/quiet` `/active` `/speak` | 进入静默/恢复正常回复 | 管理员 |
+| `/调机器人 <名字> <指令>` | `/call` `/呼叫机器人` | 让机器人代你去调用群里其他机器人的指令 | 管理员 |
+
+要点：
+
+- 支持 `/` 与全角 `／` 前缀，也支持 `@小鲸鱼 /状态` 这种先 @ 再跟指令的写法。
+- **不认识的 `/xxx` 不会被抢占**：管理员发的原样转给 DSH（DSH 自有斜杠命令仍可用），群友发的当普通聊天走 AI——不会再出现「随便发个 `/xxx` 就被回一句仅管理员可用」的刷屏。
+- 群里群友用指令的门槛由 `commands.groupMode` 控制：`always`（默认）/ `mention`（必须 @ 或引用机器人）/ `owner`（只认管理员）。
+- 限频按「会话 + 发送者」，不同人互不影响（`commands.cooldownMs`，默认 2 秒）。
+
+### 机器人互认（和群里别的机器人打交道）
+
+OneBot v11 的消息事件里**没有**机器人标识，但 SnowLuma 的 `get_group_member_list` 会返回 `is_robot`。桥接据此建立「本群哪些 QQ 是机器人」的名册并缓存（默认 10 分钟，落盘 `state/bots.json`）：
+
+- 其他机器人的消息会在未读/最近消息里带 `isBot: true`，发送者名字也会标成「某某（机器人）」，AI 能分清「另一个程序」和真人。
+- 唤醒提示里会注入本群机器人名单与互动建议；`bots.wakeOnBotMessages: false` 可让机器人消息不再单独唤醒 AI（只保留「@我/引用我」）。
+- AI 用 `qq_list_group_bots` 查名单，用 `qq_call_bot` 以你的身份在群里发「@那个机器人 + 指令」去调用它的功能（签到/点歌/查询…），有每小时次数上限。
+- `qq_get_group_members` 现在也会返回 `is_robot` 字段。
+- 网关不提供 `is_robot` 时自动退化为昵称关键词启发式，并在结果里标 `authoritative: false`，别太当真。
+
+### 引用回复
+
+- `qq_reply` / `qq_send_group_message` 支持可选 `atUserId`：引用某人并同时 @ 他（引用 + @ 可以同一条发出）。
+- `qq_send_burst` 现在也支持 `replyToMessageId` 与 `atUserId`（只作用于第一条，后续条保持纯文本，不重复打扰）。
+- 发送成功后响应会回传 `quoted: { sender, text, userId }`，模型能确认自己引用了谁。
 
 ## 前置条件
 
@@ -78,6 +123,17 @@ npm install        # 安装依赖（postinstall 会自动修补 @snowluma/sdk �
 | `sendDelayMs` | QQ 连续发送间隔，防止触发频率限制 |
 | `consolePort` | 本地控制台端口，默认 `3100` |
 | `consoleToken` | 控制台访问令牌；留空时启动自动生成并保存到 `state/console-token` |
+| `commands.enabled` | 是否启用 QQ 指令，默认 `true` |
+| `commands.groupMode` | 群里群友用指令的门槛：`always`（默认）/ `mention`（须 @ 或引用）/ `owner` |
+| `commands.prefixes` | 指令前缀，默认 `["/", "／"]` |
+| `commands.cooldownMs` | 同一人在同一会话里的指令限频，默认 `2000` |
+| `commands.defaultSleepMinutes` | `/潜水` 不带分钟数时的默认时长，默认 `60` |
+| `bots.enabled` | 是否启用群内机器人识别，默认 `true` |
+| `bots.autoDetect` | 是否用 `get_group_member_list` 的 `is_robot` 自动识别，默认 `true` |
+| `bots.refreshMs` | 机器人名册缓存时长，默认 `600000` |
+| `bots.wakeOnBotMessages` | 其他机器人的消息是否唤醒 AI，默认 `true`；`false` 时只保留「@我/引用我」 |
+| `bots.known` | 手工登记的机器人：`[{"qq":123456,"name":"签到机器人"}]`（任何群里都认） |
+| `bots.maxCallPerHour` | `qq_call_bot` 每小时调用上限，默认 `10` |
 
 > ⚠️ `allowAllWhenEmpty: true` 表示「白名单没填就全部放行」——把 agent 接入 QQ 等于把账号控制权交给了模型，建议先填白名单。
 

@@ -9,6 +9,9 @@ config.json
 *.bak
 *.bak-*
 
+# 端到端测试的 state 备份（scripts/test-e2e-qq-commands.mjs 产生）
+/.e2e-backup/
+
 # Local development / planning / research docs (not part of public project)
 /PROJECT_GUIDE.md
 /ARCH_REVIEW.md
