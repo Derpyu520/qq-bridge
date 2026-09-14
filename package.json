@@ -5,18 +5,15 @@
   "description": "Bridge between SnowLuma (OneBot v11 / QQ) and DeepSeek Harness Web API: QQ messages become DSH agent prompts, agent replies go back to QQ.",
   "type": "module",
   "engines": {
-    "node": ">=22.13.0"
+    "bun": ">=1.1.0"
   },
   "scripts": {
-    "start": "node src/bridge.js",
-    "self-test": "node src/self-test.js",
-    "test-md": "node scripts/test-md-to-plain.mjs",
-    "test-wait": "node scripts/test-v2-wait.mjs",
-    "test-vision": "node scripts/test-vision-media.mjs",
-    "test-forward": "node scripts/test-forward.mjs",
-    "test-slang": "node scripts/test-slang-learn.mjs",
-    "test-stickers": "node scripts/test-stickers.mjs",
-    "postinstall": "node scripts/patch-snowluma-sdk.mjs"
+    "start": "bun src/bridge.ts",
+    "self-test": "bun src/self-test.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "postinstall": "bun scripts/patch-snowluma-sdk.ts"
   },
   "dependencies": {
     "@deepseek-ai/dsh-host-apiproxy": "0.1.1-rc.2",
@@ -25,5 +22,11 @@
     "@snowluma/mcp": "^1.14.10",
     "@snowluma/sdk": "^1.14.0",
     "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.11"
   }
 }
