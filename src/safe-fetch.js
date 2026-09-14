@@ -104,7 +104,7 @@ export function isPrivateIp(ip) {
   return false;
 }
 
-export async function resolveSafeHost(hostname) {
+export async function resolveSafeHosts(hostname) {
   const h = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
   if (!h) throw new Error('主机名为空');
   if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local')) {
@@ -112,7 +112,7 @@ export async function resolveSafeHost(hostname) {
   }
   if (net.isIP(h)) {
     if (isPrivateIp(h)) throw new Error('禁止访问内网/本机地址');
-    return h;
+    return [h];
   }
   let addresses;
   try {
@@ -126,7 +126,19 @@ export async function resolveSafeHost(hostname) {
       throw new Error('域名解析到内网/本机地址，已阻止');
     }
   }
-  return addresses[0].address;
+  // 去重后 **IPv4 优先**：dns.lookup({verbatim:true}) 常常把 IPv6 排在前面，而多数家用
+  // 网络没有可用 IPv6 路由 —— 先试 IPv6 会白等到超时（QQ 图片 CDN 实测：25 个地址里
+  // 前几个都是 2409: 开头的 IPv6，导致每张图都等满超时）。IPv6 仍保留在列表末尾兜底。
+  const unique = [...new Set(addresses.map((a) => a.address))];
+  const v4 = unique.filter((a) => net.isIP(a) === 4);
+  const v6 = unique.filter((a) => net.isIP(a) === 6);
+  return [...v4, ...v6];
+}
+
+/** 兼容旧调用：只要第一个地址。 */
+export async function resolveSafeHost(hostname) {
+  const [first] = await resolveSafeHosts(hostname);
+  return first;
 }
 
 export async function validateFetchUrl(raw) {
@@ -138,8 +150,8 @@ export async function validateFetchUrl(raw) {
   }
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('仅允许 http/https');
   if (url.username || url.password) throw new Error('URL 不能包含凭据');
-  const ip = await resolveSafeHost(url.hostname);
-  return { url, ip };
+  const ips = await resolveSafeHosts(url.hostname);
+  return { url, ips, ip: ips[0] };
 }
 
 function sliceByCodePoints(s, max) {
@@ -193,7 +205,7 @@ function requestOnce(url, ip, maxChars = 50000) {
       },
       servername: url.protocol === 'https:' ? url.hostname : undefined,
       rejectUnauthorized: url.protocol === 'https:',
-      timeout: 20000,
+      timeout: PER_ATTEMPT_TIMEOUT_MS,
     }, (res) => {
       const statusCode = res.statusCode || 0;
       if ([301, 302, 303, 307, 308].includes(statusCode)) {
@@ -211,15 +223,43 @@ function requestOnce(url, ip, maxChars = 50000) {
   });
 }
 
+/** 单次尝试的超时（毫秒）。因为会逐个 IP 重试，每次不必等太久。 */
+const PER_ATTEMPT_TIMEOUT_MS = 6000;
+/** 最多尝试几个解析地址，避免十几个 IP 依次超时把整条链路拖死。 */
+const MAX_IP_ATTEMPTS = 6;
+
+/** 只有传输层错误才换 IP 重试；HTTP 状态码异常交给调用方判断。 */
+function isRetryableTransportError(error) {
+  const code = String(error?.code ?? '');
+  if (['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH', 'EAI_AGAIN', 'EPIPE', 'ECONNABORTED', 'ERR_SOCKET_CONNECTION_TIMEOUT'].includes(code)) return true;
+  return /请求超时|timed? ?out|socket hang up/i.test(String(error?.message ?? ''));
+}
+
+/** 依次用解析出的多个 IP 发同一请求：某个 IP 连不上/超时就换下一个。 */
+async function requestWithIpFallback(url, ips, attempt) {
+  const candidates = Array.isArray(ips) && ips.length ? ips.slice(0, MAX_IP_ATTEMPTS) : [];
+  if (!candidates.length) throw new Error(`没有可用的解析地址：${url.hostname}`);
+  let lastError;
+  for (const ip of candidates) {
+    try {
+      return await attempt(url, ip);
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableTransportError(error)) throw error;
+    }
+  }
+  throw lastError ?? new Error(`请求失败：${url.hostname}`);
+}
+
 export async function safeFetch(urlString, maxChars = 50000) {
   const MAX_REDIRECTS = 5;
-  let { url, ip } = await validateFetchUrl(urlString);
+  let { url, ips } = await validateFetchUrl(urlString);
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
-    const result = await requestOnce(url, ip, maxChars);
+    const result = await requestWithIpFallback(url, ips, (u, ip) => requestOnce(u, ip, maxChars));
     if ([301, 302, 303, 307, 308].includes(result.statusCode)) {
       if (!result.redirect) throw new Error(`重定向缺少 Location: ${result.statusCode}`);
       const next = new URL(result.redirect, url).toString();
-      ({ url, ip } = await validateFetchUrl(next));
+      ({ url, ips } = await validateFetchUrl(next));
       continue;
     }
     const body = result.body || '';
@@ -246,13 +286,13 @@ export function looksLikeImageBuffer(buf) {
 /** 抓取图片字节并返回 Buffer（带 SSRF 防护，且校验确实为图片）。 */
 export async function safeFetchBuffer(urlString, maxBytes = 4 * 1024 * 1024) {
   const MAX_REDIRECTS = 5;
-  let { url, ip } = await validateFetchUrl(urlString);
+  let { url, ips } = await validateFetchUrl(urlString);
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
-    const result = await requestOnceBuffer(url, ip, maxBytes);
+    const result = await requestWithIpFallback(url, ips, (u, ip) => requestOnceBuffer(u, ip, maxBytes));
     if ([301, 302, 303, 307, 308].includes(result.statusCode)) {
       if (!result.redirect) throw new Error(`重定向缺少 Location: ${result.statusCode}`);
       const next = new URL(result.redirect, url).toString();
-      ({ url, ip } = await validateFetchUrl(next));
+      ({ url, ips } = await validateFetchUrl(next));
       continue;
     }
     if (result.statusCode < 200 || result.statusCode >= 300) {
@@ -283,7 +323,7 @@ function requestOnceBuffer(url, ip, maxBytes) {
       },
       servername: url.protocol === 'https:' ? url.hostname : undefined,
       rejectUnauthorized: url.protocol === 'https:',
-      timeout: 20000,
+      timeout: PER_ATTEMPT_TIMEOUT_MS,
     }, (res) => {
       const statusCode = res.statusCode || 0;
       if ([301, 302, 303, 307, 308].includes(statusCode)) {

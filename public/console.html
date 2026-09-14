@@ -232,6 +232,7 @@
       <div class="sub">DeepSeek Harness ↔ QQ 模式后台 · 修改即时生效（桥接 5 秒内感知）</div>
     </div>
     <div class="status-badge" id="statusText">加载中…</div>
+    <button id="botPauseToggle" style="margin-left:14px;font-weight:bold;padding:8px 18px">⏸ 暂停机器人</button>
   </header>
 
   <main class="grid">
@@ -409,12 +410,13 @@
         <span class="meta" style="flex:2">关闭后 qq_get_prompt 不再返回推荐值，AI 完全自主判断。</span>
       </div>
       <div class="row" style="margin-top:10px">
-        <button id="v2PauseBtn" class="danger">暂停二代 AI</button>
-        <button id="v2ResumeBtn">恢复二代 AI</button>
+        <button id="v2PauseBtn" class="danger">⏸ 暂停机器人（全局）</button>
+        <button id="v2ResumeBtn">▶️ 恢复机器人（全局）</button>
         <button id="v2ResetBtn" class="danger">重置二代状态</button>
         <button id="v2ConfigSaveTop" style="font-weight:bold;padding:6px 14px">保存当前参数</button>
         <span class="meta" id="v2ActivityStatus">读取中…</span>
       </div>
+      <div class="meta">↑ 与页头那个按钮是<b>同一个全局开关</b>（不只作用于二代）：暂停后<b>所有会话</b>都不再投递、不发送，消息仅记录；管理员私聊仍可用 <code>/继续</code> 恢复。状态由两处共用，改哪边都一样。</div>
 
       <div class="divider"></div>
       <div class="meta" style="margin-bottom:6px">工具开关（关闭后桥接会拒绝对应工具调用）</div>
@@ -458,6 +460,7 @@
         <select id="v2WakeDefaultMode" style="width:120px"><option value="diving">潜水</option><option value="active">活跃</option></select>
         <label style="flex:1">默认下一次唤醒：无限期（永久）</label><input type="checkbox" id="v2RecDefaultInfinite" style="width:auto">
       </div>
+      <div class="meta">⚠️ <b>活跃 / 任意消息</b>只在「16 响应档位」= <b>4 档（全响应）</b>时生效；档位低于 4 档时会被档位压住，AI 设了也不生效。</div>
       <div class="row">
         <label style="flex:1">推荐潜水时长（分）</label>
         <input type="number" id="v2RecSleepMin" min="1" style="width:80px"> ~
@@ -466,6 +469,7 @@
       <div class="row">
         <label style="flex:1">推荐普通消息概率</label><input type="number" id="v2RecProb" step="0.05" min="0" max="1" style="width:80px">
       </div>
+      <div class="meta">⚠️ 概率的<b>实际生效值由「16 响应档位」决定</b>（3 档＝滑条派生概率）；这里的推荐值只在档位低于 3 档、或给 AI 当参考时才用得到。要让 AI 按这个概率跑，请把档位滑条调到对应位置。</div>
       <div class="row">
         <label style="flex:1">推荐关键词（逗号分隔）</label><input type="text" id="v2RecKeywords" placeholder="小鲸鱼, DeepSeek" style="flex:1">
       </div>
@@ -769,6 +773,9 @@
         <div class="row">
           <label style="flex:1">自动联网研究</label><input type="checkbox" id="slangAutoResearch" style="width:auto">
         </div>
+        <div class="row">
+          <label style="flex:1" title="研究模型给出 confirmed:true 就写入「已确认」、false 写入「已拒绝」，无需手工逐条确认">研究结果自动判定状态（确认/拒绝）</label><input type="checkbox" id="slangAutoReview" style="width:auto">
+        </div>
         <div class="row" style="margin-top:8px">
           <button id="slangConfigSave" class="small">保存黑话参数</button>
           <span class="meta" id="slangConfigMsg"></span>
@@ -923,6 +930,42 @@
       </div>
     </section>
 
+    <!-- ============ 16 响应档位（每群积极度） ============ -->
+    <section class="card span-all">
+      <h2><span class="sec-no">16</span>响应档位（每群积极度）</h2>
+      <div class="meta">
+        语义复刻 QQ Agent 的档位滑条：滑条位置 0~100 决定它多容易被唤醒。<b>1 档</b> 仅艾特 ·
+        <b>2 档</b> +关键词 · <b>3 档</b> 随机响应（概率随滑条线性增长）· <b>4 档</b> 全响应；
+        优先级：被艾特 &gt; 关键词 &gt; 随机 &gt; 全响应。都没命中就只入库、不建会话、不花 token。
+      </div>
+      <div class="meta" style="margin-top:4px">档位同时是<b>管理员硬上限</b>：AI 自己用 qq_set_wake_config 设的唤醒条件不会越过当前档位。</div>
+      <div class="meta" style="margin-top:4px">
+        与其他开关的关系（优先级从高到低）：<b>暂停</b>（页头按钮 / 07 那张卡里的暂停，同一个开关）→ <b>静默</b>（11 静默开关，群友消息不投递）→ <b>响应档位</b>（本卡）。
+        07 里的「唤醒推荐值」只是给 AI 的建议，本卡是硬上限；07 的暂停按钮与页头按钮改的是同一个状态。
+      </div>
+      <div class="row" style="margin-top:12px;align-items:center">
+        <label style="flex:0 0 110px;margin:0">全局档位</label>
+        <input type="range" id="tierGlobalSlider" min="0" max="100" step="1" value="24" style="flex:1">
+        <span class="meta" id="tierGlobalLabel" style="flex:0 0 190px;text-align:right">—</span>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <label style="flex:1;margin:0">统一档位（所有会话共用上面的滑条；关闭后按群单独设置生效）</label>
+        <input type="checkbox" id="tierUnified" style="width:auto">
+      </div>
+      <div class="row" style="margin-top:6px">
+        <label style="flex:0 0 110px;margin:0">2 档关键词</label>
+        <input type="text" id="tierKeywords" placeholder="逗号/换行分隔；留空则沿用唤醒推荐关键词" style="flex:1">
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button id="tierSave">保存档位配置</button>
+        <button id="tierRefresh" class="small">重新加载</button>
+        <span class="meta" id="tierMsg"></span>
+      </div>
+      <div class="divider"></div>
+      <div class="meta" style="margin-bottom:6px">按会话单独调整（拖动即保存，会自动关闭"统一档位"；★ 表示已单独设置）</div>
+      <div id="tierGroupList" class="meta">加载中…</div>
+    </section>
+
   </main>
 
 <script>
@@ -936,6 +979,16 @@
   }
 })();
 
+let consoleTokenPrompt = null;
+// 并发请求同时 401 时只弹一次输入框（否则首屏几个轮询会弹出一串）
+function askConsoleToken() {
+  if (!consoleTokenPrompt) {
+    consoleTokenPrompt = Promise.resolve()
+      .then(() => prompt('请输入控制台访问令牌（会记住；也可用带 ?token= 的地址打开一次，之后免输）：'))
+      .then((t) => { consoleTokenPrompt = null; return t ? String(t).trim() : ''; });
+  }
+  return consoleTokenPrompt;
+}
 async function api(path, method, body, _retried = 0) {
   const headers = body ? {'content-type':'application/json'} : {};
   const token = localStorage.getItem('consoleToken');
@@ -946,9 +999,9 @@ async function api(path, method, body, _retried = 0) {
       localStorage.removeItem('consoleToken');
       throw new Error('未授权');
     }
-    const t = prompt('请输入控制台访问令牌：');
+    const t = await askConsoleToken();
     if (t) {
-      localStorage.setItem('consoleToken', t.trim());
+      localStorage.setItem('consoleToken', t);
       return api(path, method, body, _retried + 1);
     }
     localStorage.removeItem('consoleToken');
@@ -2116,6 +2169,7 @@ function loadSlangConfig() {
     document.getElementById('slangLearnerPreset').value = c.learnerPreset || 'qq-chat';
     document.getElementById('slangWorkspaceTitle').value = c.workspaceTitle || 'QQ 黑话学习';
     document.getElementById('slangAutoResearch').checked = c.autoResearch !== false;
+    document.getElementById('slangAutoReview').checked = c.autoReview !== false;
   }).catch(() => {});
 }
 document.getElementById('slangConfigSave').addEventListener('click', async () => {
@@ -2127,7 +2181,8 @@ document.getElementById('slangConfigSave').addEventListener('click', async () =>
     injectMax: Number(document.getElementById('slangInjectMax').value) || 8,
     learnerPreset: document.getElementById('slangLearnerPreset').value.trim(),
     workspaceTitle: document.getElementById('slangWorkspaceTitle').value.trim(),
-    autoResearch: document.getElementById('slangAutoResearch').checked
+    autoResearch: document.getElementById('slangAutoResearch').checked,
+    autoReview: document.getElementById('slangAutoReview').checked
   });
   const msg = document.getElementById('slangConfigMsg');
   msg.textContent = r.ok ? '✅ 已保存' : ('❌ ' + (r.error || '失败'));
@@ -2173,7 +2228,100 @@ document.getElementById('consoleTokenSave').addEventListener('click', () => chan
 document.getElementById('consoleTokenRandom').addEventListener('click', () => changeConsoleToken(true));
 
 refresh(); refreshRoles(); refreshWhitelist(); refreshSessions(); refreshPending(); refreshPresets(); loadSocialForm(); loadV2Config(); refreshV2Activity(); loadV2ToolLog(); loadV2SessionOptions(); refreshSocialStatus(); refreshSlang(); loadSlangConfig(); loadSecurity();
-setInterval(() => { refresh(); refreshSessions(); refreshPending(); refreshSocialStatus(); refreshSlang(); }, 3000);
+// ── 响应档位（复刻 QQ Agent 的 tier 滑条）─────────────────────────────
+function tierLabel(slider) {
+  const names = { 1: '仅艾特', 2: '关键词', 3: '随机响应', 4: '全响应' };
+  const p = Math.min(100, Math.max(0, Math.round(Number(slider) || 0)));
+  let tier; let pct = 0;
+  if (p <= 10) tier = 1;
+  else if (p <= 20) tier = 2;
+  else if (p <= 90) { tier = 3; pct = Math.round(((p - 20) / 70 * 100) * 10) / 10; }
+  else tier = 4;
+  return tier === 3 ? `${tier} 档 · ${names[tier]} ${pct}%` : `${tier} 档 · ${names[tier]}`;
+}
+function tierSourceText(source) {
+  if (source === 'group') return '（本群单独）';
+  if (source === 'private') return '（私聊单独）';
+  if (source === 'private-default') return '（私聊默认：始终唤醒）';
+  return '（跟随全局）';
+}
+async function loadTierConfig() {
+  try {
+    const r = await api('/api/socialV2/tier');
+    if (!r.ok) return;
+    const t = r.config || {};
+    document.getElementById('tierGlobalSlider').value = t.slider ?? 24;
+    document.getElementById('tierGlobalLabel').textContent = tierLabel(t.slider ?? 24);
+    document.getElementById('tierUnified').checked = t.unified !== false;
+    document.getElementById('tierKeywords').value = (t.keywords || []).join('，');
+    const list = document.getElementById('tierGroupList');
+    const groups = r.groups || [];
+    if (!groups.length) { list.textContent = '（暂无已知会话：等群里/私聊有消息后出现）'; return; }
+    list.innerHTML = groups.map((g) => `
+      <div class="row" style="margin-top:6px;align-items:center">
+        <span style="flex:0 0 190px">${esc(g.key)}${g.hasOverride ? ' ★' : ''}</span>
+        <input type="range" class="tier-group-slider" data-key="${esc(g.key)}" min="0" max="100" step="1" value="${Number(g.slider) || 0}" style="flex:1">
+        <span class="meta" style="flex:0 0 210px;text-align:right" data-label="${esc(g.key)}">${esc(tierLabel(g.slider))}${tierSourceText(g.source)}</span>
+        <button class="small tier-group-clear" data-key="${esc(g.key)}">跟随全局</button>
+      </div>`).join('');
+  } catch {}
+}
+document.getElementById('tierGlobalSlider').addEventListener('input', (ev) => {
+  document.getElementById('tierGlobalLabel').textContent = tierLabel(ev.target.value);
+});
+document.getElementById('tierRefresh').addEventListener('click', loadTierConfig);
+document.getElementById('tierSave').addEventListener('click', async () => {
+  const msg = document.getElementById('tierMsg');
+  const r = await api('/api/socialV2/tier', 'POST', {
+    slider: Number(document.getElementById('tierGlobalSlider').value),
+    unified: document.getElementById('tierUnified').checked,
+    keywords: document.getElementById('tierKeywords').value
+  });
+  msg.textContent = r.ok ? `✅ 已保存：全局 ${r.derived?.label || ''}` : ('❌ ' + (r.error || '失败'));
+  msg.className = r.ok ? 'meta ok' : 'meta err';
+  loadTierConfig();
+});
+document.getElementById('tierGroupList').addEventListener('change', async (ev) => {
+  const el = ev.target;
+  if (!el.classList.contains('tier-group-slider')) return;
+  const key = el.dataset.key;
+  const r = await api('/api/socialV2/tier', 'POST', { key, slider: Number(el.value) });
+  const label = document.querySelector(`[data-label="${key}"]`);
+  if (label) label.textContent = `${r.derived?.label || tierLabel(el.value)}（本群单独）`;
+  const msg = document.getElementById('tierMsg');
+  msg.textContent = r.ok ? `✅ ${key} → ${r.derived?.label || ''}` : ('❌ ' + (r.error || '失败'));
+  msg.className = r.ok ? 'meta ok' : 'meta err';
+  if (r.ok) { document.getElementById('tierUnified').checked = false; loadTierConfig(); }
+});
+document.getElementById('tierGroupList').addEventListener('click', async (ev) => {
+  const btn = ev.target.closest('.tier-group-clear');
+  if (!btn) return;
+  const r = await api('/api/socialV2/tier', 'POST', { key: btn.dataset.key, clear: true });
+  if (r.ok) loadTierConfig();
+});
+
+// ── 一键暂停 / 恢复机器人（页头）───────────────────────────────────────
+async function refreshBotPause() {
+  try {
+    const r = await api('/api/socialV2/activity');
+    const btn = document.getElementById('botPauseToggle');
+    if (!btn) return;
+    btn.textContent = r.paused ? '▶️ 恢复机器人' : '⏸ 暂停机器人';
+    btn.className = r.paused ? '' : 'danger';
+    btn.title = r.paused ? '当前：已暂停（所有会话不回复，消息仅记录）' : '当前：运行中';
+  } catch {}
+}
+document.getElementById('botPauseToggle').addEventListener('click', async () => {
+  const cur = await api('/api/socialV2/activity');
+  const r = await api('/api/socialV2/activity', 'POST', { paused: !cur.paused });
+  if (!r.ok) alert(r.error || '操作失败');
+  refreshBotPause();
+  refreshV2Activity();
+});
+loadTierConfig();
+refreshBotPause();
+
+setInterval(() => { refresh(); refreshSessions(); refreshPending(); refreshSocialStatus(); refreshSlang(); refreshBotPause(); }, 3000);
 </script>
 </body>
 </html>
