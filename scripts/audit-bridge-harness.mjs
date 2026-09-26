@@ -53,10 +53,13 @@ export async function bridgeHarness({ config = {}, savedState, globals = {} } = 
   source = source.replace(/^import\s[\s\S]*?;\r?\n/gm, '');
   source = source.replaceAll('import.meta.url', JSON.stringify(pathToFileURL(path.join(temp, 'src/bridge.js')).href));
   source = source.slice(0, source.indexOf("process.on('SIGINT'"));
+  // Drive one finite fake mux stream in tests; production keeps reconnecting.
+  source = source.replace('      await sleep(3000);', '      return;');
   source = source.replace('  bot.onPrivateMessage(async (event) => {', `
   return {
     ensureSession, ensureSlangLearnerSession, resolvePresetName, deliverPrompt, drainPromptQueue,
     sendToQQ, sendStickerV2, handleIncoming, startConsoleServer, cfg, state, api, promptQueues,
+    getSocialV2State, pumpMux, isConversationBusyV2, pendingWakeKeys, armPendingWakeLease, sendWakePromptV2,
     setMode(value) { currentMode = value; },
     setReady(value) { dshReady = value; },
     setPresets(value) { dshPresetIds = value; dshDefaultPreset = 'standard'; },

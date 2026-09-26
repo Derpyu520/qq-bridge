@@ -7930,8 +7930,16 @@ async function main() {
                 }
               }
             }
-            const collector = collectors.get(frame.sessionId) ?? createTurnCollector();
-            collectors.set(frame.sessionId, collector);
+            let collector = collectors.get(frame.sessionId);
+            if (!collector) {
+              const isTurnActivity = frame.event.data?.turn != null && ['turn/start', 'step/start', 'assistant/chunk', 'assistant/message', 'tool/call', 'tool/result'].includes(frame.event.type);
+              const endsPendingWake = frame.event.type === 'turn/end' && (pendingWakeKeys.has(key) || v2TurnStartAt.has(frame.sessionId));
+              // A title/model/inbox update is not a running turn. An empty
+              // collector here would otherwise keep this group busy forever.
+              if (!isTurnActivity && !endsPendingWake) continue;
+              collector = createTurnCollector();
+              collectors.set(frame.sessionId, collector);
+            }
             const ended = collector.push(frame.event);
             if (ended) {
               // reserved2 无行动兜底：普通唤醒回合若既没发消息、也没 mark_read / set_wake_config，
