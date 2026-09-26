@@ -579,6 +579,11 @@ export function createTurnCollector() {
   return {
     /** 处理一条 session/event，返回该事件是否终结了一个 turn（此时可取最终文本）。 */
     push(event) {
+      // session/follow may attach in the middle of a live turn (snapshots are not
+      // replayed). Track real turn activity even when its turn/start was missed.
+      if (event.data?.turn != null && ['step/start', 'assistant/chunk', 'assistant/message', 'tool/call', 'tool/result'].includes(event.type) && !turns.has(event.data.turn)) {
+        turns.set(event.data.turn, { text: '' });
+      }
       if (event.type === 'turn/start') {
         turns.set(event.data.turn, { text: '' });
         return null;
@@ -599,8 +604,8 @@ export function createTurnCollector() {
       if (event.type === 'turn/end') {
         const t = turns.get(event.data.turn);
         turns.delete(event.data.turn);
-        if (!t) return null;
-        return { turn: event.data.turn, reason: event.data.reason, text: t.text };
+        // An orphan turn/end still closes a pending wake after reconnection.
+        return { turn: event.data.turn, reason: event.data.reason, text: t?.text ?? '' };
       }
       return null;
     },
