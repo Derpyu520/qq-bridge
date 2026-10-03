@@ -10943,7 +10943,7 @@ async function main() {
   async function syncTokenToFile() {
     try {
       const r = persistToken(path.join(ROOT, 'config.json'), cfg.snowluma.accessToken ?? '');
-      if (r.updated) log(`🔄 已把当前 token 写回 config.json（${String(r.from).slice(0, 4)}… → ${String(r.to).slice(0, 4)}…）`);
+      if (r.updated) log('🔄 已把当前 token 写回 config.json');
     } catch {}
   }
 
