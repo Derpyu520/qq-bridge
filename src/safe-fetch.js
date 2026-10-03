@@ -184,7 +184,10 @@ function requestOnce(url, ip, limit, binary = false) {
         method: 'GET',
         headers: {
           host: url.host,
-          'user-agent': 'Mozilla/5.0',
+          // 完整 UA 是必需的：Bing 对 'Mozilla/5.0' 这类残缺 UA 会限流降级，
+          // 返回 HTTP 200 但不含 <li class="b_algo"> 的精简页，导致 web_search
+          // 静默返回空结果（详见 ISSUE-web-search-silent-failure.md）。
+          'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
           accept: binary ? 'image/*,*/*;q=0.8' : 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
           'accept-language': 'zh-CN,zh;q=0.9',
         },

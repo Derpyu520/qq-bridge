@@ -59,6 +59,14 @@ async function bingSearch(query) {
     if (urlStr && title) results.push({ title, url: urlStr, snippet });
     if (results.length >= 8) break;
   }
+  // 解析不出结果时必须显式报错：静默返回空数组会让调用方误以为「确实没搜到」，
+  // 进而依赖记忆编造或放弃检索，无法与真正的空结果区分。
+  if (!results.length) {
+    throw new Error(
+      `搜索服务返回了不含结果列表的页面（HTTP ${res.statusCode}，${html.length} 字符）。`
+      + '可能是 UA 被降级或页面结构已变更；请检查 user-agent 是否完整。'
+    );
+  }
   return { query, results };
 }
 
