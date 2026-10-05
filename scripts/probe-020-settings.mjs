@@ -4,6 +4,11 @@
 // 用途：控制台「改模式不生效 / 被回滚」时的第一手诊断 —— 它能区分「命名空间不可见」
 // 「schema 校验拒了」「写穿失败」三种情况。鉴权走 probe-auth.mjs（离线铸造 Cookie）。
 //
+// 读输出时注意 value 和 user 两层：0.2.0-rc.2 上 settings/update 写完后，
+// 当前进程里 describe 的 value 不更新（重启 DSH 才更新），新值只在 user 层。
+// 桥接按 user 优先读（见 src/mode-input.js）。本探针写回原值，测不出这个问题；
+// 要复现得写一个不同的值再看两层。
+//
 // 幂等性：只把**读到的值原样写回**，不会改动用户配置。
 import { PROBE_BASE as BASE, probeCookie, probeRpc } from './probe-auth.mjs';
 
@@ -21,22 +26,27 @@ if (!qq) console.log('❌ 未出现在 describe 里');
 else {
   console.log('ns       =', qq.ns);
   console.log('keys     =', Object.keys(qq).join(','));
-  console.log('value    =', JSON.stringify(qq.value));
+  console.log('value    =', JSON.stringify(qq.value), '（写入后本进程内不更新，重启 DSH 才更新）');
+  console.log('user     =', JSON.stringify(qq.user), '（settings/update 写入的层，桥接按它优先读）');
   console.log('revision =', qq.revision);
 }
 
-// 幂等写回：把当前 mode 原样写回一次，验证写入路径通不通。
+// 幂等写回：把当前生效口径的值原样写回一次，验证写入路径通不通。
+// 取值 user 优先：value 不更新时，若读 value 写回，会把刚写入的 user 层覆盖回旧值。
 // 注意 0.2.0 的 settings/update 是**多参数** RPC：args 是 { ns, patch, expectedRevision }
 // 平铺，不是 { request: {...} }（探测时传 request 会被网关拒为
 // `gateway/arguments-invalid: missing "ns", "patch"; unexpected "request"`）。
 if (qq) {
-  const current = qq.value?.mode;
+  const current = qq.user?.mode ?? qq.value?.mode;
   const up = await rpc('settings/update', { ns: 'qq-mode', patch: { mode: current }, expectedRevision: qq.revision });
   console.log('\n=== settings/update（写回原值） ===');
   console.log(up?.ok === true ? `✅ 写入成功 accepted=${JSON.stringify(up.value)}` : `❌ ${up?.error?.code}: ${up?.error?.message}`);
   const again = await rpc('settings/describe', {});
   const qq2 = (again?.value?.namespaces ?? []).find((n) => n.ns === qq.ns);
-  console.log('写回后 value =', JSON.stringify(qq2?.value), 'revision =', qq2?.revision);
+  console.log('写回后 value =', JSON.stringify(qq2?.value), 'user =', JSON.stringify(qq2?.user), 'revision =', qq2?.revision);
+  if (JSON.stringify(qq2?.user) !== JSON.stringify(qq2?.value)) {
+    console.log('ℹ️ user 与 value 不一致：已知的 DSH 热更新行为（写入只在 user 层即时可见），桥接读取取 user 优先。');
+  }
 }
 
 // 其他桥接关心的命名空间

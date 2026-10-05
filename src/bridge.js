@@ -53,6 +53,8 @@ import {
   applyStickerNote,
   markStickerUsed
 } from './sticker-lib.js';
+// 模式归一 + DSH settings 读取口径（见 src/mode-input.js 开头）。
+import { MODE_INPUT_ALIASES, VALID_MODES, normalizeModeInput, modeFromDshNamespace, settingFromDshNamespace } from './mode-input.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -69,36 +71,7 @@ const TOKEN_USAGE_FILE = path.join(STATE_DIR, 'token-usage.jsonl');
 const ACTIVITY_LOG = path.join(STATE_DIR, 'qq-activity.log');
 const BRIDGE_LOG = path.join(STATE_DIR, 'bridge.log');
 
-/**
- * 模式拼写的**唯一**归一入口（输入边界）。
- *
- * `simulation` 是规范名（QSH_PLAN.md §2.1：对用户只暴露 `closed-agent` / `simulation`），
- * `chat` / `reserved` / `reserved2` 是历史拼写 —— 必须继续被**接受**（线上桥接持久化的全局值
- * 就是 `reserved2`），但进程内部一律用历史拼写存储与比较：`currentMode === 'reserved2'` 这类
- * 判断遍布发送闸门、定时器与 preset 解析，把规范名直接塞进 `currentMode` 会让它们全部变成假。
- *
- * 旧写法是 `VALID_MODES = ['chat','closed-agent','reserved','reserved2']`，控制台那处还抄了
- * 一份同样的字面量数组。后果是：在 DSH 设置或 `state/mode.json` 里写 `simulation` 会被**静默
- * 忽略**，`currentMode` 保持上一次的值（进程刚起来时是 `chat`，即一代仿真 —— preset 与工具面
- * 都和二代不同，`v2ToolEnabled` 之类的闸门也不生效）。用户以为切到了仿真，实际跑的是另一套，
- * 而且没有任何日志。规范名与历史名必须在这里收敛成同一个内部值。
- */
-const MODE_INPUT_ALIASES = Object.freeze({
-  chat: 'chat',
-  reserved: 'reserved',
-  reserved2: 'reserved2',
-  simulation: 'reserved2',
-  'closed-agent': 'closed-agent'
-});
-/** 内部合法模式集合（由别名表派生，避免"两份名单各自漂移"）。 */
-const VALID_MODES = Object.freeze([...new Set(Object.values(MODE_INPUT_ALIASES))]);
-
-/** 输入侧归一：返回内部拼写；无法识别返回 null，由调用方 fail-closed。 */
-function normalizeModeInput(value) {
-  if (typeof value !== 'string') return null;
-  const key = value.trim();
-  return Object.prototype.hasOwnProperty.call(MODE_INPUT_ALIASES, key) ? MODE_INPUT_ALIASES[key] : null;
-}
+// 模式归一与 DSH 读取口径移到了 ./mode-input.js（bridge.js 无法被测试引入）。
 
 // 读取 JSON 文件并容错：Windows 下常见 UTF-8 BOM（\uFEFF）会令 JSON.parse 失败。
 // required=true 时文件缺失或解析失败直接抛错（用于启动必需配置，fail-fast）。
@@ -2450,14 +2423,16 @@ async function main() {
         dshDefaultPreset = presetNs.value.default;
       }
       const ns = s.namespaces.find((n) => n.ns === 'qq-mode');
-      // 规范化后再比较：`simulation` 也走这里（见 MODE_INPUT_ALIASES）。
-      const fromDsh = ns?.value ? normalizeModeInput(ns.value.mode) : null;
+      // 这里读 user 层优先，不能直读 ns.value：settings/update 写完，当前进程读到的
+      // value 还是旧值（原因见 src/mode-input.js 开头）。
+      const fromDsh = modeFromDshNamespace(ns);
       if (fromDsh) {
         currentMode = fromDsh;
-        // DSH 设置页也可配置管理员 QQ；未设置该字段时不覆盖 config.json。
-        if (ns.value.ownerQQ !== undefined) {
+        // DSH 设置页也可配置管理员 QQ；未设置该字段时不覆盖 config.json。ownerQQ 同理读 user 优先。
+        const ownerFromDsh = settingFromDshNamespace(ns, 'ownerQQ');
+        if (ownerFromDsh !== undefined) {
           try {
-            cfg.ownerQQ = normalizeOwnerQQ(ns.value.ownerQQ);
+            cfg.ownerQQ = normalizeOwnerQQ(ownerFromDsh);
           } catch (error) {
             log(`DSH settings ownerQQ 无效，已忽略: ${error?.message ?? error}`);
           }

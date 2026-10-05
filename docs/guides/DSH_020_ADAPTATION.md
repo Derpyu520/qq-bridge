@@ -206,6 +206,35 @@ DSH 0.2.0 删除了 `ctx.settings.register(ns, schema, opts)`——`SettingsForm
 schema 接受全部 mode 拼写、**不再出现 `settings.register`**（只看可执行代码，剥注释）、
 以及缺 settings 服务时不抛。活 DSH 侧由 `verify:adaptation` 的 qq-mode 段覆盖。
 
+### 4.5 补记（2026-10-05）：写入成功但当前进程读不回 —— `value` 不热更新
+
+**现象**：控制台切运行模式「点了切换、过一会儿自己变回去」。
+
+**实测**（临时 DSH_HOME + qq-mode-console，写一个与当前不同的值）：
+
+| 步骤 | 结果 |
+| --- | --- |
+| `settings/update` 写 `{mode:'chat'}`（当前值 reserved2） | 返回 ok；profile patch 落盘 `config: {mode: chat}`；`user` 层 = chat |
+| 同一进程内继续 `describe`（10 秒内多次） | `value` 仍是 reserved2 |
+| 重启 DSH 后再 `describe` | `value` 变为 chat |
+
+**原因**：0.2.0 的 `describe` 里 `value` 取自插件 entry 的 fiber config，而写入路径
+（`configEditor.edit`）更新的是运行时配置与 profile patch 文件——该 entry 的 fiber 不随写入重装，
+所以当前进程内 `value` 不变，重启后重新解析才生效。写入的即时值只出现在 `user` 层
+（= profile patch 里显式 config 的那一层，也是 `settings/update` 的写入目标）。
+
+**修法（桥接侧）**：
+
+- 读取改为 user 层优先、value 回退（`src/mode-input.js` 的 `modeFromDshNamespace` /
+  `settingFromDshNamespace`，mode 与 ownerQQ 都走它）。写哪读哪，写入立即生效；
+  value 回退保住旧行为（从未写过时 `user={}`），DSH 以后修了这个行为也继续正确。
+- 回归：`scripts/test-mode-input.mjs`（含 bridge.js 源码断言：不许改回直读 `ns.value`），已登记进 `test:audit`。
+- 探针 `probe-020-settings.mjs` 同步改：打印 `user`/`value` 两层；写回取值也改成 user 优先
+  （原版读 value 写回会把刚写入的 user 层覆盖回旧值）。
+
+**注意**：幂等写回（写回原值）测不出这个问题——`value` 根本没变，要写一个不同的值才能复现。
+`probe-020-settings.mjs` 与 `verify:adaptation` 之前的 qq-mode 验证都是幂等写回，所以 0.2.0 适配验收时没发现。
+
 ---
 
 ## 5. 适配缺口四：探针与夹具的鉴权/落盘路径（0.1.7 遗留，本轮清零）
