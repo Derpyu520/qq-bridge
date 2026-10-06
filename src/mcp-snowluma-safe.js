@@ -7,6 +7,7 @@
 //   allow.groups / allow.private，否则拒绝 —— agent 只能往被允许的地方发消息。
 // - 所有调用走 OneBot HTTP API（httpUrl + accessToken）。
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -147,6 +148,73 @@ async function agentApi(path, init = {}) {
   // 桥接的部分端点会用 200 + {ok:false,error} 表达业务失败（例如发送被审计拦截）。
   // 不检查 body.ok 会把「被拦截」当成「发送成功」上报给模型 —— 模型据此认为消息已发出，
   // 于是不再重试也不告诉用户，是典型的静默错误。
+  if (body && typeof body === 'object' && body.ok === false) {
+    throw new Error(body.error || '桥接 API 返回 ok:false（未说明原因）');
+  }
+  return body;
+}
+
+/**
+ * 长轮询专用传输：**不能走 `agentApi` 的 fetch()**。
+ *
+ * 为什么（2026-10-07 线上事故实测根因）：Node 的 `fetch` 是 undici，它自带一个
+ * **默认 300 秒的 `headersTimeout`** ——「响应头 300 秒内没到就判这次请求失败」。
+ * 而 `qq_wait_for_messages` 的预算是按桥接的 `socialV2.wait.maxMs` 算的（默认
+ * 600000，即 10 分钟），`timeoutMs=300000` 的沉睡前观察更是常规用法。两者一撞：
+ * **任何超过 5 分钟的等待都会在第 301 秒以 `fetch failed / Headers Timeout Error` 告终**。
+ *
+ * 危害不止「这次等待失败」：客户端放弃时桥接那边的 `req` **收不到 close**
+ * （作者早已在 ACTIVE_WAIT_LEASE_MS 的注释里记录过这个现象），于是桥接的 handler
+ * 会继续跑到自己的预算结束、`activeWaits` 一直占着该会话 —— AI 想重新等待就被
+ * 429「该会话已有一个等待中」，而 `qq_set_wake_config` / `qq_mark_read` 又要求先
+ * 完成沉睡前观察 ⇒ **AI 没有任何合法动作**，只能反复重试，每一轮都带着几十万 token
+ * 的上下文，这才是真正烧钱的地方。
+ *
+ * 所以这里改用 `node:http`：它**没有**默认的响应超时，超时完全由我们传入的
+ * `timeoutMs` 决定（调用方已按「桥接等待预算 + 静默窗口 + 余量」算好）。
+ */
+function postJsonLongPoll(url, payload, headers, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const data = JSON.stringify(payload);
+    const req = http.request({
+      protocol: u.protocol,
+      hostname: u.hostname,
+      port: u.port,
+      path: `${u.pathname}${u.search}`,
+      method: 'POST',
+      headers: { ...headers, 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) }
+    }, (res) => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => { text += chunk; });
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, text }));
+      res.on('error', reject);
+    });
+    const timer = setTimeout(() => {
+      req.destroy(new Error(`等待超时（已超过 ${Math.round(timeoutMs / 1000)} 秒的客户端预算）`));
+    }, timeoutMs);
+    timer.unref?.();
+    const clear = () => clearTimeout(timer);
+    req.on('close', clear);
+    req.on('error', (error) => { clear(); reject(error); });
+    req.end(data);
+  });
+}
+
+/** 与 {@link agentApi} 同语义（错误、`ok:false`、鉴权头），只是走没有 300s 默认超时的传输。 */
+async function agentApiLongPoll(path, payload, { headers = {}, timeoutMs } = {}) {
+  const consoleToken = readConsoleToken();
+  const res = await postJsonLongPoll(`${agentApiBase()}${path}`, payload, {
+    ...(consoleToken ? { 'x-console-token': consoleToken } : {}),
+    ...headers,
+    'x-agent-call': '1'
+  }, timeoutMs);
+  let body = null;
+  try { body = JSON.parse(res.text); } catch { body = null; }
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(body?.error || `桥接 API HTTP ${res.status}`);
+  }
   if (body && typeof body === 'object' && body.ok === false) {
     throw new Error(body.error || '桥接 API 返回 ok:false（未说明原因）');
   }
@@ -654,9 +722,10 @@ server.tool(
   },
   async ({ key, token, purpose, timeoutMs, minNewMessages, quietMs }) => {
     try {
-      const data = await agentApi('/api/socialV2/wait', {
-        method: 'POST',
-        body: JSON.stringify({ key, purpose, timeoutMs, minNewMessages, quietMs }),
+      // 长轮询必须走 agentApiLongPoll（node:http），**不能**用 agentApi 的 fetch：
+      // undici 默认 300 秒 headersTimeout 会把任何超过 5 分钟的等待在第 301 秒打死，
+      // 并连带把桥接的 activeWaits 锁住（详见 postJsonLongPoll 的注释）。
+      const data = await agentApiLongPoll('/api/socialV2/wait', { key, purpose, timeoutMs, minNewMessages, quietMs }, {
         headers: { 'x-agent-token': token },
         timeoutMs: Math.min(725000, (Number(timeoutMs) || 30000) + Math.max(Number(quietMs) || 0, 10000) + 20000)
       });
