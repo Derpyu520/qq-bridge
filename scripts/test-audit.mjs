@@ -21,6 +21,10 @@ const tests = [
   'test-token-usage.mjs', 'test-hardening.mjs',
   // 语音发送（纯函数 + 端点存在性；真发语音只在 --live 或 CLI 里做）
   'test-voice.mjs',
+  // 🔴 reserved2 会话活性：长轮询的传输层（fetch 会被 undici 默认 300s headersTimeout
+  // 打死，而等待预算默认 600s）、等待被占用时的拒绝语义、「会话繁忙」判定的上限。
+  // 这三处各对应一次真实事故，且都是「日志无害、会话已废」的形态。
+  'test-v2-liveness.mjs',
   // 音量：参数校验 + 真的调用 ffmpeg 调音量 + 自算 RMS 验证增益
   'test-voice-volume.mjs',
   // 边界：并发/异常输入/上传限额/越权（纯函数段 + 可选的 live 段）
