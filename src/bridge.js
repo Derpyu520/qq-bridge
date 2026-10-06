@@ -2264,6 +2264,24 @@ async function main() {
    * 这里给足余量；超过就认为上一次是异常退出留下的残留，允许新的等待接管。
    */
   const ACTIVE_WAIT_LEASE_MS = 15 * 60 * 1000;
+  /**
+   * 「回合在跑」这条 busy 信号的上限（租约）。
+   *
+   * 为什么必须有：`collectors` / `v2TurnStartAt` 只在 **live `turn/end`** 到达时才清除，
+   * 而 turn/end 可能永远不来。最常见的成因是回合内正挂着一个长轮询 MCP 工具调用
+   * （`qq_wait_for_messages`）时桥接或 DSH 重启 —— 那个调用悬空，DSH 侧这个回合再也
+   * 结束不了；更糟的是 `rebuildInFlightCollector` 每次重连都会按「有 turn/start 没有
+   * turn/end」把它重新装回来，于是**重启桥接也救不回来**。结果是该会话永久 busy：
+   * 之后每一条 @/关键词/提问都只进 `pendingWakeReasons`、永不投递，QQ 上表现为
+   * 「机器人在这个群/私聊里彻底不理人」，而日志里只有一行人畜无害的「会话繁忙」。
+   *
+   * 取值：正常回合约 1~3 分钟；单个工具调用最长 `toolCallTimeoutMs` ≈ 12 分钟，
+   * 所以 15 分钟足以覆盖任何**活着的**回合。
+   * 过期只是「不再当作 busy」，`collector` 本身保留 —— 真在跑的回合回复不会因此丢失，
+   * 只是允许新唤醒照常排队（DSH 的 `mode: 'queue'` 负责串行化）。
+   */
+  const TURN_BUSY_LEASE_MS = 15 * 60 * 1000;
+  const turnBusyLeaseWarnedAt = new Map(); // sessionId -> 上次因租约过期放弃 busy 的告警时间（防刷屏）
   const pendingWakeLeaseTimers = new Map(); // key -> timeout：防止 accepted 但无 turn/end 的唤醒把 key 永久标记为 busy
   const wakeConfigUpdatedKeys = new Set();
   const markReadCalledKeys = new Set();
@@ -2378,6 +2396,10 @@ async function main() {
     }
     if (!restored) return;
     collectors.set(sessionId, collector);
+    // 恢复出来的回合同样要带上「起始时间」，否则 TURN_BUSY_LEASE_MS 那道租约对它无从生效
+    // ——这个 collector 只能等一个可能永远不来的 live turn/end 才清除，会话会永久 busy。
+    // 时间戳取「恢复时刻」而不是历史时刻：宁可多给它一整个租约，也不要刚恢复就判过期。
+    v2TurnStartAt.set(sessionId, Date.now());
     log(`重连后恢复了进行中的回合（${sessionId}，turn ${[...open].join(',')}）`);
   }
 
@@ -5748,12 +5770,25 @@ async function main() {
           // 同一会话只允许一个长轮询等待，避免并发挂起耗尽 HTTP handler。
           // 租约过期则视为残留（handler 异常退出没清干净），允许接管而不是永久 429。
           if (activeWaits.has(key) && Date.now() - activeWaits.get(key) < ACTIVE_WAIT_LEASE_MS) {
-            sendJson({ ok: false, error: '该会话已有一个等待中的 qq_wait_for_messages，请等待它结束' }, 429);
+            // 带上还要等多久：2026-10-07 那次事故里 AI 收到这条 429 后只会立刻重试，
+            // 十几分钟里把几十万 token 的上下文空转烧掉。明确告诉它「别急着重试、等多久」，
+            // 模型才有机会安静下来（那段空转里它其实只需要静候 5 分钟观察窗口自然届满）。
+            const waitUntil = activeWaits.get(key) + ACTIVE_WAIT_LEASE_MS;
+            sendJson({
+              ok: false,
+              error: '该会话已有一个等待中的 qq_wait_for_messages，请等待它结束；不要立刻重试（重试只会再拿到同样的拒绝）。',
+              retryAfterMs: Math.max(0, waitUntil - Date.now()),
+              hint: '若你只是要完成沉睡前观察：静候即可，观察窗口会随时间自然届满，不需要再发等待。'
+            }, 429);
             return;
           }
           activeWaits.set(key, Date.now());
           const finishWait = () => activeWaits.delete(key);
           req.on('close', finishWait);
+          // 客户端放弃时（超时/被中断）也立刻释放：`req` 的 close 在「对端先走、
+          // 服务端还没写完」的场景下不一定触发（作者在 ACTIVE_WAIT_LEASE_MS 的注释里
+          // 记录过），`res` 的 close 更可靠。多挂一个不影响正常路径。
+          res.on('close', finishWait);
           const minQuietAfterNewMs = Number.isFinite(Number(waitCfg.minQuietAfterNewMs)) ? Math.max(0, Number(waitCfg.minQuietAfterNewMs)) : 10000;
           const suggestedQuietMs = Math.max(suggestQuietMsV2(st), minQuietAfterNewMs);
           const rawQuietMs = body.quietMs != null ? Number(body.quietMs) : suggestedQuietMs;
@@ -9530,7 +9565,8 @@ async function main() {
     const st = getSocialV2State(key);
     // 防重入：如果该会话已经有一个 DSH turn 在进行中（AI 正在思考/调用工具），
     // 或已有排队/在途 prompt，则不再投递新的候选唤醒，避免“思维链进行中又塞入一个 question 唤醒”。
-    if (isConversationBusyV2(key, st)) {
+    const busyReason = conversationBusyReasonV2(key, st);
+    if (busyReason) {
       if (!Array.isArray(st.pendingWakeReasons)) st.pendingWakeReasons = [];
       const seq = st.lastUnreadSeq || 0;
       if (!st.pendingWakeReasons.some((r) => r && r.reason === reason && r.seq === seq)) {
@@ -9538,7 +9574,7 @@ async function main() {
         // 有界队列：最多保留 20 条，防止消息洪峰下无限增长。
         if (st.pendingWakeReasons.length > 20) st.pendingWakeReasons.splice(0, st.pendingWakeReasons.length - 20);
       }
-      log(`[reserved2] 会话繁忙，暂存唤醒原因 ${key}（${reason}@seq${seq}）`);
+      log(`[reserved2] 会话繁忙（${busyReason}），暂存唤醒原因 ${key}（${reason}@seq${seq}）`);
       return;
     }
     // 唤醒频率硬限制：超限则跳过本次唤醒，避免成本失控
@@ -9643,14 +9679,40 @@ async function main() {
     log(`[reserved2] 已安排回复检查唤醒 ${key}，${Math.round(delay / 1000)}s 后检查`);
   }
 
-  function isConversationBusyV2(key, st) {
-    if (st && st.pendingWakeTimer) return true;
-    if (pendingWakeKeys.has(key)) return true;
+  /**
+   * 会话为什么繁忙（返回原因串；null = 不忙）。
+   *
+   * **返回原因串是为了可诊断**：这里原先只返回布尔值，于是日志里永远只有一行
+   * 「会话繁忙」，到底被哪条信号卡住完全看不出来 —— 排查这次私聊永久 busy 时只能靠
+   * 反复重启加猜。现在每条信号都有名字，日志直接打出来。
+   */
+  function conversationBusyReasonV2(key, st) {
+    if (st && st.pendingWakeTimer) return 'pendingWakeTimer';
+    if (pendingWakeKeys.has(key)) return 'pendingWakeKey';
     const q = promptQueues.get(key);
-    if (q && (q.running || q.queue.length > 0)) return true;
+    if (q && (q.running || q.queue.length > 0)) return q.running ? 'promptRunning' : 'promptQueued';
     const sid = state.sessions[key];
-    if (sid && (v2TurnStartAt.has(sid) || collectors.has(sid))) return true;
-    return false;
+    if (sid && (v2TurnStartAt.has(sid) || collectors.has(sid))) {
+      const since = v2TurnStartAt.get(sid) ?? 0;
+      // 「回合在跑」必须有上限（详见 TURN_BUSY_LEASE_MS）。
+      // 注意 since 为空的情形：`collectors.get(sid) ?? createTurnCollector()` 在 turn/end
+      // **之后**仍会因杂散事件把 collector 重建出来，而 v2TurnStartAt 已在 turn/end 删掉
+      // ⇒ 只剩一个没有时间戳的 collector，并且**永远不会有** turn/end 来清它。
+      // 这种残留没有「回合在跑」作依据，绝不能拿它把会话判成永久 busy。
+      if (since && Date.now() - since <= TURN_BUSY_LEASE_MS) return 'turn';
+      const lastWarn = turnBusyLeaseWarnedAt.get(sid) ?? 0;
+      if (Date.now() - lastWarn > 60000) {
+        turnBusyLeaseWarnedAt.set(sid, Date.now());
+        log(since
+          ? `[reserved2] ${key} 回合已 ${Math.round((Date.now() - since) / 60000)} 分钟没有 turn/end，按租约不再视为繁忙（该回合可能已死；新唤醒将照常排队）`
+          : `[reserved2] ${key} collectors 里只剩没有 turn/start 时间戳的残留（turn/end 之后被杂散事件重建），不再视为繁忙`);
+      }
+    }
+    return null;
+  }
+
+  function isConversationBusyV2(key, st) {
+    return conversationBusyReasonV2(key, st) !== null;
   }
 
   const WAKE_PRIORITY = {
@@ -9689,7 +9751,8 @@ async function main() {
       }
       return;
     }
-    if (isConversationBusyV2(key, st)) {
+    const busyReason = conversationBusyReasonV2(key, st);
+    if (busyReason) {
       if (!Array.isArray(st.pendingWakeReasons)) st.pendingWakeReasons = [];
       const seq = st.lastUnreadSeq || 0;
       if (!st.pendingWakeReasons.some((r) => r && r.reason === reason && r.seq === seq)) {
@@ -9697,7 +9760,7 @@ async function main() {
         // 有界队列：最多保留 20 条，防止消息洪峰下无限增长。
         if (st.pendingWakeReasons.length > 20) st.pendingWakeReasons.splice(0, st.pendingWakeReasons.length - 20);
       }
-      log(`[reserved2] 会话繁忙，暂存唤醒原因 ${key}（${reason}@seq${seq}）`);
+      log(`[reserved2] 会话繁忙（${busyReason}），暂存唤醒原因 ${key}（${reason}@seq${seq}）`);
       return;
     }
     cancelReplyCheckV2(key); // 真实唤醒已接管，取消普通回复检查，避免 30s 后再补一刀
@@ -10666,6 +10729,11 @@ async function main() {
               } else if (ended.reason.kind === 'error') {
                 const msg = ended.reason.error?.message ?? '未知错误';
                 const safeMsg = shouldAuditKey(key) && SENSITIVE_RE.test(msg) ? '（含敏感信息，已隐藏）' : msg.slice(0, 500);
+                // 这里以前**只发 QQ、不写日志**：真出问题时 bridge.log 里干干净净，
+                // 只能让用户在 QQ 上把错误抄回来（2026-10-07 排查 commandcode 400 时就是这样）。
+                // 补上本地轨迹，至少可查、可统计、可比对 —— 出错时先看日志，不用去翻 QQ。
+                log(`agent 处理出错 (${key}): ${safeMsg}`);
+                appendActivity(`${key} agent 处理出错：${safeMsg.slice(0, 120)}${safeMsg.length > 120 ? '…' : ''}`);
                 await sendToQQ(key, `⚠️ agent 处理出错：${safeMsg}`);
                 if (isFarewell) {
                   const st = socialState(key);
