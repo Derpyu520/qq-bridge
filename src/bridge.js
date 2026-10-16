@@ -17,6 +17,7 @@ import { GEN1_ROLE_LINE_RE, parseRoleSections, roleCharStats, roleSectionReport,
 import { fileURLToPath } from 'node:url';
 import { SnowLumaWebSocketClient, text } from '@snowluma/sdk';
 import { NodeApiClient, unwrap, createTurnCollector, discoverDshLaunchToken } from './dsh-client.js';
+import { inFlightTurnEvents } from './in-flight-turns.js';
 import { mdToPlain, splitForQQ, truncateText, truncateTextTail } from './md-to-plain.js';
 import { SENSITIVE_RE } from './sensitive.js';
 import { looksLikeUnfinished } from './v2-wait.js';
@@ -2357,28 +2358,21 @@ async function main() {
    * 这些正是断线那一刻仍在进行的回合。已结束的回合一律不喂，所以不会重复回复。
    */
   function rebuildInFlightCollector(sessionId, records) {
-    if (!Array.isArray(records) || !records.length) return;
-    const eventOf = (entry) => (entry?.type === 'event' ? entry.event : entry);
-    const open = new Set();
-    for (const entry of records) {
-      const event = eventOf(entry);
-      if (event?.type === 'turn/start') open.add(event.data?.turn);
-      else if (event?.type === 'turn/end') open.delete(event.data?.turn);
+    const recovered = inFlightTurnEvents(records);
+    if (!recovered) return;
+    if (!recovered.turns.length) {
+      // The snapshot confirms that the old turn is closed. Drop stale busy
+      // and tool bookkeeping instead of waiting for another live turn/end.
+      collectors.delete(sessionId);
+      v2TurnStartAt.delete(sessionId);
+      toolCallNames.delete(sessionId);
+      pendingSendToolCalls.delete(sessionId);
+      return;
     }
-    if (!open.size) return;
     const collector = createTurnCollector();
-    let restored = 0;
-    for (const entry of records) {
-      const event = eventOf(entry);
-      // 只回放未结束回合的文本来源：turn/start 建立回合，assistant/message 累积文本。
-      if (event?.type !== 'turn/start' && event?.type !== 'assistant/message') continue;
-      if (!open.has(event.data?.turn)) continue;
-      collector.push(event);
-      restored += 1;
-    }
-    if (!restored) return;
+    for (const event of recovered.events) collector.push(event);
     collectors.set(sessionId, collector);
-    log(`重连后恢复了进行中的回合（${sessionId}，turn ${[...open].join(',')}）`);
+    log(`重连后恢复了进行中的回合（${sessionId}，turn ${recovered.turns.join(',')}）`);
   }
 
   // 唤醒“防卡死”租约：正常应在 turn/end 时删除 pendingWakeKeys；若 DSH 接受了但一直没回合结束，
