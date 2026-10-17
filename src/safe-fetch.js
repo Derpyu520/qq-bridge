@@ -184,7 +184,7 @@ function requestOnce(url, ip, limit, binary = false) {
         method: 'GET',
         headers: {
           host: url.host,
-          'user-agent': 'Mozilla/5.0',
+          'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
           accept: binary ? 'image/*,*/*;q=0.8' : 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
           'accept-language': 'zh-CN,zh;q=0.9',
         },
