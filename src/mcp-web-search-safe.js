@@ -41,8 +41,9 @@ import { safeFetch } from './safe-fetch.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import { readFileSync } from 'node:fs';
 
-const VERSION = '0.2.0-r3+searchnews7';
+const VERSION = '0.2.0-r4+deepseek';
 const MAX_RESULTS = 8;
 // 通道配额：新闻类通道合起来最多 5 条、网页垂直最多 3 条，避免「新闻条数多就把网页结果挤出去」
 // （实测「登dua郎」这类词：360资讯回 8 条无关手游页，而 Bing 网页里正确的百科/知乎条目一条都进不来）。
@@ -377,12 +378,89 @@ async function searchBingWeb(query) {
   return results;
 }
 
+// ── DeepSeek 专用 Search / Fetch API（2026-10-17 接入，r4）────────────────────
+// 参照 deepseek-search-tools 的契约：
+//   POST {base}/v1/tools/search {query,count[,need_content,localization]} → {results:[{title,url,summary,date}]}
+//   POST {base}/v1/tools/fetch  {url} → {title,content}
+// 域名固定，不受 safeFetch 的 SSRF 限制；失败时自动退回 360/搜狗/Bing 三通道。
+const DEEPSEEK_BASE = (typeof process !== 'undefined' && process?.env?.DEEPSEEK_BASE_URL) || 'https://api.deepseek.com';
+const DEEPSEEK_TIMEOUT_MS = 60000;
+let deepseekKeyCache = { value: '', at: 0 };
+
+function deepseekReady() {
+  if (typeof fetch !== 'function') return false;
+  if (typeof process !== 'undefined' && process?.env && process.env.MCP_DEEPSEEK_SEARCH === '0') return false;
+  return true;
+}
+
+async function deepseekApiKey() {
+  const now = Date.now();
+  if (deepseekKeyCache.value && now - deepseekKeyCache.at < 60000) return deepseekKeyCache.value;
+  let key = typeof process !== 'undefined' ? String(process?.env?.DEEPSEEK_API_KEY || '').trim() : '';
+  if (!key) {
+    try {
+      const raw = readFileSync('/root/.dsh/.credentials.yaml', 'utf8');
+      const m = raw.match(/^\s*DEEPSEEK_API_KEY\s*:\s*['"]?([^'"\s]+)['"]?\s*$/m);
+      if (m) key = String(m[1]).trim();
+    } catch {
+      // 没有凭据文件就继续走环境变量
+    }
+  }
+  deepseekKeyCache = { value: key, at: now };
+  return key;
+}
+
+async function deepseekPost(path, payload) {
+  const key = await deepseekApiKey();
+  if (!key) throw new Error('未配置 DEEPSEEK_API_KEY');
+  const res = await fetch(`${DEEPSEEK_BASE}${path}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(DEEPSEEK_TIMEOUT_MS),
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    let detail = String(text || '').slice(0, 200);
+    try { const j = JSON.parse(text); if (j?.error?.message) detail = j.error.message; } catch { /* 非 JSON */ }
+    throw new Error(`DeepSeek ${path} HTTP ${res.status}${detail ? ` — ${detail}` : ''}`);
+  }
+  try { return JSON.parse(text); } catch { throw new Error(`DeepSeek ${path} 返回非 JSON`); }
+}
+
+async function searchDeepSeek(query) {
+  const data = await deepseekPost('/v1/tools/search', { query, count: MAX_RESULTS });
+  const list = Array.isArray(data?.results) ? data.results : [];
+  return list.map((item) => {
+    const url = String(item?.url || '').trim();
+    if (!url) return null;
+    const snippet = String(item?.summary || item?.snippet || '').replace(/\s+/g, ' ').trim().slice(0, MAX_SNIPPET);
+    return {
+      title: decodeHtml(String(item?.title || url)),
+      url,
+      snippet,
+      source: hostOf(url),
+      date: item?.date ? String(item.date) : '',
+    };
+  }).filter(Boolean).slice(0, MAX_RESULTS);
+}
+
+async function fetchDeepSeek(url) {
+  const page = await deepseekPost('/v1/tools/fetch', { url });
+  const content = typeof page?.content === 'string' ? page.content : '';
+  if (!content.trim()) throw new Error('DeepSeek fetch 无可读正文');
+  const title = String(page?.title || '').replace(/\s+/g, ' ').trim();
+  return { url, statusCode: 200, channel: 'DeepSeek', title, body: title ? `${title}${String.fromCharCode(10,10)}${content}` : content };
+}
+
+
 // 名字沿用 bingSearch：调用点（web_search handler）与既有测试都不必改。
 async function bingSearch(query) {
   const tokens = contentTokens(query);
   // 实际发出去的查询：内容词 ≥2 个时用剥离意图词后的版本，否则原样（保持既有测试对 `?q=` 的断言）。
   const primary = tokens.length >= 2 ? tokens.join(' ') : sanitizeQuery(query);
   const channels = [
+    ...(deepseekReady() ? [{ name: 'DeepSeek', news: 'auto', run: (q) => searchDeepSeek(q) }] : []),
     { name: '360资讯', news: true, run: (q) => search360News(q) },
     { name: '搜狗资讯', news: true, run: (q) => searchSogouNews(q) },
     { name: 'Bing网页', news: false, run: (q) => searchBingWeb(q) },
@@ -396,8 +474,12 @@ async function bingSearch(query) {
     const channel = channels[index];
     if (outcome.status === 'fulfilled' && Array.isArray(outcome.value)) {
       counts[channel.name] = outcome.value.length;
-      const target = channel.news ? news : web;
-      for (const item of outcome.value) target.push({ ...item, channel: channel.name });
+      if (channel.news === 'auto') {
+        for (const item of outcome.value) (item.date ? news : web).push({ ...item, channel: channel.name });
+      } else {
+        const target = channel.news ? news : web;
+        for (const item of outcome.value) target.push({ ...item, channel: channel.name });
+      }
     } else {
       counts[channel.name] = 0;
       const reason = outcome.status === 'rejected' ? outcome.reason?.message ?? outcome.reason : '返回格式异常';
@@ -456,7 +538,7 @@ const server = new McpServer({ name: 'web-search-safe', version: VERSION });
 
 server.tool(
   'web_search',
-  '只读联网搜索：并行查 360资讯/搜狗资讯/Bing网页，返回标题/URL/摘要/来源/日期（按相关度排序，新闻优先）。会自动去掉「后续/细节/进展」这类意图词；若首轮无强相关结果，会自动用更短的关键词重搜一次。适合时事新闻、事实性问题、网络用语/梗的含义。只读网络公开页面，不执行任何本地操作。',
+  '只读联网搜索：优先查 DeepSeek 专用搜索 API（结果带 summary/日期），同时并行查 360资讯/搜狗资讯/Bing网页，返回标题/URL/摘要/来源/日期（按相关度排序，新闻优先）。会自动去掉「后续/细节/进展」这类意图词；若首轮无强相关结果，会自动用更短的关键词重搜一次。适合时事新闻、事实性问题、网络用语/梗的含义。只读网络公开页面，不执行任何本地操作。',
   { query: z.string().describe('要搜索的关键词：主体 + 事件，2~4 个词最好（不要写成整句问句，不要带「后续/细节/进展」这类意图词）') },
   async ({ query }) => {
     const clean = sanitizeQuery(query);
@@ -481,6 +563,15 @@ server.tool(
   { url: z.string().describe('要抓取的 http(s) URL') },
   async ({ url }) => {
     try {
+      if (deepseekReady()) {
+        try {
+          const viaApi = await fetchDeepSeek(url);
+          return { content: [{ type: 'text', text: JSON.stringify(viaApi, null, 2) }] };
+        } catch (apiError) {
+          const fallback = await safeFetch(url);
+          return { content: [{ type: 'text', text: JSON.stringify({ ...fallback, via: 'safeFetch', deepseekError: apiError?.message ?? String(apiError) }, null, 2) }] };
+        }
+      }
       const result = await safeFetch(url);
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (error) {
