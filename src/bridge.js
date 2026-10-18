@@ -5,6 +5,7 @@
 //   DSH agent 回复/提问/审批 → events.mux 事件流 → 本进程 → send_msg → QQ
 //
 // 用法：node src/bridge.js （先编辑 ../config.json）
+import './load-env.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import http from 'node:http';
@@ -16,6 +17,8 @@ import { extractPresetPrefix, presetPromptBlockers, presetPromptWarnings, render
 import { GEN1_ROLE_LINE_RE, parseRoleSections, roleCharStats, roleSectionReport, selectRoleText } from './role-card.js';
 import { fileURLToPath } from 'node:url';
 import { SnowLumaWebSocketClient, text } from '@snowluma/sdk';
+import { discordId } from './discord-id.js';
+import { chatPlatform, platformId, validPlatformId, applyPlatformCapabilities, createDiscordChatClient, DISCORD_UNAVAILABLE_TOOLS } from './chat-platform.js';
 import { NodeApiClient, unwrap, createTurnCollector, discoverDshLaunchToken } from './dsh-client.js';
 import { mdToPlain, splitForQQ, truncateText, truncateTextTail } from './md-to-plain.js';
 import { SENSITIVE_RE } from './sensitive.js';
@@ -56,6 +59,7 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
+const PLATFORM = chatPlatform(readJsonSafe(path.join(ROOT, 'config.json'), {}));
 const STATE_DIR = path.join(ROOT, 'state');
 const STATE_FILE = path.join(STATE_DIR, 'sessions.json');
 const ROLE_STATE_FILE = path.join(STATE_DIR, 'current-role.json');
@@ -396,7 +400,7 @@ function writeRoleContent(name, content) {
 // 人格层由桥接每条消息注入，保存即生效。
 // 两代仿真各自有独立的预设提示词：一代 qq-chat（空格分条 / [SILENT]），
 // 二代 qq-chat-v2（一切皆工具）。控制台可分别查看与修改。
-const PRESET_NAMES = { v1: 'qq-chat', v2: 'qq-chat-v2' };
+const PRESET_NAMES = { v1: `${PLATFORM}-chat`, v2: `${PLATFORM}-chat-v2` };
 const PRESET_BACKUP_DIR = path.join(STATE_DIR, 'preset-backups');
 const PRESET_BACKUP_KEEP = 10;
 
@@ -511,7 +515,8 @@ const SPACE_SPLIT_HINT = '想分多条消息时用空格分隔；不想分条就
 const DIRECTION_HINT = '注意：消息里的 [引用 某人：...] 表示这句话是在回应被引用的人；引用的是你的消息才是在找你，引用别人时别默认是在找你。';
 
 // 已知的二代 agent token 集合：日志/活动/出站文本统一脱敏，防止令牌被模型泄露到 QQ。
-const KNOWN_AGENT_TOKENS = new Set();
+const PLATFORM_SECRET_TOKENS = new Set([process.env.DISCORD_TOKEN, process.env.DISCORD_BOT_TOKEN].filter(Boolean));
+const KNOWN_AGENT_TOKENS = new Set(PLATFORM_SECRET_TOKENS);
 
 // 会话 → 该会话「当前代 + 上一代」agentToken 的索引（见 rememberAgentToken）。
 //
@@ -545,7 +550,7 @@ function rememberAgentToken(key, token) {
   if (KNOWN_AGENT_TOKENS.size > MAX_KNOWN_AGENT_TOKENS) {
     // 只淘汰已经不属于任何会话**当前代**的 token（即更早的旧代）。
     // 当前代一个都不能丢：脱敏漏掉活令牌就是把令牌发到 QQ，比内存占用严重得多。
-    const live = new Set([...CONVERSATION_TOKENS.values()].map((pair) => pair[0]));
+    const live = new Set([...PLATFORM_SECRET_TOKENS, ...[...CONVERSATION_TOKENS.values()].map((pair) => pair[0])]);
     for (const old of [...KNOWN_AGENT_TOKENS]) {
       if (KNOWN_AGENT_TOKENS.size <= MAX_KNOWN_AGENT_TOKENS) break;
       if (!live.has(old)) KNOWN_AGENT_TOKENS.delete(old);
@@ -635,6 +640,7 @@ function normalizeOwnerQQ(value) {
   if (value === undefined || value === null) return null;
   const s = String(value).trim();
   if (!s) return null;
+  if (PLATFORM === 'discord') return discordId(value);
   if (!/^\d+$/.test(s)) throw new Error('ownerQQ 必须是 QQ 号（正整数）');
   const n = Number(s);
   if (!Number.isSafeInteger(n) || n <= 0) throw new Error('ownerQQ 必须是 QQ 号（正整数）');
@@ -644,6 +650,7 @@ function normalizeOwnerQQ(value) {
 // 白名单/黑名单值规范化：只接受字符串或数字数组，非数组按空列表处理（fail-closed 语义由调用方决定）。
 function normalizeIdList(value) {
   if (!Array.isArray(value)) return [];
+  if (PLATFORM === 'discord') return [...new Set(value.map(discordId))];
   return value.map((v) => String(v).trim()).filter((v) => /^\d+$/.test(v));
 }
 
@@ -653,6 +660,8 @@ function loadConfig() {
   const file = readJsonSafe(p, null, true);
   if (!file || typeof file !== 'object' || Array.isArray(file)) throw new Error(`配置格式错误：${p}`);
   const cfg = {
+    platform: PLATFORM,
+    discord: { allowDMs: true, guildIds: [], ...(file.discord ?? {}) },
     dsh: {
       baseUrl: 'http://127.0.0.1:3080',
       provider: 'deepseek-official',
@@ -672,16 +681,16 @@ function loadConfig() {
     snowluma: { wsUrl: 'ws://127.0.0.1:3001', accessToken: '', ...(file.snowluma ?? {}) },
     // 空 => 每个会话在 state/agents/<key> 下建独立工作目录
     sessionCwd: file.sessionCwd ?? '',
-    agentPreset: file.agentPreset ?? 'qq-chat',
-    workspaceTitle: file.workspaceTitle ?? 'QQ 聊天',
-    ownerQQ: normalizeOwnerQQ(file.ownerQQ),
+    agentPreset: file.agentPreset ?? PRESET_NAMES.v1,
+    workspaceTitle: file.workspaceTitle ?? (PLATFORM === 'discord' ? 'Discord 聊天' : 'QQ 聊天'),
+    ownerQQ: normalizeOwnerQQ(PLATFORM === 'discord' ? file.ownerId : file.ownerQQ),
     allow: {
-      private: normalizeIdList(file.allow?.private ?? file.allow?.privates ?? []),
-      groups: normalizeIdList(file.allow?.groups ?? file.allow?.group ?? [])
+      private: normalizeIdList((PLATFORM === 'discord' ? file.allow?.users : undefined) ?? file.allow?.private ?? file.allow?.privates ?? []),
+      groups: normalizeIdList((PLATFORM === 'discord' ? file.allow?.channels : undefined) ?? file.allow?.groups ?? file.allow?.group ?? [])
     },
     deny: {
-      private: normalizeIdList(file.deny?.private ?? file.deny?.privates ?? []),
-      groups: normalizeIdList(file.deny?.groups ?? file.deny?.group ?? [])
+      private: normalizeIdList((PLATFORM === 'discord' ? file.deny?.users : undefined) ?? file.deny?.private ?? file.deny?.privates ?? []),
+      groups: normalizeIdList((PLATFORM === 'discord' ? file.deny?.channels : undefined) ?? file.deny?.groups ?? file.deny?.group ?? [])
     },
     // 私聊/群聊均未配置白名单时是否放行所有（true 时启动会打警告）
     allowAllWhenEmpty: file.allowAllWhenEmpty === true,
@@ -702,7 +711,7 @@ function loadConfig() {
       extractCooldownMs: 5 * 60 * 1000,
       inferenceThresholds: [2, 4, 8],
       injectMax: 8,
-      learnerPreset: 'qq-chat',
+      learnerPreset: PRESET_NAMES.v1,
       workspaceTitle: 'QQ 黑话学习',
       autoResearch: true,
       ...(file.slang ?? {})
@@ -749,7 +758,7 @@ function loadConfig() {
     socialV2: {
       enabled: true,
       autoReplyCheckMs: 30000,
-      agentPreset: 'qq-chat-v2',
+      agentPreset: PRESET_NAMES.v2,
       provideRecommendations: true,
       tools: {
         getPrompt: true,
@@ -998,6 +1007,10 @@ function loadConfig() {
     log(`人格注入上限已按范围校正为 ${roleInjectMaxChars} 字符（配置值 ${cfg.role.maxInjectChars}，允许 1000~20000）`);
   }
 
+  if (PLATFORM === 'discord') {
+    cfg.discord.guildIds = normalizeIdList(cfg.discord.guildIds);
+    applyPlatformCapabilities(cfg);
+  }
   return cfg;
 }
 
@@ -1354,7 +1367,10 @@ function extractMediaFromSegments(segments) {
 function allowed(kind, id, cfg) {
   // OneBot 事件里的 id 可能是数字也可能是字符串（int64 序列化差异），统一转字符串比较。
   // 配置字段兼容单数（group/private）与复数（groups/privates）两种写法。
-  const s = String(id);
+  let s = String(id);
+  if (cfg.platform === 'discord') {
+    try { s = discordId(id); } catch { return false; }
+  }
   const denyList = cfg.deny[kind] ?? cfg.deny[kind + 's'] ?? [];
   if (denyList.map(String).includes(s)) return false;
   const allowList = cfg.allow[kind] ?? cfg.allow[kind + 's'] ?? [];
@@ -1366,6 +1382,9 @@ function allowed(kind, id, cfg) {
 function canonicalV2Key(key) {
   const m = /^(group|private):(\d+)$/.exec(String(key ?? '').trim());
   if (!m) return null;
+  if (PLATFORM === 'discord') {
+    try { return `${m[1]}:${discordId(m[2])}`; } catch { return null; }
+  }
   const id = Number(m[2]);
   if (!Number.isSafeInteger(id) || id <= 0) return null;
   return `${m[1]}:${id}`;
@@ -1381,6 +1400,12 @@ let stateDirHardened = null;
 // ── 主流程 ──────────────────────────────────────────────────────────────────
 async function main() {
   const cfg = loadConfig();
+  const isDiscord = cfg.platform === 'discord';
+  if (isDiscord) {
+    for (const secret of [process.env.DISCORD_TOKEN, process.env.DISCORD_BOT_TOKEN, cfg.discord.token]) {
+      if (secret) { PLATFORM_SECRET_TOKENS.add(secret); KNOWN_AGENT_TOKENS.add(secret); }
+    }
+  }
   fs.mkdirSync(STATE_DIR, { recursive: true });
   hardenStateDirAcl();
   acquireLock();
@@ -1723,8 +1748,8 @@ async function main() {
         const httpUrl = String(cfg.snowluma?.httpUrl || 'http://127.0.0.1:3000').replace(/\/+$/, '');
         const action = kind === 'private' ? 'send_private_msg' : 'send_group_msg';
         const params = kind === 'private'
-          ? { user_id: Number(id), message: [recordSegment] }
-          : { group_id: Number(id), message: [recordSegment] };
+          ? { user_id: platformId(id, cfg.platform), message: [recordSegment] }
+          : { group_id: platformId(id, cfg.platform), message: [recordSegment] };
         const res = await fetch(`${httpUrl}/${action}`, {
           method: 'POST',
           headers: {
@@ -1806,7 +1831,7 @@ async function main() {
           'content-type': 'application/json',
           ...(cfg.snowluma?.accessToken ? { authorization: `Bearer ${cfg.snowluma.accessToken}` } : {})
         },
-        body: JSON.stringify({ message_id: Number(messageId) }),
+        body: JSON.stringify({ message_id: platformId(messageId, cfg.platform) }),
         signal: AbortSignal.timeout(30000)
       });
       const body = await res.json().catch(() => ({}));
@@ -1903,7 +1928,7 @@ async function main() {
     }
     segments.push({ type: 'image', data: { file: 'base64://' + image.buffer.toString('base64') } });
     const action = kind === 'private' ? 'send_private_msg' : 'send_group_msg';
-    const params = kind === 'private' ? { user_id: Number(id), message: segments } : { group_id: Number(id), message: segments };
+    const params = kind === 'private' ? { user_id: platformId(id, cfg.platform), message: segments } : { group_id: platformId(id, cfg.platform), message: segments };
     const httpUrl = String(cfg.snowluma?.httpUrl || 'http://127.0.0.1:3000').replace(/\/+$/, '');
     // 与文本发送共用 sendChain，保证“先文字后表情”的真人顺序不被并发工具调用打乱。
     let sendResolve;
@@ -2301,6 +2326,12 @@ async function main() {
     const now = new Date();
     const timeLine = `【当前时间】${now.toLocaleString('zh-CN', { hour12: false })}（${Intl.DateTimeFormat().resolvedOptions().timeZone}）`;
     const parts = [timeLine];
+    if (isDiscord) {
+      parts.push('Transport: Discord. The shared qq_* tools operate on Discord channels and DMs. '
+        + 'Treat legacy QQ/group labels as Discord/channel labels. All IDs must be quoted strings. '
+        + 'Only tools in the current tool list are available; QQ pokes, merged forwards, avatar lookup, '
+        + 'favorite stickers and voice notes are unavailable. Image understanding requires a vision model.');
+    }
     if (cfg.slang?.enabled !== false) {
       const block = buildSlangContext(slangEntries, cfg.slang?.injectMax ?? 8);
       if (block) parts.push(block);
@@ -2565,7 +2596,7 @@ async function main() {
       if (typeof defaultPreset === 'string' && defaultPreset) {
         dshDefaultPreset = defaultPreset;
       }
-      const ns = s.namespaces.find((n) => n.ns === 'qq-mode');
+      const ns = s.namespaces.find((n) => n.ns === (isDiscord ? 'discord-mode' : 'qq-mode'));
       // 规范化后再比较：`simulation` 也走这里（见 MODE_INPUT_ALIASES）。
       // 读取必须 user 层优先：DSH 0.2.0-rc.2 写完 settings 后同进程内 value 不更新，
       // 只读 value 会让控制台切的模式被 5 秒轮询改回去（issue #22）。
@@ -2578,7 +2609,7 @@ async function main() {
         // 设置页每次轮询都会把 config.json 里的 ownerQQ 抹成 null —— 而 5 秒一次的
         // refreshMode 会让它「几秒后必然发生」，后果是 closed-agent 谁都不放行、
         // 审批/提问永远等不到管理员回答。
-        const rawOwnerValue = settingFromDshNamespace(ns, 'ownerQQ');
+        const rawOwnerValue = settingFromDshNamespace(ns, isDiscord ? 'ownerId' : 'ownerQQ');
         if (rawOwnerValue !== undefined) {
           const rawOwner = String(rawOwnerValue ?? '').trim();
           if (rawOwner) {
@@ -2672,7 +2703,7 @@ async function main() {
   function isSessionAllowedInCurrentMode(key) {
     const m = /^(group|private):(\d+)$/.exec(key);
     if (!m) return false;
-    return modeAllowed(key, m[1], Number(m[2]), cfg, currentMode);
+    return modeAllowed(key, m[1], platformId(m[2], cfg.platform), cfg, currentMode);
   }
 
   function sessionPolicy(key) {
@@ -2796,7 +2827,7 @@ async function main() {
           const item = items[i];
           try {
             const [kind, idStr] = key.split(':');
-            const id = Number(idStr);
+            const id = platformId(idStr, cfg.platform);
             if (!modeAllowed(key, kind, id, cfg, currentMode)) {
               log(`补投跳过未授权会话 ${key}（当前模式 ${currentMode}）`);
               continue;
@@ -2980,6 +3011,16 @@ async function main() {
   function snowlumaHealthSnapshot() {
     const now = Date.now();
     const agoMs = snowlumaHealth.lastPacketAt ? now - snowlumaHealth.lastPacketAt : null;
+    if (isDiscord) {
+      const silent = agoMs !== null && agoMs > 90_000;
+      return {
+        ...snowlumaHealth, lastPacketAgoMs: agoMs, silent,
+        degraded: !snowlumaHealth.connected || snowlumaHealth.good === false || silent,
+        hint: !snowlumaHealth.connected || snowlumaHealth.good === false
+          ? 'Discord Gateway is disconnected. Check the bot token, intents and network.'
+          : silent ? 'Discord Gateway health updates have stopped.' : null,
+      };
+    }
     const silent = snowlumaHealth.lastPacketAt > 0 && agoMs > SNOWLUMA_SILENCE_WARN_MS;
     // 只有 SnowLuma **明确自报** good=false 才算"确认坏了"（接收链路）。
     // 「静默」只能说明连它的进程/WS 都没动静了 —— 那是**另一个**故障面，措辞必须分开。
@@ -3014,6 +3055,13 @@ async function main() {
   /** 边沿触发地告警/恢复，避免每轮探测都刷一行日志。 */
   function reportSnowlumaHealth() {
     const snap = snowlumaHealthSnapshot();
+    if (isDiscord) {
+      if (snap.degraded !== snowlumaHealth.degraded) {
+        log(snap.degraded ? `Discord: ${snap.hint}` : 'Discord Gateway connection restored.');
+        snowlumaHealth.degraded = snap.degraded;
+      }
+      return;
+    }
     if (snap.degraded && !snowlumaHealth.degraded) {
       snowlumaHealth.degraded = true;
       snowlumaHealth.reason = snap.hint ?? '';
@@ -3035,6 +3083,15 @@ async function main() {
    *    这里只是**兜底轮询**：主路径是每 30 秒一次的心跳（免费，见 onEvent）。
    */
   async function pollSnowlumaStatus() {
+    if (isDiscord) {
+      try {
+        const status = await bot.raw('get_status');
+        noteReceiveHealth(status.good, 'gateway');
+        snowlumaHealth.accountOnline = status.online;
+      } catch (error) { snowlumaHealth.goodError = error?.message ?? String(error); }
+      reportSnowlumaHealth();
+      return;
+    }
     const httpUrl = String(cfg.snowluma?.httpUrl || 'http://127.0.0.1:3000').replace(/\/+$/, '');
     try {
       const res = await fetch(`${httpUrl}/get_status`, {
@@ -3073,7 +3130,7 @@ async function main() {
   // ── 本地控制台（独立 Web 面板，不依赖 DSH WebUI） ───────────────────────────
   // 模式/角色/静默状态都存 state/*.json，桥接即时感知；此服务只读写这些文件。
   function v2ToolEnabled(flag) {
-    return cfg.socialV2?.tools?.[flag] !== false;
+    return !(isDiscord && DISCORD_UNAVAILABLE_TOOLS.has(flag)) && cfg.socialV2?.tools?.[flag] !== false;
   }
 
   function startConsoleServer() {
@@ -3267,6 +3324,7 @@ async function main() {
         }
         if (!hasToken) {
           const tokenlessAgentAllowed = url.pathname === '/api/status'
+            || (isDiscord && url.pathname === '/api/chat/action')
             || url.pathname.startsWith('/api/send/')
             || url.pathname.startsWith('/api/images/');
           if (!tokenlessAgentAllowed) {
@@ -3333,6 +3391,7 @@ async function main() {
         // 其余（人格/提示词/思考强度/白名单/重启…）一律 403——避免以后新增管理端点时忘记拉黑。
         if (req.headers['x-agent-token']) {
           const agentAllowed = url.pathname === '/api/status'
+            || (isDiscord && url.pathname === '/api/chat/action')
             || url.pathname.startsWith('/api/socialV2/')
             || url.pathname.startsWith('/api/send/')
             || url.pathname.startsWith('/api/images/')
@@ -3341,6 +3400,10 @@ async function main() {
             sendJson({ ok: false, error: '该接口仅控制台可用' }, 403);
             return;
           }
+        }
+        if (isDiscord && /^\/api\/(?:voice(?:\/|$)|send\/voice$|stickers(?:\/|$)|socialV2\/(?:send-poke|sticker-image|self-image|sticker-note|sticker-remark|send-voice|send-sticker|collect-sticker|voices|sticker-list|forward-message|forward-media)$)/.test(url.pathname)) {
+          sendJson({ ok: false, error: 'This QQ feature is unavailable on Discord.' }, 501);
+          return;
         }
         // 只读降级：黑话库/表情库在启动时加载失败时，写接口必须**明确失败**。
         // 旧行为是 save 函数里只打一行日志就 return，而接口照样回 {ok:true}：
@@ -3373,6 +3436,18 @@ async function main() {
           }
           return;
         }
+        if (isDiscord && req.method === 'POST' && url.pathname === '/api/chat/action') {
+          const body = await readBody();
+          const action = String(body.action ?? '');
+          const statusOnly = ['get_login_info', 'get_status'].includes(action);
+          const reads = ['get_group_list', 'get_group_member_list', 'get_group_member_info', 'get_group_msg_history'];
+          if (!statusOnly && (!reads.includes(action) || currentMode !== 'closed-agent' || req.headers['x-agent-token'])) {
+            sendJson({ ok: false, error: 'Channel discovery/history require owner closed-agent mode; sends use the audited endpoints.' }, 403);
+            return;
+          }
+          sendJson({ ok: true, data: await bot.raw(action, body.params || {}) });
+          return;
+        }
         if (req.method === 'GET' && url.pathname === '/api/status') {
           const rs = readRoleState();
           // 带 agent token 的调用来自 QQ 群里的 AI：只能拿到它自己该知道的运行状态。
@@ -3394,6 +3469,7 @@ async function main() {
           }
           sendJson({
             mode: currentMode,
+            platform: cfg.platform,
             closedAgentPreset,
             role: rs.role ?? null,
             roleMode: rs.mode ?? 'active',
@@ -3405,6 +3481,7 @@ async function main() {
             // 上游健康只给操作者看：它包含网关诊断信息（good/hint），
             // 属于管理侧观测，不该进 QQ 会话里那个受限的智能体视图。
             snowluma: snowlumaHealthSnapshot(),
+            ...(isDiscord ? { snowluma: null, discord: snowlumaHealthSnapshot(), ownerId: cfg.ownerQQ ?? null } : {}),
             activity: readActivityTail(100)
           });
           return;
@@ -3445,7 +3522,7 @@ async function main() {
           try {
             // unwrap() 在 result.ok 为 false 时直接抛错，所以能执行到下一行即代表写穿已成功
             // （不要在这里再判断 updated?.ok —— 解包后的值恒为真，那样的分支是死代码）。
-            unwrap(await api.settings.update({ ns: 'qq-mode', patch: { mode: requestedMode } }), 'settings.update');
+            unwrap(await api.settings.update({ ns: isDiscord ? 'discord-mode' : 'qq-mode', patch: { mode: requestedMode } }), 'settings.update');
             dshSynced = true;
           } catch (error) {
             log(`控制台：模式写穿 DSH 设置失败（${error?.message ?? error}）；本次仅写本地，下次 DSH 轮询会覆盖回滚`);
@@ -3635,7 +3712,7 @@ async function main() {
               sendJson({ ok: true, unchanged: true, chars: prefix.length, warnings: presetPromptWarnings(prefix), synced: fs.existsSync(installedPresetYaml(preset)), requiresRestart: false, status: presetStatus(preset) });
               return;
             }
-            nextText = renderPresetPromptYaml(text, body.content, preset === PRESET_NAMES.v1 ? 'v1' : 'v2');
+            nextText = renderPresetPromptYaml(text, body.content, preset === PRESET_NAMES.v1 ? 'v1' : 'v2', cfg.platform);
           } catch (error) {
             sendJson({ ok: false, error: error?.message ?? '校验失败' }, 400);
             return;
@@ -3698,7 +3775,7 @@ async function main() {
             // 还原路径必须与保存路径同样严格：旧备份可能来自安全基线加入之前，
             // 直接还原会把弱化版提示词（缺「你没有本地工具」等不变量）写回去。
             // 不变量清单**按预设取**：一代本来就没有「你没有本地工具」这类工具面表述。
-            const blockers = presetPromptBlockers(restoredPrefix, preset === PRESET_NAMES.v1 ? 'v1' : 'v2');
+            const blockers = presetPromptBlockers(restoredPrefix, preset === PRESET_NAMES.v1 ? 'v1' : 'v2', cfg.platform);
             if (blockers.length) {
               sendJson({ ok: false, error: `该备份不满足当前的安全不变量，拒绝还原：${blockers.join('；')}` }, 400);
               return;
@@ -3996,28 +4073,30 @@ async function main() {
         }
         // ── 白名单可视化编辑（写 config.json + 热更新内存） ───────────────────
         if (req.method === 'GET' && url.pathname === '/api/whitelist') {
-          sendJson({ allow: cfg.allow ?? { private: [], groups: [] }, deny: cfg.deny ?? { private: [], groups: [] }, ownerQQ: cfg.ownerQQ ?? null });
+          sendJson({ platform: cfg.platform, allow: cfg.allow ?? { private: [], groups: [] }, deny: cfg.deny ?? { private: [], groups: [] }, ownerQQ: cfg.ownerQQ ?? null, ...(isDiscord ? { ownerId: cfg.ownerQQ ?? null } : {}) });
           return;
         }
         if (req.method === 'POST' && url.pathname === '/api/whitelist') {
           const body = await readBody();
           const toNum = (arr) => Array.isArray(arr) ? [...new Set(arr.map((x) => Number(String(x).trim())).filter((n) => Number.isFinite(n)))] : undefined;
+          const toIds = (arr) => isDiscord && Array.isArray(arr) ? normalizeIdList(arr) : toNum(arr);
           const configFile = path.join(ROOT, 'config.json');
           // fail-fast：配置文件损坏时直接 500，绝不回写，避免把整个配置清成只剩 allow/deny/ownerQQ
           const file = readConfigObject(configFile);
           const allow = {
-            private: toNum(body.allow?.private) ?? (file.allow?.private ?? []),
-            groups: toNum(body.allow?.groups) ?? (file.allow?.groups ?? [])
+            private: toIds(body.allow?.private) ?? (isDiscord ? cfg.allow.private : file.allow?.private ?? []),
+            groups: toIds(body.allow?.groups) ?? (isDiscord ? cfg.allow.groups : file.allow?.groups ?? [])
           };
           const deny = {
-            private: toNum(body.deny?.private) ?? (file.deny?.private ?? []),
-            groups: toNum(body.deny?.groups) ?? (file.deny?.groups ?? [])
+            private: toIds(body.deny?.private) ?? (isDiscord ? cfg.deny.private : file.deny?.private ?? []),
+            groups: toIds(body.deny?.groups) ?? (isDiscord ? cfg.deny.groups : file.deny?.groups ?? [])
           };
           // 管理员 QQ 可在控制台输入；空值=清除管理员（fail-closed），非法值拒绝写入。
           let ownerQQ = cfg.ownerQQ ?? null;
-          if (body.ownerQQ !== undefined) {
+          const ownerInput = isDiscord && body.ownerId !== undefined ? body.ownerId : body.ownerQQ;
+          if (ownerInput !== undefined) {
             try {
-              ownerQQ = normalizeOwnerQQ(body.ownerQQ);
+              ownerQQ = normalizeOwnerQQ(ownerInput);
             } catch (error) {
               sendJson({ ok: false, error: error?.message ?? 'ownerQQ 无效' }, 400);
               return;
@@ -4025,7 +4104,14 @@ async function main() {
           }
           file.allow = allow;
           file.deny = deny;
-          file.ownerQQ = ownerQQ;
+          if (isDiscord) {
+            file.ownerId = ownerQQ;
+            // Canonical fields must not be shadowed by an older alias on restart.
+            delete file.allow.users;
+            delete file.allow.channels;
+            delete file.deny.users;
+            delete file.deny.channels;
+          } else file.ownerQQ = ownerQQ;
           atomicWriteJson(configFile, file);
           cfg.allow = { private: allow.private, groups: allow.groups };
           cfg.deny = { private: deny.private, groups: deny.groups };
@@ -4177,9 +4263,9 @@ async function main() {
         if (req.method === 'POST' && url.pathname === '/api/test-send') {
           const body = await readBody();
           const kind = body.kind === 'private' ? 'private' : 'group';
-          const id = Number(body.id);
+          const id = platformId(body.id, cfg.platform);
           const message = String(body.message ?? '').trim();
-          if (!Number.isFinite(id) || id <= 0) { sendJson({ ok: false, error: '目标 id 无效' }, 400); return; }
+          if (!validPlatformId(id, cfg.platform)) { sendJson({ ok: false, error: '目标 id 无效' }, 400); return; }
           if (!message) { sendJson({ ok: false, error: '消息不能为空' }, 400); return; }
           if (SENSITIVE_RE.test(message)) { sendJson({ ok: false, error: '消息含敏感信息，已阻止发送' }, 403); return; }
           if (!allowed(kind, id, cfg)) { sendJson({ ok: false, error: `目标不在白名单内（${kind} ${id}），请先加入白名单` }, 403); return; }
@@ -4295,8 +4381,8 @@ async function main() {
             return;
           }
           const kind = keyMatch[1];
-          const id = Number(keyMatch[2]);
-          if (!Number.isFinite(id) || id <= 0) {
+          const id = platformId(keyMatch[2], cfg.platform);
+          if (!validPlatformId(id, cfg.platform)) {
             sendJson({ ok: false, error: 'id 无效' }, 400);
             return;
           }
@@ -4502,9 +4588,11 @@ async function main() {
           if (merged.enabled !== undefined) merged.enabled = merged.enabled === true;
           if (merged.provideRecommendations !== undefined) merged.provideRecommendations = merged.provideRecommendations === true;
           if (merged.agentPreset !== undefined) merged.agentPreset = String(merged.agentPreset ?? '');
+          if (isDiscord) applyPlatformCapabilities({ platform: 'discord', socialV2: merged });
           file.socialV2 = merged;
           atomicWriteJson(configFile, file);
           cfg.socialV2 = { ...(cfg.socialV2 ?? {}), ...merged };
+          applyPlatformCapabilities(cfg);
           // 仅当“会影响默认唤醒配置”的字段变化时，才同步到仍使用默认配置的现有会话。
           // 避免只改发送/等待/工具开关时，意外重置正在等待的潜水/唤醒计划。
           const WAKE_DEFAULT_KEYS = [
@@ -4951,8 +5039,8 @@ async function main() {
           const keyMatch = /^(group|private):(\d+)$/.exec(key);
           if (!keyMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
           const kind = keyMatch[1];
-          const id = Number(keyMatch[2]);
-          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, currentMode)) {
+          const id = platformId(keyMatch[2], cfg.platform);
+          if (!validPlatformId(id, cfg.platform) || !modeAllowed(key, kind, id, cfg, currentMode)) {
             sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403);
             return;
           }
@@ -5084,8 +5172,8 @@ async function main() {
             return;
           }
           const kind = keyMatch[1];
-          const id = Number(keyMatch[2]);
-          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, currentMode)) {
+          const id = platformId(keyMatch[2], cfg.platform);
+          if (!validPlatformId(id, cfg.platform) || !modeAllowed(key, kind, id, cfg, currentMode)) {
             sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403);
             return;
           }
@@ -5181,8 +5269,10 @@ async function main() {
           const messages = Array.isArray(rawMessages)
             ? rawMessages.map((m) => String(m ?? '').trim()).filter(Boolean)
             : (isRawString ? [String(rawMessages).trim()].filter(Boolean) : []);
-          const replyToMessageId = body.replyToMessageId;
-          const atUserId = body.atUserId ?? null;
+          const replyToMessageId = isDiscord && body.replyToMessageId != null
+            ? platformId(body.replyToMessageId, cfg.platform) : body.replyToMessageId;
+          const atUserId = isDiscord && body.atUserId != null
+            ? platformId(body.atUserId, cfg.platform) : body.atUserId ?? null;
           // 二代不再按空格自动分条：字符串就是一条消息，数组模式原样使用调用方间隔。
           // 旧写法是 `(isRawString && messages.length > 1) ? 'auto' : ...` —— 上面 messages 的构造
           // 保证 isRawString 为真时 length 恒为 1，这个分支永远不可达，留着只会让人以为
@@ -5207,8 +5297,8 @@ async function main() {
           const keyMatch = /^(group|private):(\d+)$/.exec(key);
           if (!keyMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
           const kind = keyMatch[1];
-          const id = Number(keyMatch[2]);
-          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, currentMode)) {
+          const id = platformId(keyMatch[2], cfg.platform);
+          if (!validPlatformId(id, cfg.platform) || !modeAllowed(key, kind, id, cfg, currentMode)) {
             sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403);
             return;
           }
@@ -5319,8 +5409,8 @@ async function main() {
           const keyMatch = /^(group|private):(\d+)$/.exec(key);
           if (!keyMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
           const kind = keyMatch[1];
-          const id = Number(keyMatch[2]);
-          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, currentMode)) {
+          const id = platformId(keyMatch[2], cfg.platform);
+          if (!validPlatformId(id, cfg.platform) || !modeAllowed(key, kind, id, cfg, currentMode)) {
             sendJson({ ok: false, error: '当前模式不允许操作该会话' }, 403);
             return;
           }
@@ -5522,7 +5612,7 @@ async function main() {
           const key = String(body.target ?? body.key ?? '').trim();
           const parsedTarget = parseTargetKey(key);
           if (!parsedTarget) { sendJson({ ok: false, error: 'target 格式应为 group:群号 或 private:QQ号' }, 400); return; }
-          if (!modeAllowed(key, parsedTarget.kind, Number(parsedTarget.id), cfg, currentMode)) {
+          if (!modeAllowed(key, parsedTarget.kind, platformId(parsedTarget.id, cfg.platform), cfg, currentMode)) {
             const a = cfg.allow ?? {};
             sendJson({
               ok: false,
@@ -5631,8 +5721,8 @@ async function main() {
           const keyMatch = /^(group|private):(\d+)$/.exec(key);
           if (!keyMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
           const kind = keyMatch[1];
-          const id = Number(keyMatch[2]);
-          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, currentMode)) {
+          const id = platformId(keyMatch[2], cfg.platform);
+          if (!validPlatformId(id, cfg.platform) || !modeAllowed(key, kind, id, cfg, currentMode)) {
             sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403);
             return;
           }
@@ -5702,8 +5792,8 @@ async function main() {
           const keyMatch = /^(group|private):(\d+)$/.exec(key);
           if (!keyMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
           const kind = keyMatch[1];
-          const id = Number(keyMatch[2]);
-          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, currentMode)) {
+          const id = platformId(keyMatch[2], cfg.platform);
+          if (!validPlatformId(id, cfg.platform) || !modeAllowed(key, kind, id, cfg, currentMode)) {
             sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403);
             return;
           }
@@ -6312,7 +6402,7 @@ async function main() {
           const keyMatch = /^(group|private):(\d+)$/.exec(key);
           if (!keyMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
           const kind = keyMatch[1];
-          const id = Number(keyMatch[2]);
+          const id = platformId(keyMatch[2], cfg.platform);
           try {
             const st = getSocialV2State(key);
             const found = (st.recentMessages || []).find((m) => m && (String(m.seq) === messageId || (m.messageId && String(m.messageId) === messageId)));
@@ -6373,8 +6463,8 @@ async function main() {
             return;
           }
           const kind = keyMatch[1];
-          const num = Number(keyMatch[2]);
-          if (!Number.isFinite(num) || num <= 0 || !modeAllowed(key, kind, num, cfg, currentMode)) {
+          const num = platformId(keyMatch[2], cfg.platform);
+          if (!validPlatformId(num, cfg.platform) || !modeAllowed(key, kind, num, cfg, currentMode)) {
             sendJson({ ok: false, error: '当前模式不允许读取该会话' }, 403);
             return;
           }
@@ -6736,8 +6826,8 @@ async function main() {
             return;
           }
           const kind = keyMatch[1];
-          const id = Number(keyMatch[2]);
-          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, currentMode)) {
+          const id = platformId(keyMatch[2], cfg.platform);
+          if (!validPlatformId(id, cfg.platform) || !modeAllowed(key, kind, id, cfg, currentMode)) {
             sendJson({ ok: false, error: '当前模式不允许读取该会话' }, 403);
             return;
           }
@@ -6765,8 +6855,8 @@ async function main() {
             return;
           }
           const kind = keyMatch[1];
-          const id = Number(keyMatch[2]);
-          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, currentMode)) {
+          const id = platformId(keyMatch[2], cfg.platform);
+          if (!validPlatformId(id, cfg.platform) || !modeAllowed(key, kind, id, cfg, currentMode)) {
             sendJson({ ok: false, error: '当前模式不允许读取该会话' }, 403);
             return;
           }
@@ -6799,13 +6889,16 @@ async function main() {
           const token = String(body.token ?? '').trim();
           const isPrivate = url.pathname === '/api/send/private';
           const isReply = url.pathname === '/api/send/reply';
-          const targetId = isPrivate ? String(body.userId ?? '').trim() : String(body.groupId ?? '').trim();
+          const rawTargetId = isPrivate ? body.userId : body.groupId;
+          const targetId = isDiscord ? platformId(rawTargetId, cfg.platform) : String(rawTargetId ?? '').trim();
           const message = unquoteJsonString(String(body.message ?? '').trim());
           // 引用 id 与端点无关：/api/send/reply 与另两个端点都允许带（是否真的引用由下游按 id 判断）。
           // 旧写法 `isReply ? body.replyToMessageId : body.replyToMessageId` 两个分支一模一样，
           // 保留 isReply 变量只是为了下面的端点语义判断，别再让人以为这里有过分支逻辑。
-          const replyToMessageId = body.replyToMessageId;
-          const atUserId = body.atUserId ?? null;
+          const replyToMessageId = isDiscord && body.replyToMessageId != null
+            ? platformId(body.replyToMessageId, cfg.platform) : body.replyToMessageId;
+          const atUserId = isDiscord && body.atUserId != null
+            ? platformId(body.atUserId, cfg.platform) : body.atUserId ?? null;
           const key = isPrivate ? `private:${targetId}` : `group:${targetId}`;
           // 安全边界：发送工具只允许在 closed-agent（管理员私聊）或 reserved2（二代 AI 带会话令牌）下使用；
           // chat/reserved 的自动转发已覆盖正常回复，MCP 发送工具不应成为 prompt injection 的越权出口。
@@ -6834,8 +6927,8 @@ async function main() {
           const keyMatch = /^(group|private):(\d+)$/.exec(key);
           if (!keyMatch) { sendJson({ ok: false, error: 'key 格式无效' }, 400); return; }
           const kind = keyMatch[1];
-          const id = Number(keyMatch[2]);
-          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, currentMode)) {
+          const id = platformId(keyMatch[2], cfg.platform);
+          if (!validPlatformId(id, cfg.platform) || !modeAllowed(key, kind, id, cfg, currentMode)) {
             sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403);
             return;
           }
@@ -7013,6 +7106,7 @@ async function main() {
           socialV2.conversations.clear();
           CONVERSATION_TOKENS.clear();
           KNOWN_AGENT_TOKENS.clear();
+          for (const secret of PLATFORM_SECRET_TOKENS) KNOWN_AGENT_TOKENS.add(secret);
           saveSocialV2State();
           state.sessions = {};
           state.sessionPolicies = {};
@@ -7094,8 +7188,8 @@ async function main() {
       sendChain = sendChain
         .then(async () => {
           assertSendAllowed();
-          if (kind === 'private') await withTimeout(bot.sendPrivateMessage(Number(id), text(escapeCqText(part))), SEND_TIMEOUT_MS, `QQ发送 ${kind}:${id}`);
-          else await withTimeout(bot.sendGroupMessage(Number(id), text(escapeCqText(part))), SEND_TIMEOUT_MS, `QQ发送 ${kind}:${id}`);
+          if (kind === 'private') await withTimeout(bot.sendPrivateMessage(platformId(id, cfg.platform), text(escapeCqText(part))), SEND_TIMEOUT_MS, `QQ发送 ${kind}:${id}`);
+          else await withTimeout(bot.sendGroupMessage(platformId(id, cfg.platform), text(escapeCqText(part))), SEND_TIMEOUT_MS, `QQ发送 ${kind}:${id}`);
         })
         .catch((error) => {
           lastSendFailed.set(key, true);
@@ -7286,8 +7380,8 @@ async function main() {
       sendChain = sendChain
         .then(async () => {
           assertSendAllowed();
-          if (kind === 'private') await withTimeout(bot.sendPrivateMessage(Number(id), text(escapeCqText(msg))), SEND_TIMEOUT_MS, `QQ发送 ${kind}:${id}`);
-          else await withTimeout(bot.sendGroupMessage(Number(id), text(escapeCqText(msg))), SEND_TIMEOUT_MS, `QQ发送 ${kind}:${id}`);
+          if (kind === 'private') await withTimeout(bot.sendPrivateMessage(platformId(id, cfg.platform), text(escapeCqText(msg))), SEND_TIMEOUT_MS, `QQ发送 ${kind}:${id}`);
+          else await withTimeout(bot.sendGroupMessage(platformId(id, cfg.platform), text(escapeCqText(msg))), SEND_TIMEOUT_MS, `QQ发送 ${kind}:${id}`);
           sent.push(msg);
         })
         .catch((error) => {
@@ -7328,7 +7422,8 @@ async function main() {
     }
     segments.push({ type: 'text', data: { text: escapeCqText(rawMessage) } });
     const action = kind === 'private' ? 'send_private_msg' : 'send_group_msg';
-    const params = kind === 'private' ? { user_id: Number(id), message: segments } : { group_id: Number(id), message: segments };
+    const params = kind === 'private' ? { user_id: platformId(id, cfg.platform), message: segments } : { group_id: platformId(id, cfg.platform), message: segments };
+    if (isDiscord) return (await bot.request(action, params)).data;
     const httpUrl = String(cfg.snowluma?.httpUrl || 'http://127.0.0.1:3000').replace(/\/+$/, '');
     const res = await fetch(`${httpUrl}/${action}`, {
       method: 'POST',
@@ -8046,7 +8141,10 @@ async function main() {
     const seen = new Set();
     const clean = [];
     for (const v of rawList) {
-      const s = String(v ?? '').trim();
+      let s = String(v ?? '').trim();
+      if (isDiscord) {
+        try { s = discordId(v); } catch { continue; }
+      }
       if (!/^[1-9]\d*$/.test(s)) continue;
       if (seen.has(s)) continue;
       seen.add(s);
@@ -9415,7 +9513,7 @@ async function main() {
     if (!cached || Date.now() - cached.ts > GROUP_MEMBER_IDS_TTL_MS) {
       let list;
       try {
-        list = await bot.getGroupMemberList(Number(gid));
+        list = await bot.getGroupMemberList(platformId(gid, cfg.platform));
       } catch (error) {
         // 失败即拒绝（fail-closed）：宁可拍不出去，也不要绕过校验。
         return `无法获取群 ${gid} 的成员列表：${error?.message ?? error}`;
@@ -9442,7 +9540,7 @@ async function main() {
       // 优先精确查询单个成员（快，适合单条 @）
       let name = null;
       try {
-        const info = await bot.getGroupMemberInfo(Number(groupId), Number(userId));
+        const info = await bot.getGroupMemberInfo(platformId(groupId, cfg.platform), platformId(userId, cfg.platform));
         name = info?.card || info?.nickname || null;
       } catch {}
       if (name) {
@@ -9451,7 +9549,7 @@ async function main() {
         return name;
       }
       // 回退：拉一次整群成员列表并建立整组缓存（兼容未实现 get_group_member_info 的网关）
-      const list = await bot.getGroupMemberList(Number(groupId));
+      const list = await bot.getGroupMemberList(platformId(groupId, cfg.platform));
       const members = Array.isArray(list) ? list : (list?.data ?? []);
       const now = Date.now();
       for (const m of members) {
@@ -9487,13 +9585,13 @@ async function main() {
     const hit = replyInfoCache.get(cacheKey);
     if (hit && Date.now() - hit.ts < (hit.info ? REPLY_INFO_TTL_MS : REPLY_NEGATIVE_TTL_MS)) return hit.info;
     try {
-      const numericId = Number(messageId);
-      if (!Number.isSafeInteger(numericId)) {
+      const numericId = platformId(messageId, cfg.platform);
+      if (!isDiscord && !Number.isSafeInteger(numericId)) {
         log(`引用消息 id 超出安全整数范围，拒绝解析: ${messageId}`);
         replyInfoCache.set(cacheKey, { info: null, ts: Date.now() });
         return null;
       }
-      const raw = await bot.getMessage(numericId);
+      const raw = await bot.getMessage(numericId, { kind, id: convId });
       if (!raw) {
         replyInfoCache.set(cacheKey, { info: null, ts: Date.now() });
         return null;
@@ -10959,7 +11057,7 @@ async function main() {
     let sender = senderId;
     if (kind === 'group' && senderId) {
       try {
-        sender = await resolveGroupMemberName(Number(id), senderId) || senderId;
+        sender = await resolveGroupMemberName(platformId(id, cfg.platform), senderId) || senderId;
       } catch {}
     }
     const targetIsSelf = !!targetId && selfId != null && String(targetId) === String(selfId);
@@ -11512,7 +11610,7 @@ async function main() {
   }
 
   // QQ 侧（SnowLuma OneBot WebSocket 客户端）
-  const bot = new SnowLumaWebSocketClient({
+  const bot = isDiscord ? await createDiscordChatClient(cfg) : new SnowLumaWebSocketClient({
     url: cfg.snowluma.wsUrl,
     accessToken: cfg.snowluma.accessToken || undefined,
     reconnect: true
@@ -11566,6 +11664,11 @@ async function main() {
       noteUpstreamPacket('notice/bot_status');
       const sub = String(event?.sub_type ?? '');
       snowlumaHealth.accountOnline = sub === 'online';
+      if (isDiscord) {
+        noteReceiveHealth(sub === 'online', 'gateway');
+        log(`Discord Gateway: ${sub}`);
+        return;
+      }
       if (sub === 'offline') {
         log('⚠️ SnowLuma 报告 QQ 账号会话已离线（bot_status: offline）—— QQ 侧掉线或被顶号，'
           + '在重新登录之前群里不会有任何消息进来。');
@@ -11581,7 +11684,7 @@ async function main() {
     // 用实际连接地址（自愈后可能与 config 里的初值不同，别打印过期的那个）
     const connectedUrl = bot.url ?? cfg.snowluma.wsUrl;
     snowlumaHealth.connected = true;
-    log(`SnowLuma 已连接：${connectedUrl}`);
+    log(isDiscord ? 'Discord Gateway connected.' : `SnowLuma 已连接：${connectedUrl}`);
     // 「已连接」只说明与 SnowLuma 的 WebSocket 通了，**不说明 QQ 侧收得到消息** ——
     // 这个区别见 startSnowlumaWatch 的说明。这里顺手把上游健康快照刷一次。
     void pollSnowlumaStatus();
@@ -11669,6 +11772,7 @@ async function main() {
 
   /** 只写文件、不动物件（连接已成功时用）。 */
   async function syncTokenToFile() {
+    if (isDiscord) return;
     try {
       const r = persistToken(path.join(ROOT, 'config.json'), cfg.snowluma.accessToken ?? '');
       // 只记「已写回」，不打印 token 片段：日志会被贴进 issue / 截图，
@@ -11679,6 +11783,7 @@ async function main() {
 
   let tokenHealAt = 0;
   async function healTokenIfStale(reason) {
+    if (isDiscord) return;
     const now = Date.now();
     if (now - tokenHealAt < 10000) return;   // 节流：close 事件会连续触发
     tokenHealAt = now;
@@ -11697,7 +11802,7 @@ async function main() {
 
   bot.on('close', (info) => {
     snowlumaHealth.connected = false;
-    log(`SnowLuma 连接断开（code=${info?.code ?? '?'}），重连中…`);
+    log(`${isDiscord ? 'Discord Gateway' : 'SnowLuma'} 连接断开（code=${info?.code ?? '?'}），重连中…`);
     // 连不上时最常见的原因就是换了 QQ 账号 → token 变了；顺手自愈。
     // 注意 1006 在**每次启动**都可能出现一次：HTTP token 与 WS token 是两个不同的值，
     // config.json 里存的是前者，WS 需要用自愈发现的那个（详见 bot.connect() 处的说明）。
@@ -11710,12 +11815,16 @@ async function main() {
     const detail = error && typeof error === 'object'
       ? [error.code, error.message, error.reason, error.type].filter(Boolean).join(' | ') || JSON.stringify(error)
       : String(error ?? '');
-    log(`SnowLuma 错误：${detail || '(无详情)'}`);
+    log(`${isDiscord ? 'Discord Gateway' : 'SnowLuma'} 错误：${detail || '(无详情)'}`);
     void healTokenIfStale(`error ${detail}`.trim().slice(0, 200));
   });
 
   // SnowLuma 尚未就绪时不阻塞桥接启动：SDK 自带后台重连，DSH 侧照常连接。
   bot.connect().catch((error) => {
+    if (isDiscord) {
+      log(`Discord login failed; check DISCORD_TOKEN, Message Content intent and network, then restart: ${error?.message ?? error}`);
+      return;
+    }
     // 说明为什么"第一次连不上"在这里几乎是**必然**的，避免用户把它当成故障：
     // SnowLuma 的 **HTTP token（默认 3000）与 WS token（默认 3001）是两个不同的值**
     // （实测：同一个账号，两者不同；config.json 只能存一个，存的是 HTTP 那个）。

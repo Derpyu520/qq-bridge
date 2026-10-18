@@ -4,7 +4,11 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
+let discordInstalled = false;
+try { import.meta.resolve('discord.js'); discordInstalled = true; } catch {}
+if (!discordInstalled) console.log('SKIP optional Discord transport tests: discord.js is not installed.');
 const tests = [
+  ...(discordInstalled ? ['test-discord.mjs'] : []), 'test-chat-platform.mjs',
   'test-audit-bridge.mjs', 'test-audit-protocol.mjs', 'test-audit-protocol-helpers.mjs',
   'test-audit-security.mjs', 'test-audit-security-mcp.mjs',
   'test-audit-setup.mjs', 'test-audit-setup-guards.mjs',

@@ -24,6 +24,10 @@ function fixture(name, patch = '') {
   fs.copyFileSync(path.join(root, 'scripts/setup-dsh.mjs'), path.join(repo, 'scripts/setup-dsh.mjs'));
   // setup-dsh.mjs 直接从仓库源生成 bundle patch，生成器必须一起进夹具。
   fs.copyFileSync(path.join(root, 'scripts/build-agent-preset-patches.mjs'), path.join(repo, 'scripts/build-agent-preset-patches.mjs'));
+  fs.mkdirSync(path.join(repo, 'src'), { recursive: true });
+  for (const name of ['chat-platform.js', 'discord-id.js']) {
+    fs.copyFileSync(path.join(root, 'src', name), path.join(repo, 'src', name));
+  }
   fs.cpSync(path.join(root, 'dsh'), path.join(repo, 'dsh'), { recursive: true });
   fs.cpSync(path.join(root, 'plugins'), path.join(repo, 'plugins'), { recursive: true });
   fs.cpSync(parserRoot, path.join(repo, 'node_modules/js-yaml'), { recursive: true });

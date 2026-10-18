@@ -3155,7 +3155,10 @@ document.getElementById('dshEffortSave').addEventListener('click', async () => {
 document.getElementById('silentOn').addEventListener('click', async () => { await api('/api/role-mode', 'POST', { mode: 'silent' }); refresh(); });
 document.getElementById('silentOff').addEventListener('click', async () => { await api('/api/role-mode', 'POST', { mode: 'active' }); refresh(); });
 document.getElementById('wlSave').addEventListener('click', async () => {
-  const parse = (s) => s.split(/[,，\s]+/).map(x => x.trim()).filter(Boolean).map(Number).filter(Number.isFinite);
+  const parse = (s) => {
+    const values = s.split(/[,，\s]+/).map(x => x.trim()).filter(Boolean);
+    return consolePlatform === 'discord' ? values : values.map(Number).filter(Number.isFinite);
+  };
   const r = await api('/api/whitelist', 'POST', {
     allow: { private: parse(document.getElementById('wlPrivate').value), groups: parse(document.getElementById('wlGroups').value) },
     deny: { private: parse(document.getElementById('dnPrivate').value), groups: parse(document.getElementById('dnGroups').value) },
@@ -3203,6 +3206,7 @@ let voiceEntries = [];
 let voiceLibraryLoaded = false;
 // 只在首次进入/手动刷新时拉取：语音库会逐个 ffprobe 探测时长，放进 3 秒轮询会白白压网关。
 async function loadVoiceLibrary(force) {
+  if (consolePlatform === 'discord') return;
   if (voiceLibraryLoaded && force !== true) return;
   const box = document.getElementById('voiceList');
   const msg = document.getElementById('voiceMsg');
@@ -4436,6 +4440,7 @@ const consolePages = {
   reference: ['工具参考', '每一种能力，都清晰可见。', '查看桥接提供给 DSH 的 MCP 工具与用途。']
 };
 let currentConsolePage = 'overview';
+let consolePlatform = 'qq';
 let toastTimer;
 function showConsoleToast(message) {
   const toast = document.getElementById('consoleToast');
@@ -4457,7 +4462,7 @@ function setConsolePage(page, { updateHash = true, focus = false, target = '' } 
   document.getElementById('breadcrumbPage').textContent = consolePages[page][0];
   document.getElementById('pageTitle').textContent = consolePages[page][1];
   document.getElementById('pageDescription').textContent = consolePages[page][2];
-  document.title = consolePages[page][0] + ' · QQ 桥接控制台';
+  document.title = consolePages[page][0] + ' · ' + (consolePlatform === 'discord' ? 'Discord' : 'QQ') + ' 桥接控制台';
   if (updateHash && location.hash !== '#' + page) history.pushState({}, '', '#' + page);
   closeConsoleSearch();
   // 语音库按需加载：进入二代仿真页时才探测（避免每次开控制台都压网关）。
@@ -4480,13 +4485,30 @@ document.querySelector('.skip-link').addEventListener('click', event => {
   document.getElementById('mainContent').scrollIntoView({ block: 'start', behavior: 'instant' });
 });
 function updateOverview(status, modeLabel) {
+  consolePlatform = status.platform || 'qq';
   const connection = document.getElementById('statusText');
   connection.textContent = status.dshReady ? 'DSH 已连接' : 'DSH 未连接';
   connection.className = 'status-badge ' + (status.dshReady ? 'online' : 'offline');
   document.getElementById('metricDsh').textContent = status.dshReady ? '已连接' : '未连接';
   document.getElementById('metricDsh').className = status.dshReady ? 'ok' : 'err';
   document.getElementById('metricDshHint').textContent = status.dshReady ? '桥接状态已同步' : '请检查 DSH 是否运行';
-  renderSnowlumaHealth(status.snowluma);
+  renderSnowlumaHealth(status.discord || status.snowluma);
+  if (consolePlatform === 'discord') {
+    document.getElementById('metricSnowluma').previousElementSibling.textContent = 'Discord Gateway';
+    document.getElementById('metricSnowlumaHint').textContent = status.discord?.hint || 'Discord Gateway connected';
+    document.getElementById('metricSnowluma').textContent = status.discord?.degraded ? '连接异常' : '已连接';
+    for (const [id, label] of [
+      ['wlGroups', '允许的 Discord 频道/帖子 ID（逗号分隔）'],
+      ['wlPrivate', '允许的 Discord 用户 ID（逗号分隔）'],
+      ['dnGroups', '拒绝的 Discord 频道/帖子 ID（逗号分隔）'],
+      ['dnPrivate', '拒绝的 Discord 用户 ID（逗号分隔）'],
+      ['ownerQQ', '管理员 Discord 用户 ID（ownerId）'],
+    ]) document.getElementById(id).previousElementSibling.textContent = label;
+    for (const flag of ['sendPoke', 'getForwardMsg', 'listStickers', 'getStickerImage', 'sendSticker', 'setStickerRemark', 'stickerNote', 'collectSticker', 'getSelfImage', 'sendVoice']) {
+      const input = document.querySelector(`[data-v2-tool="${flag}"]`);
+      if (input) { input.disabled = true; input.checked = false; input.closest('label').title = 'Unavailable on Discord'; }
+    }
+  }
   document.getElementById('metricMode').textContent = modeLabel.replace('模式', '');
   document.getElementById('metricRole').textContent = '角色 · ' + (status.role || '默认人格');
   document.getElementById('accessSummary').textContent = '管理员 ' + (status.ownerQQ || '未设置') + ' · ' + (status.allowGroups || []).length + ' 个白名单群 · ' + (status.allowPrivate || []).length + ' 位白名单好友';

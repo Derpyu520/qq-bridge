@@ -45,14 +45,15 @@ export function presetBlockingSubstrings(preset = 'v2') {
 }
 
 /** 硬性校验：返回阻止保存的原因列表（空数组=可保存）。preset 取 'v1' / 'v2'。 */
-export function presetPromptBlockers(content, preset = 'v2') {
+export function presetPromptBlockers(content, preset = 'v2', platform = 'qq') {
   const text = String(content ?? '');
   const blockers = [];
   if (!text.trim()) {
     blockers.push('仿真提示词不能为空');
     return blockers;
   }
-  for (const needle of presetBlockingSubstrings(preset)) {
+  for (const marker of presetBlockingSubstrings(preset)) {
+    const needle = platform === 'discord' ? marker.replace('QQ', 'Discord') : marker;
     if (!text.includes(needle)) {
       blockers.push(`缺少安全不变量「${needle}」：删除它会让 AI 的权限边界失效，并使 npm run test:audit 失败`);
     }
@@ -126,7 +127,7 @@ export function presetPromptWarnings(content) {
  * @param {'v1'|'v2'} preset 预设代次（决定用哪一套硬性不变量）
  * @returns {string} 新的 YAML 全文
  */
-export function renderPresetPromptYaml(text, content, preset = 'v2') {
+export function renderPresetPromptYaml(text, content, preset = 'v2', platform = 'qq') {
   const loc = locatePresetPromptBlock(text);
   if (!loc) throw new Error('无法定位预设里的 prefix 块（文件结构可能已变化）');
   const normalized = String(content ?? '').replace(/\r\n/g, '\n').replace(/\n+$/, '');
@@ -134,7 +135,7 @@ export function renderPresetPromptYaml(text, content, preset = 'v2') {
   if (bytes > PRESET_PROMPT_MAX_BYTES) {
     throw new Error(`仿真提示词过长（${(bytes / 1024).toFixed(1)} KB，上限 ${PRESET_PROMPT_MAX_BYTES / 1024} KB）`);
   }
-  const blockers = presetPromptBlockers(normalized, preset);
+  const blockers = presetPromptBlockers(normalized, preset, platform);
   if (blockers.length) throw new Error(blockers.join('；'));
   // 新增行沿用文件的主导行尾，避免把 CRLF 文件写成更混乱的混合行尾。
   const crlf = (text.match(/\r\n/g) ?? []).length;

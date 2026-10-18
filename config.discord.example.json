@@ -1,0 +1,27 @@
+{
+  "platform": "discord",
+  "discord": {
+    "allowDMs": true,
+    "guildIds": []
+  },
+  "dsh": {
+    "baseUrl": "http://127.0.0.1:3080",
+    "provider": "deepseek-official",
+    "model": "deepseek-flash",
+    "reasoningEffort": "max"
+  },
+  "ownerId": null,
+  "agentPreset": "discord-chat",
+  "workspaceTitle": "Discord chat",
+  "allow": {
+    "private": [],
+    "groups": []
+  },
+  "deny": {
+    "private": [],
+    "groups": []
+  },
+  "allowAllWhenEmpty": false,
+  "ackMessage": "",
+  "consolePort": 3100
+}

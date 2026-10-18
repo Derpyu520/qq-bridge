@@ -5,6 +5,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { test } from 'node:test';
 import { z } from 'zod';
+import * as chatPlatform from '../src/chat-platform.js';
 
 function loadWebTools({ safeFetch, webSearch }) {
   const tools = new Map();
@@ -113,6 +114,7 @@ function loadSnowlumaTools(fetchImpl, fixtureConfig = null, httpImpl = null) {
     fs: fixtureFs,
     SENSITIVE_RE: { test: () => false },
     serializeModelData: (value) => JSON.stringify(value),
+    ...chatPlatform,
   });
   return async (name, arguments_ = {}) => {
     const tool = tools.get(name);

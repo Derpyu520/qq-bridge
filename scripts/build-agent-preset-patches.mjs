@@ -25,6 +25,7 @@ export const REPO_ROOT = path.resolve(__dirname, '..');
 
 /** 由桥接托管的两个 preset（顺序即 patch 层顺序）。 */
 export const PRESETS = ['qq-chat', 'qq-chat-v2'];
+export const DISCORD_PRESETS = ['discord-chat', 'discord-chat-v2'];
 
 /** preset 行 id：与 config.id（桥接解析的 preset 名）区分开，方便在 profile patch 里按行定位。 */
 export function presetRowId(name) {
@@ -49,7 +50,9 @@ const RELATIVE_ROW_REWRITES = new Map([
 
 export const BUNDLE_DIR = path.join(REPO_ROOT, 'plugins', 'qq-agent-presets');
 export function patchFileFor(name) {
-  return path.join(BUNDLE_DIR, 'presets', `${name}.patch.yml`);
+  const bundle = DISCORD_PRESETS.includes(name)
+    ? path.join(REPO_ROOT, 'plugins', 'discord-agent-presets') : BUNDLE_DIR;
+  return path.join(bundle, 'presets', `${name}.patch.yml`);
 }
 function sourceDirFor(name) {
   return path.join(REPO_ROOT, 'dsh', 'agent-presets', name);
@@ -94,7 +97,8 @@ function normalizeRows(rows, preset) {
         throw new Error(`${label}: 相对/绝对插件名 ${JSON.stringify(next.name)} 在 0.1.7 下会按 profile 目录解析，`
           + '必须改写为「bundle 包名/子路径」或去掉；请在 build-agent-preset-patches.mjs 里显式登记改写规则');
       }
-      next.name = rewrite;
+      next.name = DISCORD_PRESETS.includes(preset)
+        ? rewrite.replace('qq-agent-presets/', 'discord-agent-presets/') : rewrite;
     }
     if (row.group === true) {
       if (!Array.isArray(row.config)) throw new Error(`${label} 是 group 行但 config 不是行列表`);
@@ -118,6 +122,8 @@ export function renderPatch(name) {
     if (meta[field] === undefined) throw new Error(`${name}: preset.yml 缺少 ${field}`);
   }
   const plugins = normalizeRows(readYaml(path.join(dir, 'agent.cordis.yml')), name);
+  const guard = DISCORD_PRESETS.includes(name)
+    ? 'discord-agent-presets/qq-tool-restrict.mjs' : GUARD_SPECIFIER;
   const row = {
     id: presetRowId(name),
     name: '@deepseek-ai/dsh-agent-preset',
@@ -133,7 +139,7 @@ export function renderPatch(name) {
     `# 本文件由 scripts/build-agent-preset-patches.mjs 生成，请勿手工编辑。`,
     `# 源：dsh/agent-presets/${name}/preset.yml + agent.cordis.yml（人格正文与工具面都在那里改）。`,
     `# 作用：把 ${name} 作为一条 @deepseek-ai/dsh-agent-preset 行插入 profile（DSH 0.1.7+ 的 preset 机制）。`,
-    `# 守卫行 qq-tool-restrict 用裸说明符 ${GUARD_SPECIFIER}：子行 name 按 profile 目录解析，`,
+    `# 守卫行 qq-tool-restrict 用裸说明符 ${guard}：子行 name 按 profile 目录解析，`,
     `# 该包以 link: 依赖注册在 profile package.json（node_modules junction 由 setup-dsh.mjs 维护）。`,
     '',
   ].join('\n');
@@ -142,13 +148,13 @@ export function renderPatch(name) {
 }
 
 /** 生成（或校验）全部 patch 文件。@returns {{file:string,changed:boolean}[]} */
-export function buildPatches({ check = false, log = () => {} } = {}) {
+export function buildPatches({ check = false, log = () => {}, presets = PRESETS } = {}) {
   const results = [];
-  for (const name of PRESETS) {
+  for (const name of presets) {
     const file = patchFileFor(name);
     const content = renderPatch(name);
     const current = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
-    const changed = current !== content;
+    const changed = current?.replace(/\r\n/g, '\n') !== content.replace(/\r\n/g, '\n');
     if (changed && !check) {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, content, 'utf8');
@@ -162,7 +168,8 @@ export function buildPatches({ check = false, log = () => {} } = {}) {
 // 直接执行时：默认生成，--check 只校验。
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const check = process.argv.includes('--check');
-  const results = buildPatches({ check, log: (line) => console.log(`[preset-patches] ${line}`) });
+  const presets = process.argv.includes('--discord') ? DISCORD_PRESETS : PRESETS;
+  const results = buildPatches({ check, presets, log: (line) => console.log(`[preset-patches] ${line}`) });
   const stale = results.filter((r) => r.changed);
   if (check && stale.length > 0) {
     console.error(`[preset-patches] ERROR: ${stale.length} 个 patch 文件与源不一致；请运行 node scripts/build-agent-preset-patches.mjs`);

@@ -125,6 +125,27 @@ DSH 的 Windows 文件沙箱按**能力 SID** 授权：SID 由 `sha256(规范化
 - 响应体大小与图片像素上限；图片按 magic number 校验
 - 不读取任何代理环境变量（不存在 `HTTP_PROXY` 绕过）
 
+### 8. 可选 Discord 接入
+
+`platform: "discord"` 使用原生 Gateway / REST；未设置时继续使用 QQ。
+Discord 沿用共享的 `snowluma` MCP 名称、`qq_*` 工具、预设守卫与出站审计。
+受限会话使用独立的 `discord-chat` / `discord-chat-v2` 预设，设置写入 `discord-mode`。
+
+- Discord 用户、频道、线程与消息 ID 保留为十进制字符串；不安全的 JSON 数字被拒绝。
+- 每个频道/线程独立检查白名单；允许父频道或分类不等于允许其线程或子频道。
+  `discord.guildIds` 可进一步限制服务器，`discord.allowDMs` 可关闭私聊。
+- `/api/chat/action` 仍要求控制台令牌。会话调用只可读取机器人状态；
+  频道发现、成员与历史读取要求 `closed-agent` 且不携带会话令牌。
+  该端点不接受发送动作，发送继续经过既有审计端点。
+- QQ 专属动作在 MCP 注册、配置与桥接路由三处禁用；不能通过控制台重新开启。
+- 原生回复在目标频道回读验证；发送前再次检查目标白名单。
+  所有出站消息关闭自动 mention 通知，入站忽略机器人、webhook 与系统消息。
+- 机器人令牌优先从环境或被忽略的 `.env` 读取，并加入日志/出站脱敏集合；
+  清空工作区或淘汰会话令牌不会移除这类长期凭据。`.env` 应按本机凭据文件保护。
+
+离线回归入口：安装可选依赖后运行 `npm run test:discord`。
+具体权限、配置与未实现能力见 [DISCORD.md](DISCORD.md)。
+
 ---
 
 ## 三、已知残余风险（明确不修 / 修不了，必须让用户知道）

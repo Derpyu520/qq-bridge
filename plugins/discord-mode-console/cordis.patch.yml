@@ -1,0 +1,6 @@
+- insert:
+    - id: discord-mode
+      name: ./lib/index.js
+      config:
+        mode: reserved2
+        ownerId: ''

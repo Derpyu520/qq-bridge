@@ -10,6 +10,11 @@
 
 把 QQ 消息接入 DSH agent：QQ 好友/群发来的消息会变成 DSH 会话里的用户消息，agent 的回复（含提问、工具审批）会发回 QQ。
 
+**可选 Discord 接入**：在配置中设置 `"platform": "discord"`，使用
+[`config.discord.example.json`](config.discord.example.json) 作为起点。
+[Discord 安装说明](docs/guides/DISCORD.md) 包含机器人权限、令牌、频道/帖子白名单、
+唤醒方式与功能限制。未设置 `platform` 的原有配置仍默认使用 QQ。
+
 > ⚠️ **当前版本 `v0.2.0-r4`，适配 DSH 0.2.0-rc.2**（在该版本上逐项实测：`npm run verify:adaptation`）。
 > 鉴权用 `~/.dsh` 里持久化的浏览器会话签名密钥**离线铸造 Cookie** —— DSH 0.1.7 起进程启动 token
 > 只存在于内存、不再落盘，旧版「从 guard 日志里读 token」的方式已失效。agent preset 是 DSH 0.1.7 起的

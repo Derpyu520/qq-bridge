@@ -12,6 +12,12 @@ For the detailed Chinese guide, see **[docs/guides/PROJECT_GUIDE.md](docs/guides
 The documentation index (one line per doc, with "still current?" notes) is **[docs/README.md](docs/README.md)**;
 the repository/folder and script-naming conventions are in **[docs/FOLDER_MAP.md](docs/FOLDER_MAP.md)**.
 
+**Optional Discord transport:** set `"platform": "discord"` and use
+[`config.discord.example.json`](config.discord.example.json). The
+[Discord setup guide](docs/guides/DISCORD.md) covers bot permissions, credentials,
+channel/thread allowlists, wake behavior and feature limitations. Existing
+configurations continue to use QQ by default.
+
 ## Architecture
 
 ```

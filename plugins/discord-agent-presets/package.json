@@ -1,0 +1,15 @@
+{
+  "name": "discord-agent-presets",
+  "version": "0.2.0-r4",
+  "description": "Optional Discord chat presets for qq-bridge, using the shared restricted MCP tool contract.",
+  "type": "module",
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": [
+        "./presets/discord-chat.patch.yml",
+        "./presets/discord-chat-v2.patch.yml"
+      ]
+    }
+  }
+}

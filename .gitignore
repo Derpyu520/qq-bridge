@@ -66,3 +66,8 @@ docs/guides/VOICE.md
 # 语音库（用户个人音频素材，config.json 的 socialV2.voice.dir 指向此处）
 audio/
 
+# Local bot credentials
+.env
+.env.*
+!.env.example
+

@@ -19,6 +19,7 @@ import { z } from 'zod';
 // 在 MCP 里拦会连「安全拒绝理由」都拿不到，反而让模型无法把话说清楚。
 import { SENSITIVE_RE } from './sensitive.js';
 import { serializeModelData } from './qq-model-view.js';
+import { chatPlatform, platformId, DISCORD_UNAVAILABLE_TOOLS } from './chat-platform.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -34,6 +35,7 @@ function loadConfig() {
 }
 
 const cfg = loadConfig();
+const PLATFORM = chatPlatform(cfg);
 
 function getConfig() {
   return loadConfig();
@@ -42,10 +44,10 @@ function getConfig() {
 function getAccess() {
   const c = getConfig();
   return {
-    allowGroups: (c.allow?.groups ?? []).map(String),
-    allowPrivate: (c.allow?.private ?? []).map(String),
-    denyGroups: (c.deny?.groups ?? []).map(String),
-    denyPrivate: (c.deny?.private ?? []).map(String),
+    allowGroups: ((PLATFORM === 'discord' ? c.allow?.channels : undefined) ?? c.allow?.groups ?? []).map(String),
+    allowPrivate: ((PLATFORM === 'discord' ? c.allow?.users : undefined) ?? c.allow?.private ?? []).map(String),
+    denyGroups: ((PLATFORM === 'discord' ? c.deny?.channels : undefined) ?? c.deny?.groups ?? []).map(String),
+    denyPrivate: ((PLATFORM === 'discord' ? c.deny?.users : undefined) ?? c.deny?.private ?? []).map(String),
     allowAllWhenEmpty: c.allowAllWhenEmpty === true
   };
 }
@@ -85,6 +87,12 @@ function unquoteJsonString(value) {
 // 这里直接删除，避免以后有人以为 MCP 侧还有一道 CQ 转义而放松桥接那一层。
 
 async function onebot(action, params = {}) {
+  if (PLATFORM === 'discord') {
+    const result = await agentApi('/api/chat/action', {
+      method: 'POST', body: JSON.stringify({ action, params }),
+    });
+    return result.data;
+  }
   const { httpUrl, token } = getOneBotConfig();
   const res = await fetch(`${httpUrl}/${action}`, {
     method: 'POST',
@@ -350,9 +358,19 @@ const disabledTools = [];
   const registerTool = server.tool.bind(server);
   server.tool = (name, ...rest) => {
     const flag = TOOL_CONFIG_FLAGS[name];
-    if (flag && cfg.socialV2?.tools?.[flag] === false) {
+    if ((PLATFORM === 'discord' && DISCORD_UNAVAILABLE_TOOLS.has(flag))
+        || (flag && cfg.socialV2?.tools?.[flag] === false)) {
       disabledTools.push(`${name}(${flag})`);
       return undefined;
+    }
+    if (PLATFORM === 'discord') {
+      const ids = new Set(['groupId', 'userId', 'messageId', 'replyToMessageId', 'atUserId', 'targetUserId', 'messageSeq']);
+      rest[0] = rest[0].replace(/\bQQ\b/g, 'Discord').replace(/群号/g, '频道/帖子 ID');
+      rest[1] = Object.fromEntries(Object.entries(rest[1]).map(([key, field]) => {
+        if (!ids.has(key)) return [key, field];
+        const id = z.string().regex(/^[1-9]\d{0,19}$/).describe('Discord ID as a quoted decimal string');
+        return [key, field.isOptional() ? id.optional() : id];
+      }));
     }
     return registerTool(name, ...rest);
   };
@@ -419,7 +437,7 @@ server.tool(
       return { content: [{ type: 'text', text: `拒绝：群 ${g} 不在只读白名单中` }], isError: true };
     }
     try {
-      const data = await onebot('get_group_member_list', { group_id: Number(g) });
+      const data = await onebot('get_group_member_list', { group_id: platformId(g, PLATFORM) });
       const list = (Array.isArray(data) ? data : (data?.data ?? [])).map((m) => ({ user_id: m.user_id, nickname: m.nickname, card: m.card }));
       return { content: [{ type: 'text', text: serializeModelData(list) }] };
     } catch (error) {
@@ -446,7 +464,7 @@ server.tool(
       return { content: [{ type: 'text', text: `拒绝：群 ${g} 不在只读白名单中` }], isError: true };
     }
     try {
-      const params = { group_id: Number(g) };
+      const params = { group_id: platformId(g, PLATFORM) };
       if (messageSeq !== undefined) params.message_seq = messageSeq;
       const data = await onebot('get_group_msg_history', params);
       return { content: [{ type: 'text', text: serializeModelData(data) }] };
@@ -630,7 +648,7 @@ server.tool(
       triggers: z.object({
         atMention: z.boolean().optional().describe('被 @ 或引用自己时唤醒'),
         nameMention: z.boolean().optional().describe('被叫名字/昵称时唤醒'),
-        speakerIds: z.array(z.union([z.number(), z.string()])).max(20).optional().describe('指定群友 QQ 号数组：这些群友中任意一位发言时唤醒（可选，最多 20 个，不设置则不启用；私聊不适用，设置会被桥接清除；可从 qq_get_active_members / qq_get_group_members / qq_get_message_detail 的 userId/user_id 获取）'),
+        speakerIds: z.array(PLATFORM === 'discord' ? z.string().regex(/^[1-9]\d{0,19}$/) : z.union([z.number(), z.string()])).max(20).optional().describe('指定群友 QQ 号数组：这些群友中任意一位发言时唤醒（可选，最多 20 个，不设置则不启用；私聊不适用，设置会被桥接清除；可从 qq_get_active_members / qq_get_group_members / qq_get_message_detail 的 userId/user_id 获取）'),
         keywords: z.array(z.string()).optional().describe('出现任意关键词时唤醒'),
         question: z.boolean().optional().describe('被直接提问/点名挑战时唤醒'),
         poke: z.boolean().optional().describe('有人拍一拍时唤醒（群聊包括拍你和拍别人，私聊为对方拍你）'),

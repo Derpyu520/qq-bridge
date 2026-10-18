@@ -19,12 +19,17 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import yaml from 'js-yaml';
-import { BUNDLE_DIR, PRESETS, buildPatches, patchFileFor } from './build-agent-preset-patches.mjs';
+import { BUNDLE_DIR, PRESETS, DISCORD_PRESETS, buildPatches, patchFileFor } from './build-agent-preset-patches.mjs';
+import { chatPlatform } from '../src/chat-platform.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 const DSH_HOME = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
 const PROFILE = process.argv[2] || 'web';
+const configFile = path.join(REPO_ROOT, 'config.json');
+const PLATFORM = chatPlatform(fs.existsSync(configFile)
+  ? JSON.parse(fs.readFileSync(configFile, 'utf8').replace(/^\uFEFF/, '')) : {});
+const SELECTED_PRESETS = PLATFORM === 'discord' ? DISCORD_PRESETS : PRESETS;
 
 // A profile is a directory name, never a path (same boundary as DSH itself).
 if (PROFILE === '.' || PROFILE === '..' || PROFILE === 'node_modules'
@@ -83,15 +88,15 @@ function backupBeforeOverwrite(file, keep = 5) {
 //          ① 把 qq-agent-presets bundle 注册进 profile（link: 依赖 + bundles + junction）；
 //          ② 从仓库权威源（dsh/agent-presets/<preset>/）重新生成 patch 文件。
 //        旧目录不再写入、也不删除（见 reportLegacyPresetDir）。
-const BUNDLE_NAMES = ['qq-mode-console', 'qq-agent-presets'];
+const BUNDLE_NAMES = [`${PLATFORM}-mode-console`, `${PLATFORM}-agent-presets`];
 
 /** 从仓库源重新生成 bundle 里的 patch 文件（人格正文/工具面改了就必须重跑）。 */
 function regeneratePresetPatches() {
-  const results = buildPatches({ log: () => {} });
+  const results = buildPatches({ presets: SELECTED_PRESETS, log: () => {} });
   for (const { file, changed } of results) {
     log(`preset patch ${changed ? '已生成' : '已是最新'}: ${path.relative(REPO_ROOT, file)}`);
   }
-  for (const name of PRESETS) {
+  for (const name of SELECTED_PRESETS) {
     const file = patchFileFor(name);
     if (!fs.existsSync(file)) fatal(`preset patch 未生成：${file}`);
   }
@@ -107,7 +112,7 @@ function reportLegacyPresetDir() {
   const legacy = path.join(DSH_HOME, '.agent-presets');
   if (!fs.existsSync(legacy)) return;
   log(`注意：${legacy} 是 DSH 0.1.5 的 preset 安装目录，0.1.7 起不再被读取（保留未删，可自行备份后清理）`);
-  for (const name of PRESETS) {
+  for (const name of SELECTED_PRESETS) {
     const installed = path.join(legacy, name, 'agent.cordis.yml');
     if (!fs.existsSync(installed)) continue;
     const source = path.join(REPO_ROOT, 'dsh', 'agent-presets', name, 'agent.cordis.yml');
@@ -132,6 +137,7 @@ function mcpEntries() {
     'mcp-snowluma-host': { serverName: 'snowluma-host', script: path.join(REPO_ROOT, 'src', 'mcp-host-server.js') },
     'mcp-web-search-safe': { serverName: 'web-search-safe', script: path.join(REPO_ROOT, 'src', 'mcp-web-search-safe.js') },
   };
+  if (PLATFORM === 'discord') delete servers['mcp-snowluma-host'];
   let out = '# === qq-bridge MCP BEGIN ===\n';
   out += '# 由 scripts/setup-dsh.mjs 维护；这段区块会被整体替换，请勿手工编辑内部条目。\n';
   for (const [id, s] of Object.entries(servers)) {
