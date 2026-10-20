@@ -15,8 +15,10 @@
   name: '@deepseek-ai/dsh-persona'
   config:
     # DSH 0.1.5 起 dsh-persona 的字段为 prefix/suffix（旧版为 text）；
-    # {{model}} / {{cwd}} 由 agent loop 注册的提示词变量在每次装配时解析。
-    suffix: Your working directory is {{cwd}}.
+    # 只有 {{model}} / {{provider}} 是 DSH 0.2.0 注册的提示词变量——
+    # 旧版的 {{cwd}} 会报 `unknown prompt variable "{{cwd}}"` 并让整个会话 prompt 失败，
+    # 所以这里用静态句，不引用任何未注册变量。
+    suffix: This session is a QQ chat; there is no local working directory, shell, or file access.
     prefix: >-
       You are a coding agent powered by the {{model}} model.
 

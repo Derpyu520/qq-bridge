@@ -7,6 +7,9 @@ rem permission it prints a copy-pasteable command and exits 0.
 rem See docs/guides/SECURITY_BASELINE.md ("secrets at rest").
 node scripts\harden-state-acl.mjs --quiet
 :loop
+rem DSH desktop picks a fresh local port on every launch; re-point config.json
+rem at the live one. Never blocks startup: on failure the old baseUrl is kept.
+node scripts\detect-dsh-port.mjs
 node src/bridge.js
 set code=%errorlevel%
 if "%code%"=="2" (

@@ -11370,6 +11370,34 @@ async function main() {
                 }
               } else if (ended.reason.kind === 'error') {
                 const msg = ended.reason.error?.message ?? '未知错误';
+                // 原始错误在本机留一份：出站文本（QQ + 控制台活动日志 + bridge.log）都会过
+                // SENSITIVE_RE，形如 C:\... 的路径类报错会被整条替换成「（含敏感信息，已隐藏）」，
+                // 排错时只能去解压 DSH 的 session.v4.jsonl.zstd。这里不打码，但只写进 state/，
+                // 该目录已被 harden-state-acl 收紧到仅本机当前用户/SYSTEM/Administrators 可读。
+                try {
+                  fs.appendFileSync(
+                    path.join(STATE_DIR, 'agent-errors.log'),
+                    `[${new Date().toISOString()}] ${key} ${String(msg).replace(/\s+/g, ' ').slice(0, 2000)}\n`,
+                    'utf8',
+                  );
+                } catch {}
+                // 项目目录被移动/改名后，旧会话记录的 cwd 不存在，DSH 在 turn/start 直接拒绝：
+                // 每一轮都失败、错误又被打码，表现就是「bot 只会说处理出错」。自动丢掉失效映射，
+                // 让下一条消息按当前 state/agents 重新建会话（已经失效的会话本身留在 DSH 里）。
+                if (/working-directory:\s*directory does not exist/i.test(String(msg))) {
+                  const stale = state.sessions[key];
+                  if (stale) {
+                    delete state.sessions[key];
+                    delete state.sessionPolicies[key];
+                    reverse.delete(stale);
+                    collectors.delete(stale);
+                    saveState();
+                  }
+                  log(`♻️ ${key} 的 DSH 会话工作目录已失效，已重置映射（原 ${stale ?? '无'}）；完整错误见 state/agent-errors.log`);
+                  appendActivity(`${key} 会话工作目录失效，已自动重置映射，等待重发`);
+                  await sendToQQ(key, '⚠️ 这个 QQ 会话用的工作目录已经不存在了（项目被移动过），已自动重置会话；麻烦再发一次刚才的消息。');
+                  continue;
+                }
                 const safeMsg = shouldAuditKey(key) && SENSITIVE_RE.test(msg) ? '（含敏感信息，已隐藏）' : msg.slice(0, 500);
                 // 以前这里只发 QQ、不写日志：出问题时 bridge.log 里什么都没有，排查只能靠猜（PR #24）。
                 log(`⚠️ agent 处理出错 (${key})：${safeMsg}`);
