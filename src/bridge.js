@@ -53,6 +53,7 @@ import {
   applyStickerNote,
   markStickerUsed
 } from './sticker-lib.js';
+import { createInnerLife } from './inner-life.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -1385,6 +1386,10 @@ async function main() {
   hardenStateDirAcl();
   acquireLock();
   loadState();
+
+  // ── 内在状态：日记（分级遗忘）/ 心情与好感度 / 未完成的约定 ──────────────
+  // 与 social-v2.json 分开放：这三份是「人格层」数据，会话重置（/reset）不应该连带清掉。
+  const innerLife = createInnerLife({ stateDir: STATE_DIR, getConfig: () => cfg, log });
 
   // ── 群聊黑话/网络用语学习（slang） ──────────────────────────────────────
   let slangEntries = [];
@@ -6598,6 +6603,79 @@ async function main() {
           sendJson({ ok: true, key, category, formatted: formatMemoryV2({ ...st, ...raw }), raw });
           return;
         }
+        // ── 内在状态：日记 / 心情好感度 / 约定 ────────────────────────────────
+        // 这三个接口与 memory-* 同一套鉴权：agent token 绑定会话 + 工具开关 + 模式准入。
+        if (url.pathname === '/api/socialV2/diary' || url.pathname === '/api/socialV2/heart'
+            || url.pathname === '/api/socialV2/promise') {
+          const isDiary = url.pathname === '/api/socialV2/diary';
+          const isHeart = url.pathname === '/api/socialV2/heart';
+          const toolFlag = isDiary ? 'diary' : isHeart ? 'heart' : 'promise';
+          const toolName = isDiary ? 'qq_diary_*' : isHeart ? 'qq_heart_*' : 'qq_promise_*';
+          const body = req.method === 'POST' ? await readBody() : {};
+          const key = String((req.method === 'POST' ? body.key : url.searchParams.get('key')) ?? '').trim();
+          if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
+          if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2ToolEnabled(toolFlag)) { sendJson({ ok: false, error: `工具未启用：${toolName}` }, 403); return; }
+
+          if (isDiary) {
+            if (req.method === 'POST') {
+              const entry = innerLife.diaryAdd(key, {
+                level: String(body.level ?? '').trim() || 'normal',
+                text: redactKnownTokensOnly(String(body.text ?? '').trim()),
+                mood: String(body.mood ?? '').trim(),
+                unsaid: redactKnownTokensOnly(String(body.unsaid ?? '').trim())
+              });
+              sendJson({ ok: true, key, entry, formatted: innerLife.diaryBrief(key, 5) });
+              return;
+            }
+            const list = innerLife.diarySearch(key, {
+              query: String(url.searchParams.get('query') ?? '').trim(),
+              level: String(url.searchParams.get('level') ?? '').trim(),
+              limit: url.searchParams.get('limit')
+            });
+            const lines = list.map((e) => `[${e.level}|${new Date(e.at).toLocaleString()}] ${e.text}${e.unsaid ? `（没说出口：${e.unsaid}）` : ''}`);
+            sendJson({ ok: true, key, count: list.length, entries: list, formatted: lines.length ? lines.join('\n') : '（没有匹配的日记）' });
+            return;
+          }
+
+          if (isHeart) {
+            if (req.method === 'POST') {
+              const next = innerLife.heartUpdate(key, {
+                affinityDelta: body.affinityDelta,
+                mood: String(body.mood ?? '').trim(),
+                reason: redactKnownTokensOnly(String(body.reason ?? '').trim())
+              });
+              sendJson({ ok: true, key, heart: { affinity: next.affinity, mood: next.mood }, formatted: innerLife.heartLine(key) });
+              return;
+            }
+            const h = innerLife.heartGet(key);
+            sendJson({ ok: true, key, heart: { affinity: h.affinity, mood: h.mood }, formatted: innerLife.heartLine(key) });
+            return;
+          }
+
+          // promise
+          const action = String(body.action ?? (req.method === 'GET' ? 'list' : 'add')).trim();
+          if (req.method === 'POST' && action === 'add') {
+            const item = innerLife.promiseAdd(key, {
+              text: redactKnownTokensOnly(String(body.text ?? '').trim()),
+              dueAt: body.dueAt
+            });
+            sendJson({ ok: true, key, item, formatted: innerLife.promiseLine(key) || '（没有未完成的约定）' });
+            return;
+          }
+          if (req.method === 'POST' && action === 'done') {
+            const item = innerLife.promiseDone(key, { id: String(body.id ?? '').trim(), text: String(body.text ?? '').trim() });
+            if (!item) { sendJson({ ok: false, error: '找不到对应的约定（用 id 或原文精确匹配）' }, 404); return; }
+            sendJson({ ok: true, key, item, formatted: innerLife.promiseLine(key) || '（没有未完成的约定）' });
+            return;
+          }
+          const open = innerLife.promiseOpen(key);
+          const due = innerLife.promiseDue(key);
+          sendJson({ ok: true, key, count: open.length, dueCount: due.length, items: open, formatted: innerLife.promiseLine(key) || '（没有未完成的约定）' });
+          return;
+        }
+
         if (req.method === 'POST' && url.pathname === '/api/socialV2/memory-remove') {
           const body = await readBody();
           const key = String(body.key ?? '').trim();
@@ -10048,7 +10126,13 @@ async function main() {
     // 后续唤醒不再带它 —— 那时它已经在这条 DSH 会话的上下文里了。
     const initialPromptText = reason === 'bootstrap' ? formatInitialPromptV2(key) : '';
     const initialPromptLine = initialPromptText ? `${initialPromptText}\n\n` : '';
-    const base = roleLine + identityLine + tokenLine + initialPromptLine + antiAiLine + proactiveLine + stickerLine + replyLine + statusLine + wakeLine + memoryLine + participationLine + preSleepLine;
+    // 内在状态（心情/好感度、到期约定、最近日记）：每轮唤醒都带上，语气和决定都据此走。
+    const innerText = innerLife.wakeBrief(key);
+    const innerLine = innerText ? `${innerText}\n\n` : '';
+    const innerGuide = (v2ToolEnabled('diary') || v2ToolEnabled('heart') || v2ToolEnabled('promise'))
+      ? '【内在状态怎么用】你有三样别人看不到的东西：日记（qq_diary_write 记、qq_diary_search 翻，普通 7 天/重要 30 天/非常重要永不忘）、心情与好感度（qq_heart_update，只在情绪真的动了的时候动、一次最多几个点）、没兑现的约定（qq_promise_add，答应过的事到点会被单独唤醒）。别为了用而用，也不要每轮都写日记。\n\n'
+      : '';
+    const base = roleLine + identityLine + tokenLine + initialPromptLine + antiAiLine + proactiveLine + stickerLine + replyLine + statusLine + innerGuide + innerLine + wakeLine + memoryLine + participationLine + preSleepLine;
     if (reason === 'bootstrap') {
       return `${base}【引导唤醒】你已接入 QQ 会话 ${key}。\n当前是二代仿真模式：你的文本输出不会自动发送到 QQ，所有发言必须通过工具完成。\n请先调用 qq_get_prompt 查看角色、推荐值、可用工具和状态；有待回应的消息先按首回复节奏处理，最后才用 qq_set_wake_config 设置你希望如何被唤醒。`;
     }
@@ -10060,6 +10144,15 @@ async function main() {
     }
     if (reason === 'proactiveCheck') {
       return `${base}【主动机会】${key}\n原因：群里已经安静了一段时间，这是一次你可以主动冒泡的机会。\n优先主动开个话题、追问上次没聊完的事、分享一个刚想到的想法；如果一时想不到，可以用 mcp__web-search-safe__web_search 搜一下当前热点/时事/网络热梗，再结合记忆里的群友兴趣挑一个自然角度。只要内容自然，就大胆开口；如果实在没话想说，再安静收尾（qq_mark_read 或 qq_set_wake_config）。`;
+    }
+    if (reason === 'promiseDue') {
+      return `${base}【约定到期】${key}\n原因：上面对话里你答应过的事已经到了约定的时间点，所以来提醒你一次。\n要不要现在就做、要不要跟对方提，由你自己决定：可以做完了再自然地提一句，也可以先问一句对方还要不要；如果现在不方便，用 qq_promise_add 重新约定一个时间，或直接告诉对方改天。不想提就按收尾流程安静收尾。`;
+    }
+    if (reason === 'missing') {
+      return `${base}【想找他】${key}\n原因：已经有一段时间没聊了，而你现在的心情和好感度让你有点想找他说说话。\n这不是任务，是念头：想到什么就自然开口（今天发生的事、突然想起来的话、上次没聊完的），不想说也可以安静收尾。别用「在吗」式空话开场。`;
+    }
+    if (reason === 'diaryReview') {
+      return `${base}【日记时间】${key}\n原因：凌晨了，到了整理今天的时间。\n先回想今天这段聊天：有没有值得留下的、值得记住的事？有的话用 qq_diary_write 记下来（普通/重要/非常重要），并写下当时的心情、以及不好意思当面说的话。今天如果没什么值得记的，就什么都不写，不要为了写而写。顺便看一眼情绪：如果今天有让你心情变化的事，用 qq_heart_update 更新一次。`;
     }
     if (reason === 'poke') {
       return `${base}【唤醒】${key}\n原因：有人拍了一拍（可能拍了你，也可能拍了别人）。\n先看未读/最近消息里的 [拍一拍] 事件：如果是拍你，可以自然回应一句，也可以用 qq_send_poke 回一个拍一拍；如果是拍别人，觉得有趣也可以接梗。除了回应，偶尔也可以主动戳一下正在聊的人/熟人，像真人手贱/提醒/逗一下，但别频繁。不想接就安静收尾（qq_mark_read 或 qq_set_wake_config）。`;
@@ -10441,6 +10534,17 @@ async function main() {
     st.proactiveTimer = setTimeout(() => {
       st.proactiveTimer = null;
       ensureWakeableV2(st, { key });
+
+      // ① 约定的主动性：到期的约定不看概率，直接给一次唤醒（做不做仍由 AI 决定）
+      const duePromises = innerLife.promiseDueUnnotified(key);
+      if (duePromises.length && !isConversationBusyV2(key, st)) {
+        for (const item of duePromises) innerLife.promiseMarkNotified(key, item.id);
+        log(`[reserved2] 约定到期，唤醒 ${key}（${duePromises.length} 条）`);
+        void sendWakePromptV2(key, 'promiseDue').catch((error) => log(`[reserved2] promiseDue 唤醒异常 ${key}:`, error?.message ?? error));
+        scheduleProactiveCheckV2(key);
+        return;
+      }
+
       const idleThreshold = Number(p.idleThresholdMs) || 15 * 60 * 1000;
       const idle = Date.now() - (st.lastIncomingAt || 0);
       const probBase = Number(p.probability);
@@ -10453,13 +10557,73 @@ async function main() {
       const recent = Array.isArray(st.recentMessages) ? st.recentMessages : [];
       const aiCount = recent.filter((m) => m && m.isSelf && Date.now() - Number(m.time || 0) < 60 * 60 * 1000).length;
       if (aiCount >= 5) prob *= 0.3;
-      if (idle >= idleThreshold && Math.random() < prob && !isConversationBusyV2(key, st)) {
-        void sendWakePromptV2(key, 'proactiveCheck').catch((error) => log(`[reserved2] proactive 唤醒异常 ${key}:`, error?.message ?? error));
+
+      // ② 心情 / 好感度给「随性主动」加权：关系越好越想说，低落时更想找人说话，烦躁时更不想。
+      const h = innerLife.heartGet(key);
+      const affinityFactor = 0.6 + (Math.max(0, Math.min(100, h.affinity.score)) / 100) * 0.8; // 0.6 ~ 1.4
+      const moodFactor = h.mood.label === 'low' || h.mood.label === 'sad' ? 1.25
+        : h.mood.label === 'irritated' ? 0.7 : 1;
+      prob = Math.min(1, prob * affinityFactor * moodFactor);
+
+      // ③ 想你的主动性：空闲超过 missingIdleMs 时，按好感度给一个独立的「想找他」概率
+      const innerCfg = cfg.socialV2?.innerLife ?? {};
+      const missingIdle = Math.max(60_000, Number(innerCfg.missingIdleMs) || 2 * 60 * 60 * 1000);
+      const missingProb = Math.min(0.45, 0.08 + (Math.max(0, Math.min(100, h.affinity.score)) / 100) * 0.3);
+      if (!isConversationBusyV2(key, st)) {
+        if (idle >= missingIdle && Math.random() < missingProb) {
+          void sendWakePromptV2(key, 'missing').catch((error) => log(`[reserved2] missing 唤醒异常 ${key}:`, error?.message ?? error));
+        } else if (idle >= idleThreshold && Math.random() < prob) {
+          void sendWakePromptV2(key, 'proactiveCheck').catch((error) => log(`[reserved2] proactive 唤醒异常 ${key}:`, error?.message ?? error));
+        }
       }
       scheduleProactiveCheckV2(key);
     }, delay);
     st.proactiveTimer.unref?.();
     log(`[reserved2] 已安排主动机会检查 ${key}，约 ${Math.round(delay / 60000)}min 后`);
+  }
+
+  // ── 内在状态每日维护：遗忘过期日记 + 唤醒各会话写当天日记 ─────────────────
+  // 为什么不做成「每天 4 点一次性定时器」：桥接可能中途重启，一次性 timer 会丢；
+  // 改成每 10 分钟 tick，用「当天是否已跑过」去重，重启也能补上（只要当天还没过点）。
+  let lastInnerSweepDay = '';
+  function startInnerLifeScheduler() {
+    if (cfg.socialV2?.innerLife?.enabled === false) return;
+    const tick = () => {
+      const now = new Date();
+      const sweepHour = Math.min(23, Math.max(0, Number(cfg.socialV2?.innerLife?.sweepHour ?? 4)));
+      if (now.getHours() !== sweepHour) return;
+      const day = now.toDateString();
+      if (lastInnerSweepDay === day) return;
+      lastInnerSweepDay = day;
+      const swept = innerLife.diarySweep();
+      log(`[inner] 日记遗忘完成：删除 ${swept.removed} 条，剩余 ${swept.remaining} 条`);
+      if (cfg.socialV2?.innerLife?.diaryReviewEnabled === false) return;
+      for (const key of socialV2.conversations.keys()) {
+        if (!isSessionAllowedInCurrentMode(key)) continue;
+        const st = socialV2.conversations.get(key);
+        if (!st || isConversationBusyV2(key, st)) continue;
+        void sendWakePromptV2(key, 'diaryReview').catch((error) => log(`[inner] 日记唤醒异常 ${key}: ${error?.message ?? error}`));
+      }
+    };
+    tick();
+    setInterval(tick, 10 * 60 * 1000).unref?.();
+    // 约定到点检查：60 秒一轮，比 proactive（30~90 分钟）及时得多。
+    // 同一条约定只唤醒一次（notifiedAt），避免 AI 没处理就每轮被叫。
+    setInterval(() => {
+      if (cfg.socialV2?.innerLife?.enabled === false) return;
+      if (currentMode !== 'reserved2' || socialV2.paused) return;
+      for (const key of socialV2.conversations.keys()) {
+        if (!isSessionAllowedInCurrentMode(key)) continue;
+        const st = socialV2.conversations.get(key);
+        if (!st || isConversationBusyV2(key, st)) continue;
+        const due = innerLife.promiseDueUnnotified(key);
+        if (!due.length) continue;
+        for (const item of due) innerLife.promiseMarkNotified(key, item.id);
+        log(`[inner] 约定到期，唤醒 ${key}（${due.map((p) => p.text).join(' / ')}）`);
+        void sendWakePromptV2(key, 'promiseDue').catch((error) => log(`[inner] 约定唤醒异常 ${key}: ${error?.message ?? error}`));
+      }
+    }, 60 * 1000).unref?.();
+    log(`[inner] 内在状态维护已启动（每天 ${Number(cfg.socialV2?.innerLife?.sweepHour ?? 4)} 点清理日记）`);
   }
 
   function clearSocialV2Timers(key) {
@@ -11761,6 +11925,7 @@ async function main() {
   startDshWatch();
   startSnowlumaWatch();
   startConsoleServer();
+  startInnerLifeScheduler();
 
   await pumpMux();
 }

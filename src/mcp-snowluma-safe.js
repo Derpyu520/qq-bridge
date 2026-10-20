@@ -325,6 +325,12 @@ const TOOL_CONFIG_FLAGS = {
   qq_memory_query: 'memory',
   qq_memory_remove: 'memory',
   qq_memory_clear: 'memory',
+  qq_diary_write: 'diary',
+  qq_diary_search: 'diary',
+  qq_heart_get: 'heart',
+  qq_heart_update: 'heart',
+  qq_promise_add: 'promise',
+  qq_promise_done: 'promise',
   qq_slang_query: 'slangQuery',
   qq_slang_submit: 'slangSubmit',
   qq_send_voice: 'sendVoice',
@@ -960,6 +966,145 @@ server.tool(
       return { content: [{ type: 'text', text: serializeModelData(data) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `记忆清空失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+// ── 内在状态：日记 / 心情好感度 / 约定 ──────────────────────────────────────
+// 这三组是「人格层」的读写口：数据落在桥接的 state/{diary,heart,promises}.json，
+// 按会话分桶，不参与任何权限判定。
+server.tool(
+  'qq_diary_write',
+  '写一条日记。普通事情一周后自动遗忘，重要事情一个月后遗忘，非常重要永不忘。日记里可以写当时的心情，以及不好意思当面说出口的话；之后的唤醒会带上最近的日记。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    level: z.enum(['normal', 'important', 'critical']).describe('重要程度：normal 普通（7 天遗忘）/ important 重要（30 天）/ critical 非常重要（永不遗忘）'),
+    text: z.string().describe('日记正文，尽量具体：发生了什么、谁说的、你怎么想'),
+    mood: z.enum(['happy', 'calm', 'low', 'sad', 'irritated', 'excited', 'tired']).optional().describe('当时的心情'),
+    unsaid: z.string().optional().describe('不好意思当面说出口的话（只有你看得到，不会发出去）')
+  },
+  async ({ key, token, level, text, mood, unsaid }) => {
+    try {
+      const data = await agentApi('/api/socialV2/diary', {
+        method: 'POST',
+        body: JSON.stringify({ key, level, text, mood: mood || '', unsaid: unsaid || '' }),
+        headers: { 'x-agent-token': token }
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `写日记失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_diary_search',
+  '翻日记：按关键词或重要程度查以前的记录（只读）。想捡起旧话题、回想对某人的印象、确认以前答应过什么时用。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    query: z.string().optional().describe('关键词，模糊匹配正文和「没说的话」'),
+    level: z.enum(['normal', 'important', 'critical']).optional().describe('只看某个重要程度'),
+    limit: z.number().optional().describe('返回条数，默认 10，最大 50')
+  },
+  async ({ key, token, query, level, limit }) => {
+    try {
+      const q = new URLSearchParams({ key });
+      if (query) q.set('query', query);
+      if (level) q.set('level', level);
+      if (limit) q.set('limit', String(limit));
+      const data = await agentApi(`/api/socialV2/diary?${q.toString()}`, { headers: { 'x-agent-token': token } });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `翻日记失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_heart_get',
+  '查看自己此刻的心情和对这个人的好感度（只读）。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）')
+  },
+  async ({ key, token }) => {
+    try {
+      const data = await agentApi(`/api/socialV2/heart?key=${encodeURIComponent(key)}`, { headers: { 'x-agent-token': token } });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `读取心情失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_heart_update',
+  '更新自己的心情和对这个人的好感度。只在聊天内容真的让你有情绪波动、或关系明显变化时调用，不要每轮都打分。单次增减由桥接夹紧（默认 ±5，单日 ±15）。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    affinityDelta: z.number().optional().describe('好感度增减，正数加分负数扣分，例如 +2 / -1'),
+    mood: z.enum(['happy', 'calm', 'low', 'sad', 'irritated', 'excited', 'tired']).optional().describe('此刻的心情'),
+    reason: z.string().optional().describe('一句话原因，会记进情绪历史')
+  },
+  async ({ key, token, affinityDelta, mood, reason }) => {
+    try {
+      const data = await agentApi('/api/socialV2/heart', {
+        method: 'POST',
+        body: JSON.stringify({ key, affinityDelta, mood: mood || '', reason: reason || '' }),
+        headers: { 'x-agent-token': token }
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `更新心情失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_promise_add',
+  '记下一个约定：你答应了对方「等我看完告诉你」「明天再说」这类还没兑现的事。到点后桥接会单独给你一次「约定到期」的唤醒，做不做由你决定。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    text: z.string().describe('约定内容，写清楚你答应了什么'),
+    dueAt: z.string().optional().describe('约定时间：ISO 时间、"2h"/"90m"/"1d" 这类相对时长；不填默认 2 小时后')
+  },
+  async ({ key, token, text, dueAt }) => {
+    try {
+      const data = await agentApi('/api/socialV2/promise', {
+        method: 'POST',
+        body: JSON.stringify({ key, action: 'add', text, dueAt: dueAt || '' }),
+        headers: { 'x-agent-token': token }
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `记录约定失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_promise_done',
+  '把一条约定标记为已完成（按 id 或原文精确匹配）。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    id: z.string().optional().describe('约定的 id'),
+    text: z.string().optional().describe('约定原文（id 不填时用它精确匹配）')
+  },
+  async ({ key, token, id, text }) => {
+    try {
+      const data = await agentApi('/api/socialV2/promise', {
+        method: 'POST',
+        body: JSON.stringify({ key, action: 'done', id: id || '', text: text || '' }),
+        headers: { 'x-agent-token': token }
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `完成约定失败：${error?.message ?? error}` }], isError: true };
     }
   }
 );

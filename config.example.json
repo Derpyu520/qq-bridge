@@ -140,7 +140,10 @@
       "stickerNote": true,
       "collectSticker": true,
       "getSelfImage": true,
-      "sendVoice": false
+      "sendVoice": false,
+      "diary": true,
+      "heart": true,
+      "promise": true
     },
     "wake": {
       "defaultMode": "diving",
@@ -255,6 +258,17 @@
       "maxBytes": 8388608,
       "maxPixels": 64000000,
       "maxCount": 5
+    },
+    "innerLife": {
+      "enabled": true,
+      "diaryTtlNormalDays": 7,
+      "diaryTtlImportantDays": 30,
+      "sweepHour": 4,
+      "diaryReviewEnabled": true,
+      "affinityMaxDeltaPerTurn": 5,
+      "affinityDailyCap": 15,
+      "missingIdleMs": 7200000,
+      "diaryBriefLimit": 3
     }
   },
   "webSearch": {
