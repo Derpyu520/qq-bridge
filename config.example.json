@@ -143,7 +143,9 @@
       "sendVoice": false,
       "diary": true,
       "heart": true,
-      "promise": true
+      "promise": true,
+      "schedule": true,
+      "profile": true
     },
     "wake": {
       "defaultMode": "diving",
@@ -238,7 +240,10 @@
       "checkIntervalMinMs": 1800000,
       "checkIntervalMaxMs": 5400000,
       "idleThresholdMs": 900000,
-      "probability": 0.3
+      "probability": 0.3,
+      "mode": "agent",
+      "maxWakePerDay": 12,
+      "nightKeepProbability": 0.25
     },
     "feedback": {
       "maxLength": 500,
@@ -268,7 +273,10 @@
       "affinityMaxDeltaPerTurn": 5,
       "affinityDailyCap": 15,
       "missingIdleMs": 7200000,
-      "diaryBriefLimit": 3
+      "diaryBriefLimit": 3,
+      "profileStaleDays": 30,
+      "profileDropDays": 60,
+      "scheduleReviewDays": 3
     }
   },
   "webSearch": {

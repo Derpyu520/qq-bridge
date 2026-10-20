@@ -41,9 +41,11 @@ function Format-Time($ms) {
 $diary = Read-Json 'diary.json'
 $heart = Read-Json 'heart.json'
 $promises = Read-Json 'promises.json'
+$schedule = Read-Json 'schedule.json'
+$profile = Read-Json 'profile.json'
 
 $keys = @()
-foreach ($src in @($diary, $heart, $promises)) {
+foreach ($src in @($diary, $heart, $promises, $schedule, $profile)) {
     if ($src) { $keys += $src.PSObject.Properties.Name }
 }
 $keys = $keys | Sort-Object -Unique
@@ -72,6 +74,31 @@ foreach ($k in $keys) {
                 foreach ($item in $open) {
                     $flag = if ($item.dueAt -le [DateTimeOffset]::Now.ToUnixTimeMilliseconds()) { '（已到期）' } else { '' }
                     Write-Host ("  · {0}  [{1}]{2}" -f $item.text, (Format-Time $item.dueAt), $flag)
+                }
+            }
+        }
+
+        $s = $schedule.$k
+        if ($s -and $s.items) {
+            $alive = @($s.items | Where-Object { -not $_.dropped } | Sort-Object date | Select-Object -Last 10)
+            if ($alive.Count) {
+                Write-Host '日程：' -ForegroundColor Yellow
+                foreach ($item in $alive) {
+                    $shown = if ($item.fuzzyText) { $item.fuzzyText } else { $item.text }
+                    $raw = if ($item.fuzzyText) { "  （原文：$($item.text)）" } else { '' }
+                    Write-Host ("  · [{0}] {1}{2}" -f $item.date, $shown, $raw)
+                }
+            }
+        }
+
+        $pf = $profile.$k
+        if ($pf -and $pf.facts) {
+            $facts = @($pf.facts | Where-Object { $_.status -ne 'dropped' })
+            if ($facts.Count) {
+                Write-Host '画像：' -ForegroundColor Yellow
+                foreach ($f in $facts) {
+                    $tag = if ($f.status -eq 'stale') { '（好像还是这样）' } else { '' }
+                    Write-Host ("  · {0}{1}  把握 {2}" -f $f.text, $tag, [math]::Round([double]$f.confidence, 2))
                 }
             }
         }

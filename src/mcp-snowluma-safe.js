@@ -331,6 +331,15 @@ const TOOL_CONFIG_FLAGS = {
   qq_heart_update: 'heart',
   qq_promise_add: 'promise',
   qq_promise_done: 'promise',
+  qq_schedule_add: 'schedule',
+  qq_schedule_list: 'schedule',
+  qq_schedule_update: 'schedule',
+  qq_schedule_fuzz: 'schedule',
+  qq_schedule_drop: 'schedule',
+  qq_schedule_promote: 'schedule',
+  qq_profile_set: 'profile',
+  qq_profile_confirm: 'profile',
+  qq_profile_drop: 'profile',
   qq_slang_query: 'slangQuery',
   qq_slang_submit: 'slangSubmit',
   qq_send_voice: 'sendVoice',
@@ -1105,6 +1114,216 @@ server.tool(
       return { content: [{ type: 'text', text: serializeModelData(data) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `完成约定失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+// ── 日程表：短期小事（明天体检、后天考试）────────────────────────────────────
+server.tool(
+  'qq_schedule_add',
+  '往日程表里记一件这两天的小事（明天要体检、后天考试、今晚加班）。日程会在每次唤醒时提醒你，不会像日记那样越攒越多；过几天会自动模糊化、再之后被忘掉。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    text: z.string().describe('要记的事，例如「上午体检」'),
+    date: z.string().optional().describe('日期：YYYY-MM-DD，或 今天/明天/后天/+3d；不填默认今天'),
+    detail: z.string().optional().describe('补充细节（只在本地展示，模糊化后不再注入）')
+  },
+  async ({ key, token, text, date, detail }) => {
+    try {
+      const data = await agentApi('/api/socialV2/schedule', {
+        method: 'POST',
+        body: JSON.stringify({ key, action: 'add', text, date: date || '', detail: detail || '' }),
+        headers: { 'x-agent-token': token }
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `记日程失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_schedule_list',
+  '看日程表：这两天（默认昨天~后天）的安排，以及被模糊化、待你决定去留的条目。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    from: z.string().optional().describe('起始日期 YYYY-MM-DD'),
+    to: z.string().optional().describe('结束日期 YYYY-MM-DD')
+  },
+  async ({ key, token, from, to }) => {
+    try {
+      const q = new URLSearchParams({ key });
+      if (from) q.set('from', from);
+      if (to) q.set('to', to);
+      const data = await agentApi(`/api/socialV2/schedule?${q.toString()}`, { headers: { 'x-agent-token': token } });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `读日程失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_schedule_update',
+  '改一条日程（改了时间、补充细节）。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    id: z.string().describe('日程 id（从 qq_schedule_list 拿）'),
+    text: z.string().optional().describe('新的内容'),
+    date: z.string().optional().describe('新的日期 YYYY-MM-DD / 明天'),
+    detail: z.string().optional().describe('新的细节')
+  },
+  async ({ key, token, id, text, date, detail }) => {
+    try {
+      const data = await agentApi('/api/socialV2/schedule', {
+        method: 'POST',
+        body: JSON.stringify({ key, action: 'update', id, text, date, detail }),
+        headers: { 'x-agent-token': token }
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `改日程失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_schedule_fuzz',
+  '把日程细节模糊化（「上午上高数」→「上午有课」）。原文会留底，之后只把模糊版注入给你，像人一样记不清了。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    id: z.string().describe('日程 id'),
+    fuzzyText: z.string().describe('模糊后的说法，例如「上午有课」')
+  },
+  async ({ key, token, id, fuzzyText }) => {
+    try {
+      const data = await agentApi('/api/socialV2/schedule', {
+        method: 'POST',
+        body: JSON.stringify({ key, action: 'fuzz', id, fuzzyText }),
+        headers: { 'x-agent-token': token }
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `模糊日程失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_schedule_drop',
+  '彻底忘掉一条日程（删除）。已经模糊过的条目，下一次结算可以考虑删掉。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    id: z.string().describe('日程 id')
+  },
+  async ({ key, token, id }) => {
+    try {
+      const data = await agentApi('/api/socialV2/schedule', {
+        method: 'POST',
+        body: JSON.stringify({ key, action: 'drop', id }),
+        headers: { 'x-agent-token': token }
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `删日程失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_schedule_promote',
+  '把日程里反复出现、确认过的事升级成长期画像（「还在减肥」这类），之后不再按日子记，而按「还成不成立」记。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    id: z.string().describe('日程 id'),
+    profileText: z.string().optional().describe('要写进画像的说法，例如「在减肥」；不填用日程原文')
+  },
+  async ({ key, token, id, profileText }) => {
+    try {
+      const data = await agentApi('/api/socialV2/schedule', {
+        method: 'POST',
+        body: JSON.stringify({ key, action: 'promote', id, profileText: profileText || '' }),
+        headers: { 'x-agent-token': token }
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `升级画像失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+// ── 画像：对他的长期认识 ────────────────────────────────────────────────────
+server.tool(
+  'qq_profile_set',
+  '记下一条对他的长期认识（在减肥、养猫、最近在找工作）。画像不按时间淡，而按「还成不成立」淡：长时间没确认会变成「好像还在…」，再久就不再提。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    text: z.string().describe('一条认识，尽量短，例如「在减肥」'),
+    confidence: z.number().optional().describe('把握程度 0~1，默认 0.6')
+  },
+  async ({ key, token, text, confidence }) => {
+    try {
+      const data = await agentApi('/api/socialV2/profile', {
+        method: 'POST',
+        body: JSON.stringify({ key, action: 'set', text, confidence }),
+        headers: { 'x-agent-token': token }
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `写画像失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_profile_confirm',
+  '确认一条画像还成立（对方又提到/被验证了）。会刷新确认时间、提高把握程度。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    id: z.string().optional().describe('画像 id'),
+    text: z.string().optional().describe('画像原文（id 不填时用它匹配）')
+  },
+  async ({ key, token, id, text }) => {
+    try {
+      const data = await agentApi('/api/socialV2/profile', {
+        method: 'POST',
+        body: JSON.stringify({ key, action: 'confirm', id: id || '', text: text || '' }),
+        headers: { 'x-agent-token': token }
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `确认画像失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_profile_drop',
+  '不再认可某条画像（对方说不减了、换工作了），标记为作废，之后不再提。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    id: z.string().optional().describe('画像 id'),
+    text: z.string().optional().describe('画像原文')
+  },
+  async ({ key, token, id, text }) => {
+    try {
+      const data = await agentApi('/api/socialV2/profile', {
+        method: 'POST',
+        body: JSON.stringify({ key, action: 'drop', id: id || '', text: text || '' }),
+        headers: { 'x-agent-token': token }
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `作废画像失败：${error?.message ?? error}` }], isError: true };
     }
   }
 );

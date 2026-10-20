@@ -6605,6 +6605,7 @@ async function main() {
         }
         // ── 内在状态：日记 / 心情好感度 / 约定 ────────────────────────────────
         // 这三个接口与 memory-* 同一套鉴权：agent token 绑定会话 + 工具开关 + 模式准入。
+        // 日程/画像走下面各自的 if（它们有独立的 action 分支，不能并进来）。
         if (url.pathname === '/api/socialV2/diary' || url.pathname === '/api/socialV2/heart'
             || url.pathname === '/api/socialV2/promise') {
           const isDiary = url.pathname === '/api/socialV2/diary';
@@ -6673,6 +6674,89 @@ async function main() {
           const open = innerLife.promiseOpen(key);
           const due = innerLife.promiseDue(key);
           sendJson({ ok: true, key, count: open.length, dueCount: due.length, items: open, formatted: innerLife.promiseLine(key) || '（没有未完成的约定）' });
+          return;
+        }
+        if (url.pathname === '/api/socialV2/schedule') {
+          // 日程：短期小事（明天体检 / 后天考试）。模糊化保留原文，只把 fuzzyText 注入模型。
+          const body = req.method === 'POST' ? await readBody() : {};
+          const key = String((req.method === 'POST' ? body.key : url.searchParams.get('key')) ?? '').trim();
+          if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
+          if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2ToolEnabled('schedule')) { sendJson({ ok: false, error: '工具未启用：qq_schedule_*' }, 403); return; }
+
+          if (req.method === 'GET') {
+            const list = innerLife.scheduleList(key, {
+              from: url.searchParams.get('from'),
+              to: url.searchParams.get('to'),
+              includeDropped: url.searchParams.get('all') === '1'
+            });
+            sendJson({ ok: true, key, count: list.length, items: list, formatted: innerLife.scheduleLine(key) || '（这两天没有安排）' });
+            return;
+          }
+          const action = String(body.action ?? 'add').trim();
+          const id = String(body.id ?? '').trim();
+          if (action === 'add') {
+            const item = innerLife.scheduleAdd(key, { date: body.date, text: body.text, detail: body.detail });
+            sendJson({ ok: true, key, item, formatted: innerLife.scheduleLine(key) });
+            return;
+          }
+          if (action === 'update') {
+            const item = innerLife.scheduleUpdate(key, { id, text: body.text, date: body.date, detail: body.detail });
+            sendJson({ ok: true, key, item, formatted: innerLife.scheduleLine(key) });
+            return;
+          }
+          if (action === 'fuzz') {
+            const item = innerLife.scheduleFuzz(key, { id, fuzzyText: body.fuzzyText });
+            sendJson({ ok: true, key, item, formatted: innerLife.scheduleLine(key) });
+            return;
+          }
+          if (action === 'drop') {
+            const item = innerLife.scheduleDrop(key, { id });
+            sendJson({ ok: true, key, item, formatted: innerLife.scheduleLine(key) || '（这两天没有安排）' });
+            return;
+          }
+          if (action === 'promote') {
+            // 升级进画像：日程里反复出现 / 确认过的事，变成长期认识
+            const item = innerLife.schedulePromote(key, { id });
+            const fact = innerLife.profileSet(key, { text: String(body.profileText ?? item.text).trim(), confidence: 0.7 });
+            sendJson({ ok: true, key, item, fact, formatted: innerLife.profileLine(key) });
+            return;
+          }
+          sendJson({ ok: false, error: 'action 必须是 add / update / fuzz / drop / promote' }, 400);
+          return;
+        }
+        if (url.pathname === '/api/socialV2/profile') {
+          // 画像：对他的长期认识。status 由「还成不成立」决定（active/stale/dropped）。
+          const body = req.method === 'POST' ? await readBody() : {};
+          const key = String((req.method === 'POST' ? body.key : url.searchParams.get('key')) ?? '').trim();
+          if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
+          if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2ToolEnabled('profile')) { sendJson({ ok: false, error: '工具未启用：qq_profile_*' }, 403); return; }
+
+          if (req.method === 'POST') {
+            const action = String(body.action ?? 'set').trim();
+            if (action === 'set') {
+              const fact = innerLife.profileSet(key, { text: body.text, confidence: body.confidence });
+              sendJson({ ok: true, key, fact, formatted: innerLife.profileLine(key) });
+              return;
+            }
+            if (action === 'confirm') {
+              const fact = innerLife.profileConfirm(key, { id: String(body.id ?? ''), text: body.text });
+              sendJson({ ok: true, key, fact, formatted: innerLife.profileLine(key) });
+              return;
+            }
+            if (action === 'drop') {
+              const fact = innerLife.profileDrop(key, { id: String(body.id ?? ''), text: body.text });
+              sendJson({ ok: true, key, fact, formatted: innerLife.profileLine(key) || '（还没有画像）' });
+              return;
+            }
+            sendJson({ ok: false, error: 'action 必须是 set / confirm / drop' }, 400);
+            return;
+          }
+          const list = innerLife.profileList(key);
+          sendJson({ ok: true, key, count: list.length, items: list, formatted: innerLife.profileLine(key) || '（还没有画像）' });
           return;
         }
 
@@ -10130,9 +10214,17 @@ async function main() {
     const innerText = innerLife.wakeBrief(key);
     const innerLine = innerText ? `${innerText}\n\n` : '';
     const innerGuide = (v2ToolEnabled('diary') || v2ToolEnabled('heart') || v2ToolEnabled('promise'))
-      ? '【内在状态怎么用】你有三样别人看不到的东西：日记（qq_diary_write 记、qq_diary_search 翻，普通 7 天/重要 30 天/非常重要永不忘）、心情与好感度（qq_heart_update，只在情绪真的动了的时候动、一次最多几个点）、没兑现的约定（qq_promise_add，答应过的事到点会被单独唤醒）。别为了用而用，也不要每轮都写日记。\n\n'
+      ? '【内在状态怎么用】你有三样别人看不到的东西：日记（qq_diary_write 记、qq_diary_search 翻，普通 7 天/重要 30 天/非常重要永不忘）、心情与好感度（qq_heart_update，只在情绪真的动了的时候动、一次最多几个点）、没兑现的约定（qq_promise_add，答应过的事到点会被单独唤醒）。日程表记这两天的小事（qq_schedule_add / qq_schedule_fuzz / qq_schedule_drop），画像记对他的长期认识（qq_profile_set / qq_profile_confirm / qq_profile_drop）。别为了用而用，也不要每轮都写日记。\n\n'
       : '';
-    const base = roleLine + identityLine + tokenLine + initialPromptLine + antiAiLine + proactiveLine + stickerLine + replyLine + statusLine + innerGuide + innerLine + wakeLine + memoryLine + participationLine + preSleepLine;
+    // 当前时间必须显式给：模型只能从消息时间戳猜日期，跨天时「明天」到底指哪天它是懵的。
+    const nowDate = new Date();
+    const weekNames = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+    const hh = String(nowDate.getHours()).padStart(2, '0');
+    const mi = String(nowDate.getMinutes()).padStart(2, '0');
+    const slot = nowDate.getHours() < 5 ? '凌晨' : nowDate.getHours() < 9 ? '早上' : nowDate.getHours() < 12 ? '上午'
+      : nowDate.getHours() < 14 ? '中午' : nowDate.getHours() < 18 ? '下午' : nowDate.getHours() < 23 ? '晚上' : '深夜';
+    const nowLine = `【现在】${nowDate.getFullYear()}年${nowDate.getMonth() + 1}月${nowDate.getDate()}日 ${weekNames[nowDate.getDay()]} ${hh}:${mi}（${slot}）\n\n`;
+    const base = nowLine + roleLine + identityLine + tokenLine + initialPromptLine + antiAiLine + proactiveLine + stickerLine + replyLine + statusLine + innerGuide + innerLine + wakeLine + memoryLine + participationLine + preSleepLine;
     if (reason === 'bootstrap') {
       return `${base}【引导唤醒】你已接入 QQ 会话 ${key}。\n当前是二代仿真模式：你的文本输出不会自动发送到 QQ，所有发言必须通过工具完成。\n请先调用 qq_get_prompt 查看角色、推荐值、可用工具和状态；有待回应的消息先按首回复节奏处理，最后才用 qq_set_wake_config 设置你希望如何被唤醒。`;
     }
@@ -10142,6 +10234,12 @@ async function main() {
     if (reason === 'replyCheck') {
       return `${base}【回复检查】${key}\n原因：你刚刚发送过消息，现在回来检查是否有人回复。\n已有回复时先看消息，需要短静默就用 qq_wait_for_messages(purpose="reply") 判断对方是否说完；如果没人回你，不用硬补一句，但也不要立刻潜水——先调用 qq_wait_for_messages(timeoutMs=${preSleepMs}) 完成沉睡前观察：没人说话可收尾；有人说话则查看 newMessages，不需要你参与也可直接收尾（qq_mark_read 或 qq_set_wake_config）。`;
     }
+    if (reason === 'autonomyCheck') {
+      return `${base}【自主时间】${key}\n原因：这段时间是你自己安排的，不是有人来找你。\n要不要主动说点什么，由你决定：可以提一嘴日程里今天/明天的事、接上次没聊完的话题、分享刚想到的东西；也可以什么都不说，直接把下一次唤醒设好或 mark_read。\n不要用「在吗」「有人吗」这种空话开场；没有真正想说的就安静收尾，这也是一种选择。`;
+    }
+    if (reason === 'scheduleReview') {
+      return `${base}【日程结算】${key}\n原因：凌晨了，该整理这两天的日程了。\n上面列了还没处理的条目，你可以：把细节**模糊化**（qq_schedule_fuzz，比如「上午上高数」→「上午有课」，原文会留底、只把模糊版给我看）、**删掉**（qq_schedule_drop，彻底遗忘）、或者把反复出现/确认过的事**升级进画像**（qq_schedule_promote）。已经模糊过一次的，这次可以考虑删掉。都可以不动，但别为了处理而处理。`;
+    }
     if (reason === 'proactiveCheck') {
       return `${base}【主动机会】${key}\n原因：群里已经安静了一段时间，这是一次你可以主动冒泡的机会。\n优先主动开个话题、追问上次没聊完的事、分享一个刚想到的想法；如果一时想不到，可以用 mcp__web-search-safe__web_search 搜一下当前热点/时事/网络热梗，再结合记忆里的群友兴趣挑一个自然角度。只要内容自然，就大胆开口；如果实在没话想说，再安静收尾（qq_mark_read 或 qq_set_wake_config）。`;
     }
@@ -10150,6 +10248,9 @@ async function main() {
     }
     if (reason === 'missing') {
       return `${base}【想找他】${key}\n原因：已经有一段时间没聊了，而你现在的心情和好感度让你有点想找他说说话。\n这不是任务，是念头：想到什么就自然开口（今天发生的事、突然想起来的话、上次没聊完的），不想说也可以安静收尾。别用「在吗」式空话开场。`;
+    }
+    if (reason === 'nightlyReview') {
+      return `${base}【夜间整理】${key}\n原因：凌晨了，把今天过一遍。\n① 先看上面的日程：要模糊化的用 qq_schedule_fuzz（「上午上高数」→「上午有课」），要彻底忘的用 qq_schedule_drop，反复出现、确认过、值得长期记住的用 qq_schedule_promote 升级进画像。\n② 再看今天有没有值得写进日记的事（qq_diary_write，分清楚普通/重要/非常重要）。\n③ 情绪有变化就 qq_heart_update 一次。\n没有值得处理的就什么都别做——整理不是任务，别为了整理而整理。`;
     }
     if (reason === 'diaryReview') {
       return `${base}【日记时间】${key}\n原因：凌晨了，到了整理今天的时间。\n先回想今天这段聊天：有没有值得留下的、值得记住的事？有的话用 qq_diary_write 记下来（普通/重要/非常重要），并写下当时的心情、以及不好意思当面说的话。今天如果没什么值得记的，就什么都不写，不要为了写而写。顺便看一眼情绪：如果今天有让你心情变化的事，用 qq_heart_update 更新一次。`;
@@ -10569,8 +10670,24 @@ async function main() {
       const innerCfg = cfg.socialV2?.innerLife ?? {};
       const missingIdle = Math.max(60_000, Number(innerCfg.missingIdleMs) || 2 * 60 * 60 * 1000);
       const missingProb = Math.min(0.45, 0.08 + (Math.max(0, Math.min(100, h.affinity.score)) / 100) * 0.3);
+
+      // ④ 自主模式：不再掷骰子，只给「机会」，说不过说由她决定。
+      // 代价是每次都要一次完整 prompt，所以用 maxWakePerDay 兜底；深夜自动降频到 1/4。
+      const autoMode = String(cfg.socialV2?.proactive?.mode || 'agent') === 'agent';
+      const maxWakePerDay = Math.max(1, Number(cfg.socialV2?.proactive?.maxWakePerDay) || 12);
+      const todayKey = new Date().toDateString();
+      if (!st.autonomyWakes || st.autonomyWakes.date !== todayKey) st.autonomyWakes = { date: todayKey, count: 0 };
+      const nightKeep = Math.min(1, Math.max(0, Number(cfg.socialV2?.proactive?.nightKeepProbability ?? 0.25)));
+      const nightSkip = hour >= 0 && hour < 8 && Math.random() > nightKeep;
+
       if (!isConversationBusyV2(key, st)) {
-        if (idle >= missingIdle && Math.random() < missingProb) {
+        if (autoMode) {
+          if (!nightSkip && idle >= idleThreshold && st.autonomyWakes.count < maxWakePerDay) {
+            st.autonomyWakes.count += 1;
+            log(`[reserved2] 自主时间唤醒 ${key}（今日第 ${st.autonomyWakes.count}/${maxWakePerDay} 次）`);
+            void sendWakePromptV2(key, 'autonomyCheck').catch((error) => log(`[reserved2] autonomyCheck 唤醒异常 ${key}:`, error?.message ?? error));
+          }
+        } else if (idle >= missingIdle && Math.random() < missingProb) {
           void sendWakePromptV2(key, 'missing').catch((error) => log(`[reserved2] missing 唤醒异常 ${key}:`, error?.message ?? error));
         } else if (idle >= idleThreshold && Math.random() < prob) {
           void sendWakePromptV2(key, 'proactiveCheck').catch((error) => log(`[reserved2] proactive 唤醒异常 ${key}:`, error?.message ?? error));
@@ -10597,12 +10714,16 @@ async function main() {
       lastInnerSweepDay = day;
       const swept = innerLife.diarySweep();
       log(`[inner] 日记遗忘完成：删除 ${swept.removed} 条，剩余 ${swept.remaining} 条`);
+      const ps = innerLife.profileSweep();
+      if (ps.changed) log(`[inner] 画像过期标记更新 ${ps.changed} 条`);
       if (cfg.socialV2?.innerLife?.diaryReviewEnabled === false) return;
       for (const key of socialV2.conversations.keys()) {
         if (!isSessionAllowedInCurrentMode(key)) continue;
         const st = socialV2.conversations.get(key);
         if (!st || isConversationBusyV2(key, st)) continue;
-        void sendWakePromptV2(key, 'diaryReview').catch((error) => log(`[inner] 日记唤醒异常 ${key}: ${error?.message ?? error}`));
+        if (st.nightlyReviewDay === day) continue;
+        st.nightlyReviewDay = day;
+        void sendWakePromptV2(key, 'nightlyReview').catch((error) => log(`[inner] 夜间整理唤醒异常 ${key}: ${error?.message ?? error}`));
       }
     };
     tick();
