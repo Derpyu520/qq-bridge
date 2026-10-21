@@ -9674,6 +9674,31 @@ async function main() {
     return `第 ${bad.join('，')} 条之间像是把同一句话拆开了；如果两条拼起来才完整，请合并成一条，或把断点移到完整句子的边界。`;
   }
 
+  // 角色卡改动提示：roles/<名>.md 被外部编辑后，下一次唤醒提醒 AI 重新 qq_get_prompt，
+  // 否则旧人设会一直留在它已经读过的上下文里（改了文件像没改）。
+  let lastRoleMtimeMs = 0;
+  function roleFileMtime() {
+    try {
+      const rs = readRoleState();
+      if (!rs.role) return 0;
+      const safe = sanitizeRoleName(rs.role);
+      if (!safe || safe.includes('..')) return 0;
+      return fs.statSync(path.join(ROLES_DIR, `${safe}.md`)).mtimeMs;
+    } catch {
+      return 0;
+    }
+  }
+  function roleUpdateHint() {
+    const mtime = roleFileMtime();
+    if (!mtime) return '';
+    if (!lastRoleMtimeMs) { lastRoleMtimeMs = mtime; return ''; }
+    if (mtime > lastRoleMtimeMs) {
+      lastRoleMtimeMs = mtime;
+      return '【角色卡已更新】你的角色设定刚被改过，先调用 qq_get_prompt 重新读一遍再开口。\n\n';
+    }
+    return '';
+  }
+
   function currentRoleHintV2() {
     // 先按 〔二代〕/〔一代〕 标记筛小节；下面的逐行过滤只是给「没标记的老卡片」兜底。
     const raw = roleHintForMode('v2');
@@ -10376,7 +10401,7 @@ async function main() {
     const slot = nowDate.getHours() < 5 ? '凌晨' : nowDate.getHours() < 9 ? '早上' : nowDate.getHours() < 12 ? '上午'
       : nowDate.getHours() < 14 ? '中午' : nowDate.getHours() < 18 ? '下午' : nowDate.getHours() < 23 ? '晚上' : '深夜';
     const nowLine = `【现在】${nowDate.getFullYear()}年${nowDate.getMonth() + 1}月${nowDate.getDate()}日 ${weekNames[nowDate.getDay()]} ${hh}:${mi}（${slot}）\n\n`;
-    const base = nowLine + roleLine + identityLine + tokenLine + initialPromptLine + antiAiLine + proactiveLine + stickerLine + replyLine + statusLine + innerGuide + innerLine + wakeLine + memoryLine + participationLine + preSleepLine;
+    const base = nowLine + roleUpdateHint() + roleLine + identityLine + tokenLine + initialPromptLine + antiAiLine + proactiveLine + stickerLine + replyLine + statusLine + innerGuide + innerLine + wakeLine + memoryLine + participationLine + preSleepLine;
     if (reason === 'bootstrap') {
       return `${base}【引导唤醒】你已接入 QQ 会话 ${key}。\n当前是二代仿真模式：你的文本输出不会自动发送到 QQ，所有发言必须通过工具完成。\n请先调用 qq_get_prompt 查看角色、推荐值、可用工具和状态；有待回应的消息先按首回复节奏处理，最后才用 qq_set_wake_config 设置你希望如何被唤醒。`;
     }
@@ -12199,6 +12224,8 @@ async function main() {
   startSnowlumaWatch();
   startConsoleServer();
   startInnerLifeScheduler();
+  // 记录启动时的人格卡 mtime：之后文件再被改，就会在下一次唤醒里提示 AI 重读。
+  roleUpdateHint();
 
   await pumpMux();
 }
