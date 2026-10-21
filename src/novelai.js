@@ -196,6 +196,23 @@ export function createNovelAIClient({ getConfig, stateDir, log = () => {} }) {
       fs.mkdirSync(dir, { recursive: true });
       const file = path.join(dir, `nai-${Date.now()}.png`);
       fs.writeFileSync(file, png);
+      // 元数据旁挂一份，方便事后查「这张图用的什么 prompt」——出图后模型和用户都记不住细节。
+      try {
+        fs.writeFileSync(file.replace(/\.png$/i, '.json'), `${JSON.stringify({
+          createdAt: new Date().toISOString(),
+          file: path.basename(file),
+          model: body.model,
+          width: w,
+          height: h,
+          steps: params.steps,
+          sampler: params.sampler,
+          guidance: params.scale,
+          prompt: composed.prompt,
+          negative: composed.negative
+        }, null, 2)}\n`, 'utf8');
+      } catch (error) {
+        log(`[novelai] 元数据写盘失败：${error?.message ?? error}`);
+      }
       // 只保留最近 300 张，避免 state 无限膨胀
       try {
         const files = fs.readdirSync(dir).filter((f) => f.endsWith('.png')).sort();
