@@ -146,7 +146,8 @@
       "promise": true,
       "schedule": true,
       "profile": true,
-      "imageGen": true
+      "imageGen": true,
+      "webSticker": true
     },
     "wake": {
       "defaultMode": "diving",

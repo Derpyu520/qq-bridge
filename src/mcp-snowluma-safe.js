@@ -341,6 +341,8 @@ const TOOL_CONFIG_FLAGS = {
   qq_profile_confirm: 'profile',
   qq_profile_drop: 'profile',
   qq_draw: 'imageGen',
+  qq_pig_sticker_search: 'webSticker',
+  qq_pig_sticker_send: 'webSticker',
   qq_slang_query: 'slangQuery',
   qq_slang_submit: 'slangSubmit',
   qq_send_voice: 'sendVoice',
@@ -1353,6 +1355,54 @@ server.tool(
       return { content: [{ type: 'text', text: serializeModelData(data) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `画图失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+// ── 网上表情包（PigHub 猪猪）────────────────────────────────────────────────
+// 优先级由人设卡约束：本地收藏的大肥鱼 > 猪猪 > 不发表情。这里只提供能力。
+server.tool(
+  'qq_pig_sticker_search',
+  '搜网上的猪猪表情（PigHub，1300+ 张）。想发张猪猪图但收藏里没有合适的时候用；返回候选名字，挑一个再用 qq_pig_sticker_send 发出去。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    query: z.string().optional().describe('关键词（中文，如 睡觉 / 打工 / 生气 / 无语）；留空随机给几张'),
+    limit: z.number().optional().describe('返回条数，默认 8，最大 20')
+  },
+  async ({ key, token, query, limit }) => {
+    try {
+      const q = new URLSearchParams({ key });
+      if (query) q.set('q', query);
+      if (limit) q.set('limit', String(limit));
+      const data = await agentApi(`/api/socialV2/pigstickers?${q.toString()}`, { headers: { 'x-agent-token': token } });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `搜猪猪表情失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_pig_sticker_send',
+  '从 PigHub 找一张猪猪表情并直接发到会话（不用再调发送工具）。优先用本地收藏的大肥鱼表情，收藏里确实没有合适的再用这个。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    name: z.string().optional().describe('从 qq_pig_sticker_search 拿到的精确名字；不填则按 query 搜一张'),
+    query: z.string().optional().describe('关键词，name 为空时用')
+  },
+  async ({ key, token, name, query }) => {
+    try {
+      const data = await agentApi('/api/socialV2/pigsticker-send', {
+        method: 'POST',
+        body: JSON.stringify({ key, name: name || '', query: query || '' }),
+        headers: { 'x-agent-token': token },
+        timeoutMs: 60000
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `发猪猪表情失败：${error?.message ?? error}` }], isError: true };
     }
   }
 );

@@ -55,6 +55,7 @@ import {
 } from './sticker-lib.js';
 import { createInnerLife } from './inner-life.js';
 import { createNovelAIClient } from './novelai.js';
+import { createWebStickerStore } from './sticker-web.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -1396,6 +1397,7 @@ async function main() {
   // 与 social-v2.json 分开放：这三份是「人格层」数据，会话重置（/reset）不应该连带清掉。
   const innerLife = createInnerLife({ stateDir: STATE_DIR, getConfig: () => cfg, log });
   const imageClient = createNovelAIClient({ getConfig: () => cfg, stateDir: STATE_DIR, log });
+  const webStickers = createWebStickerStore({ stateDir: STATE_DIR, log });
 
   // config.json 热加载：手动改完保存后大多数字段立即生效（改端口/控制台令牌/人格卡上限
   // 这类启动期才用的值仍需重启）。用 fs.watch + 800ms 去抖，避免编辑器「先清空再写入」
@@ -6837,6 +6839,45 @@ async function main() {
           } catch (error) {
             log(`⚠️ 生图失败 (${key})：${String(error?.message ?? error).slice(0, 300)}`);
             sendJson({ ok: false, error: String(error?.message ?? error).slice(0, 300) }, 502);
+          }
+          return;
+        }
+        // 网上表情包（PigHub 猪猪）：搜索 / 取图并发送。
+        // 本地收藏（大肥鱼）优先，猪猪作为补充——这个优先级写在人设卡与工具描述里。
+        if (url.pathname === '/api/socialV2/pigstickers' && req.method === 'GET') {
+          const key = String(url.searchParams.get('key') ?? '').trim();
+          if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
+          if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2ToolEnabled('webSticker')) { sendJson({ ok: false, error: '工具未启用：qq_pig_sticker_*' }, 403); return; }
+          const q = String(url.searchParams.get('q') ?? '').trim();
+          const limit = Math.max(1, Math.min(20, Number(url.searchParams.get('limit')) || 8));
+          try {
+            const items = await webStickers.search(q, limit);
+            sendJson({ ok: true, key, query: q, count: items.length, items });
+          } catch (error) {
+            sendJson({ ok: false, error: String(error?.message ?? error).slice(0, 200) }, 502);
+          }
+          return;
+        }
+        if (url.pathname === '/api/socialV2/pigsticker-send' && req.method === 'POST') {
+          const body = await readBody();
+          const key = String(body.key ?? '').trim();
+          if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
+          if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2ToolEnabled('webSticker')) { sendJson({ ok: false, error: '工具未启用：qq_pig_sticker_*' }, 403); return; }
+          const [kind, sid] = key.split(':');
+          if (kind !== 'private' && kind !== 'group') { sendJson({ ok: false, error: '非法会话 key' }, 400); return; }
+          const wanted = String(body.name ?? '').trim() || String(body.query ?? '').trim();
+          if (!wanted) { sendJson({ ok: false, error: 'name 或 query 不能为空' }, 400); return; }
+          try {
+            const img = await webStickers.fetchImage(wanted);
+            await onebotSendImage(kind, sid, img.buffer);
+            appendActivity(`${key} [pig] 发送网上表情：${img.name}`);
+            sendJson({ ok: true, key, name: img.name, bytes: img.buffer.length, note: '表情已经发出去了，不用再调发送工具；配一句话或不配都行。' });
+          } catch (error) {
+            sendJson({ ok: false, error: String(error?.message ?? error).slice(0, 200) }, 502);
           }
           return;
         }
