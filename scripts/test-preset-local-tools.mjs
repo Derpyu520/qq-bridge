@@ -98,12 +98,7 @@ function collectDshToolNames() {
 /** 允许出现在名单里、但不属于"本地执行"语义的名字（开发/注入器）。 */
 const DEV_TOOL_PREFIX = /^dev_/;
 
-/** 允许出现的 MCP 命名空间前缀（QQ 动作面）。 */
-const EXPECTED_SAFE_PREFIXES = [
-  'mcp__snowluma__',
-  'mcp__snowluma-host__',
-  'mcp__web-search-safe__',
-];
+/** 允许出现的 MCP 工具：由守卫自己导出的显式全名清单决定（见下方对账测试）。 */
 
 function readPreset(id) {
   const dir = path.join(PRESETS_DIR, id);
@@ -216,7 +211,7 @@ test('守卫名单里的每个名字都是 DSH 真实注册的工具（防拼错
   }
 });
 
-test('守卫仍放行 QQ MCP 命名空间与无害模型侧工具', async () => {
+test('守卫放行显式登记的 MCP 工具，且对同命名空间的新工具 fail-closed', async () => {
   for (const id of SIMULATION_PRESETS) {
     const { dir } = readPreset(id);
     const guardPath = path.join(dir, 'qq-tool-restrict.mjs');
@@ -224,14 +219,22 @@ test('守卫仍放行 QQ MCP 命名空间与无害模型侧工具', async () => 
     const mod = await import(pathToFileURL(guardPath).href);
     mod.apply({ tools: fakeTools });
 
-    for (const prefix of EXPECTED_SAFE_PREFIXES) {
-      assert.equal(
-        fakeTools._guard({ name: `${prefix}some_tool` }), undefined,
-        `${id}: MCP 前缀 ${prefix} 应放行`,
-      );
+    // 白名单是显式全名：名单里的每个名字都必须放行。
+    assert.ok(Array.isArray(mod.SAFE_TOOL_NAMES) && mod.SAFE_TOOL_NAMES.length > 0,
+      `${id}: 守卫必须导出 SAFE_TOOL_NAMES（显式全名白名单）`);
+    for (const name of mod.SAFE_TOOL_NAMES) {
+      assert.equal(fakeTools._guard({ name }), undefined, `${id}: 登记工具 ${name} 应放行`);
     }
     for (const name of ['ask_user_question', 'todo_write']) {
       assert.equal(fakeTools._guard({ name }), undefined, `${id}: ${name} 应放行`);
+    }
+    // 关键回归：**同命名空间**里没登记的工具不许放行（前缀放行会让新工具自动获得权限）。
+    for (const name of ['mcp__snowluma__qq_send_raw', 'mcp__snowluma__qq_upload_file',
+      'mcp__web-search-safe__web_exec', 'mcp__snowluma-host__snowluma_start']) {
+      assert.ok(
+        typeof fakeTools._guard({ name }) === 'string',
+        `${id}: 同命名空间但未登记的工具 ${name} 必须被拒绝`,
+      );
     }
     // 未知工具名必须 fail-closed。
     for (const name of ['', null, undefined, 'mcp__unknown__x', 'totally_new_tool']) {
@@ -241,6 +244,22 @@ test('守卫仍放行 QQ MCP 命名空间与无害模型侧工具', async () => 
       );
     }
   }
+});
+
+test('显式白名单与 MCP server 实际注册的工具一一对账（防漏登记/防写错名字）', async () => {
+  // 名单来源是 src/mcp-snowluma-safe.js 的注册名；这里从源码里抽真实名字求差，
+  // 避免"加了个工具却忘了加进白名单"（表现为该工具静默不可用）。
+  const source = fs.readFileSync(path.join(ROOT, 'src', 'mcp-snowluma-safe.js'), 'utf8');
+  const declared = new Set([...source.matchAll(/qq_[a-z_]+/g)].map((m) => m[0]));
+  const { dir } = readPreset(SIMULATION_PRESETS[0]);
+  const mod = await import(pathToFileURL(path.join(dir, 'qq-tool-restrict.mjs')).href);
+  const registered = new Set(mod.SAFE_TOOL_NAMES
+    .filter((n) => n.startsWith('mcp__snowluma__'))
+    .map((n) => n.slice('mcp__snowluma__'.length)));
+  const missing = [...declared].filter((n) => !registered.has(n));
+  const extra = [...registered].filter((n) => !declared.has(n));
+  assert.deepEqual(missing, [], `守卫白名单漏登记的工具：${missing.join(', ')}`);
+  assert.deepEqual(extra, [], `守卫白名单里有源码中不存在的名字：${extra.join(', ')}`);
 });
 
 test('封闭 agent 的预设在创建后必须与仿真 preset 明确区分', () => {

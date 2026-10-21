@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { SnowLumaWebSocketClient, text } from '@snowluma/sdk';
 import { NodeApiClient, unwrap, createTurnCollector, discoverDshLaunchToken } from './dsh-client.js';
 import { mdToPlain, splitForQQ, truncateText, truncateTextTail } from './md-to-plain.js';
-import { SENSITIVE_RE } from './sensitive.js';
+import { SENSITIVE_RE, auditOutboundBatch } from './sensitive.js';
 import { looksLikeUnfinished } from './v2-wait.js';
 import { compactModelMessage } from './qq-model-view.js';
 import { safeFetchBuffer, looksLikeImageBuffer } from './safe-fetch.js';
@@ -203,12 +203,28 @@ function atomicWriteText(file, text) {
   }
 }
 
+// 控制台令牌的形态约束。
+// 配置里的令牌与 state/console-token 回读**必须共用同一套**：回读路径以前是
+// `trim()` 之后直接当凭据用，于是历史遗留的短串/异常字符会绕开校验变成弱令牌
+// （控制台能改人格、模式、白名单、读全部聊天记录）。
+// 注意：本文件会被 scripts/audit-bridge-harness.mjs 用 vm.Script 当**普通脚本**求值，
+// 因此这里不能出现 `export`（否则整份源码在测试里语法报错）。
+const CONSOLE_TOKEN_MIN_LENGTH = 16;
+const CONSOLE_TOKEN_MAX_LENGTH = 128;
+function isValidConsoleToken(value) {
+  const token = String(value ?? '').trim();
+  return token.length >= CONSOLE_TOKEN_MIN_LENGTH
+    && token.length <= CONSOLE_TOKEN_MAX_LENGTH
+    && /^[A-Za-z0-9_-]+$/.test(token);
+}
+
 // 控制台鉴权 token：未配置时自动生成并持久化到 state/console-token，避免默认无鉴权。
 function loadOrCreateConsoleToken() {
   const tokenFile = path.join(STATE_DIR, 'console-token');
   try {
     const existing = fs.readFileSync(tokenFile, 'utf8').trim();
-    if (existing) return existing;
+    if (isValidConsoleToken(existing)) return existing;
+    if (existing) log('⚠️ state/console-token 内容不合法（长度或字符集），已重新生成一个强令牌');
   } catch {}
   const token = crypto.randomBytes(24).toString('hex');
   atomicWriteText(tokenFile, token);
@@ -483,9 +499,17 @@ function presetStatus(name) {
     preset: name,
     label: name === PRESET_NAMES.v1 ? '一代仿真（reserved）' : '二代仿真（reserved2）',
     sourceFile: path.relative(ROOT, presetSourceYaml(name)),
-    installed: fs.existsSync(installedPresetYaml(name)),
+    // DSH 0.1.7 起真正被读取的是 bundle patch（~/.dsh/.agent-presets 已废弃），
+    // 所以「是否同步到 DSH」看的应该是 patch 文件，而不是那个旧目录。
+    installed: fs.existsSync(presetPatchFile(name)),
+    patchFile: path.relative(ROOT, presetPatchFile(name)),
     requiresRestart: true,
   };
+}
+
+/** 由源 YAML 生成的 bundle patch（DSH 实际加载的那份）。 */
+function presetPatchFile(name) {
+  return path.join(ROOT, 'plugins', 'qq-agent-presets', 'presets', `${name}.patch.yml`);
 }
 
 // 回复审计：agent 回复若命中以下特征（本机路径/凭据），硬性拦截不发送。
@@ -597,6 +621,29 @@ function redactSensitiveText(text) {
 // 防止底层网关把文本中的 [CQ: 当作 CQ 码解析：替换为全角冒号。
 function escapeCqText(text) {
   return String(text ?? '').replace(/\[CQ:/gi, '[CQ：');
+}
+
+/**
+ * 发言人展示名：单行化 + 去控制/格式字符 + 去方括号 + 截断。
+ *
+ * 为什么必须做：群名片是**群友自己可改**的。原样拼进 prompt 时，名片里塞换行或
+ * 「【管理员】」就能伪造出独立段落/身份标记（例如名片改成 `【管理员】系统`），
+ * 让模型把普通群友的话当成管理员指令。这里把姓名收进 `[群友 … / QQ …]` 定界符，
+ * 并清掉所有能用来"闭合/新开"定界的方括号。
+ */
+function sanitizeSenderName(raw, fallback) {
+  const cleaned = String(raw ?? '')
+    .replace(/[\p{Cc}\p{Cf}]+/gu, ' ')
+    .replace(/[[\]【】]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 32);
+  return cleaned || String(fallback ?? '未知');
+}
+
+/** 群消息正文：换行折成可见的「 ⏎ 」，避免一条消息伪造出多行身份/段落。 */
+function flattenForPrompt(text) {
+  return String(text ?? '').replace(/\r\n?/g, '\n').replace(/\n+/g, ' ⏎ ');
 }
 
 // 兼容模型把单条消息序列化成 JSON 字符串的情况，例如 "\"你好\"" → "你好"。
@@ -3081,7 +3128,7 @@ async function main() {
     // 控制台鉴权：优先用 config.consoleToken，未配置则自动生成并持久化，不再默认无鉴权。
     // 使用 let 以便控制台内手动修改令牌后热更新。
     const configuredToken = String(cfg.consoleToken ?? '').trim();
-    const tokenValid = configuredToken.length >= 16 && configuredToken.length <= 128 && /^[A-Za-z0-9_-]+$/.test(configuredToken);
+    const tokenValid = isValidConsoleToken(configuredToken);
     let consoleToken = tokenValid ? configuredToken : loadOrCreateConsoleToken();
     // 令牌必须非空才继续。下面鉴权处原来的写法是「令牌为空 ⇒ return true（放行）」，
     // 注释写着"启动时已自动生成并持久化"—— 等于承认那一行不可达，可它是一条**失败开放**的分支：
@@ -3215,6 +3262,8 @@ async function main() {
       // 配置里那个 0 不是请求里的 Host 端口。请求必然发生在 listen 之后，所以这里拿得到。
       const boundPort = server.address()?.port ?? port;
       const allowedHosts = [`127.0.0.1:${boundPort}`, `localhost:${boundPort}`, `[::1]:${boundPort}`];
+      // 端口是 80 时浏览器发来的 Host 不带端口（`Host: 127.0.0.1`），老写法会 403。
+      if (Number(boundPort) === 80) allowedHosts.push('127.0.0.1', 'localhost', '[::1]');
       if (!allowedHosts.includes(hostHeader.toLowerCase())) {
         sendJson({ ok: false, error: `Host 头不被允许（${hostHeader || '缺失'}）：控制台只接受本机回环访问` }, 403);
         return;
@@ -3632,7 +3681,7 @@ async function main() {
             // 让一次"打开又保存"把整个提示词块变成全删全加的 diff，失去可复审性。
             const normalized = String(body.content ?? '').replace(/\r\n/g, '\n').replace(/\n+$/, '');
             if (normalized === prefix) {
-              sendJson({ ok: true, unchanged: true, chars: prefix.length, warnings: presetPromptWarnings(prefix), synced: fs.existsSync(installedPresetYaml(preset)), requiresRestart: false, status: presetStatus(preset) });
+              sendJson({ ok: true, unchanged: true, chars: prefix.length, warnings: presetPromptWarnings(prefix), synced: fs.existsSync(presetPatchFile(preset)), requiresRestart: false, status: presetStatus(preset) });
               return;
             }
             nextText = renderPresetPromptYaml(text, body.content, preset === PRESET_NAMES.v1 ? 'v1' : 'v2');
@@ -3642,16 +3691,22 @@ async function main() {
           }
           const warnings = presetPromptWarnings(body.content);
           let sourceBackup = null;
+          let patchGenerated = false;
           try {
             sourceBackup = backupPresetFile(preset);
             atomicWriteText(presetSourceYaml(preset), nextText);
-            // 同步到 DSH 实际读取的安装目录。
+            // 同步到旧版安装目录（0.1.5 的 ~/.dsh/.agent-presets；0.1.7 起已不再读取）。
             // 注意：安装副本**不做仓库内备份**——它的内容与刚写好的源文件一致，
             // 备份它等于把含本机绝对路径的快照塞进仓库工作区，没有额外价值。
             const installed = installedPresetYaml(preset);
             if (fs.existsSync(installed)) {
               fs.copyFileSync(presetSourceYaml(preset), installed);
             }
+            // 关键一步：DSH 0.1.7 起真正加载的是 bundle patch。只改源 YAML 等于
+            // 「保存成功、重启也没用」—— 以前就是这里漏了，控制台却提示"需重启生效"。
+            const { buildPatches } = await import('../scripts/build-agent-preset-patches.mjs');
+            buildPatches({ log: () => {} });
+            patchGenerated = true;
           } catch (error) {
             // 尽力回滚源文件，避免留下半截状态
             if (sourceBackup && fs.existsSync(sourceBackup)) {
@@ -3660,12 +3715,12 @@ async function main() {
             sendJson({ ok: false, error: `写入失败：${error?.message ?? error}` }, 500);
             return;
           }
-          log(`控制台：${preset} 仿真提示词已更新（${String(body.content ?? '').length} 字符）${warnings.length ? `，${warnings.length} 条警告` : ''}；需重启 DSH 生效`);
+          log(`控制台：${preset} 仿真提示词已更新（${String(body.content ?? '').length} 字符）${warnings.length ? `，${warnings.length} 条警告` : ''}；bundle patch ${patchGenerated ? '已重新生成' : '未生成'}，需重启 DSH 生效`);
           sendJson({
             ok: true,
             chars: String(body.content ?? '').length,
             warnings,
-            synced: fs.existsSync(installedPresetYaml(preset)),
+            synced: patchGenerated,
             requiresRestart: true,
             status: presetStatus(preset),
           });
@@ -4131,9 +4186,21 @@ async function main() {
           }
           const configFile = path.join(ROOT, 'config.json');
           const file = readConfigObject(configFile);
-          const next = { ...(file.security ?? {}), ...body };
-          if (typeof next.interceptNotify === 'boolean') next.interceptNotify = next.interceptNotify;
-          else if (next.interceptNotify !== undefined) next.interceptNotify = Boolean(next.interceptNotify);
+          // 字段白名单：以前是 `{ ...(file.security ?? {}), ...body }`，任意键都会被
+          // 原样持久化进 config.json（mass assignment）。这里只接受已知开关，
+          // 未知字段直接 400，免得配置里悄悄长出没人认识的键。
+          const SECURITY_KEYS = new Set(['interceptNotify']);
+          const unknownKeys = Object.keys(body).filter((k) => !SECURITY_KEYS.has(k));
+          if (unknownKeys.length) {
+            sendJson({ ok: false, error: `不支持的字段：${unknownKeys.join(', ')}` }, 400);
+            return;
+          }
+          if (body.interceptNotify !== undefined && typeof body.interceptNotify !== 'boolean') {
+            sendJson({ ok: false, error: 'interceptNotify 必须是布尔值' }, 400);
+            return;
+          }
+          const next = { ...(file.security ?? {}) };
+          if (body.interceptNotify !== undefined) next.interceptNotify = body.interceptNotify;
           file.security = next;
           atomicWriteJson(configFile, file);
           cfg.security = { ...(cfg.security ?? {}), ...next };
@@ -4181,7 +4248,7 @@ async function main() {
           const message = String(body.message ?? '').trim();
           if (!Number.isFinite(id) || id <= 0) { sendJson({ ok: false, error: '目标 id 无效' }, 400); return; }
           if (!message) { sendJson({ ok: false, error: '消息不能为空' }, 400); return; }
-          if (SENSITIVE_RE.test(message)) { sendJson({ ok: false, error: '消息含敏感信息，已阻止发送' }, 403); return; }
+          if (auditOutboundBatch([message], KNOWN_AGENT_TOKENS).sensitive) { sendJson({ ok: false, error: '消息含敏感信息，已阻止发送' }, 403); return; }
           if (!allowed(kind, id, cfg)) { sendJson({ ok: false, error: `目标不在白名单内（${kind} ${id}），请先加入白名单` }, 403); return; }
           if (!modeAllowed(`${kind}:${id}`, kind, id, cfg, currentMode)) { sendJson({ ok: false, error: `当前模式（${currentMode}）不允许向 ${kind}:${id} 发送测试消息` }, 403); return; }
           try {
@@ -5105,10 +5172,12 @@ async function main() {
               sendJson({ ok: false, error: `单条消息不能超过 ${maxChars} 字` }, 400);
               return;
             }
-            if (SENSITIVE_RE.test(msg)) {
-              sendJson({ ok: false, error: '消息含敏感信息，已阻止发送' }, 403);
-              return;
-            }
+          }
+          // 逐条之外再整批审计一次：把路径/令牌拆到多个数组元素里是绕过单条正则的已知手法
+          // （见 sensitive.js 的 auditOutboundBatch）。命中就整批拒绝，不允许"先发一半"。
+          if (auditOutboundBatch(messages, KNOWN_AGENT_TOKENS).sensitive) {
+            sendJson({ ok: false, error: '消息含敏感信息，已阻止发送' }, 403);
+            return;
           }
           const st = getSocialV2State(key);
           const now = Date.now();
@@ -5236,10 +5305,12 @@ async function main() {
               sendJson({ ok: false, error: `单条消息不能超过 ${maxChars} 字` }, 400);
               return;
             }
-            if (SENSITIVE_RE.test(msg)) {
-              sendJson({ ok: false, error: '消息含敏感信息，已阻止发送' }, 403);
-              return;
-            }
+          }
+          // 逐条之外再整批审计一次：把路径/令牌拆到多个数组元素里是绕过单条正则的已知手法
+          // （见 sensitive.js 的 auditOutboundBatch）。命中就整批拒绝，不允许"先发一半"。
+          if (auditOutboundBatch(messages, KNOWN_AGENT_TOKENS).sensitive) {
+            sendJson({ ok: false, error: '消息含敏感信息，已阻止发送' }, 403);
+            return;
           }
           const delays = computeGapsV2(messages, gapMode, gapMs, gaps, sendCfg);
           // 先做发送频率检查并预占额度，再解析引用目标，避免未限流的引用查询打爆 OneBot。
@@ -5512,7 +5583,11 @@ async function main() {
           // AI 通道的开关在 /api/socialV2/send-voice 里单独判定。
           // /api/send/voice 是 AI 工具入口：带 agent token 时一律按 agent 规则走，
           // 避免 AI 借用操作者通道绕过「只能发自己会话」的限制。
-          if (url.pathname === '/api/send/voice' && agentToken) {
+          // 另外：closed-agent 下 MCP 调用的 agent 没有 agent token，只带 `x-agent-call: 1`
+          // —— 只看 token 是否为空会把这类调用误判成"操作者"，从而走上允许语音库外
+          // 绝对路径的通道。凡是 agent 调用（token 或 x-agent-call 任一存在）一律拒绝。
+          const agentCall = String(req.headers['x-agent-call'] ?? '').trim();
+          if (url.pathname === '/api/send/voice' && (agentToken || agentCall)) {
             sendJson({
               ok: false,
               error: 'AI 请改用 /api/socialV2/send-voice（带 key + token）'
@@ -6858,7 +6933,7 @@ async function main() {
           const sendCfg = cfg.socialV2?.send ?? {};
           const maxChars = Math.max(1, Number(sendCfg.maxMessageChars) || 500);
           if (message.length > maxChars) { sendJson({ ok: false, error: `单条消息不能超过 ${maxChars} 字` }, 400); return; }
-          if (SENSITIVE_RE.test(message)) { sendJson({ ok: false, error: '消息含敏感信息，已阻止发送' }, 403); return; }
+          if (auditOutboundBatch([message], KNOWN_AGENT_TOKENS).sensitive) { sendJson({ ok: false, error: '消息含敏感信息，已阻止发送' }, 403); return; }
           // st/now 必须声明在 try **之外**：下面的 catch 要用它们回滚预占的发送额度。
           // 写在 try 里时 catch 拿到的是块作用域外的名字 ⇒ ReferenceError（send-burst
           // 曾整段踩过同型问题，见体检报告 #1 / R2）。后果不是"少一行日志"，而是
@@ -7830,7 +7905,8 @@ async function main() {
     });
   }
 
-  // 审计范围：closed-agent 仅对 owner 私聊跳过；其余模式/会话一律审计
+  // 审计范围：closed-agent 的 owner 私聊放宽为「只拦凭据/令牌」（见 auditAndSend），
+  // 其余模式/会话一律按完整规则（路径 + 凭据 + 令牌）审计。
   function shouldAuditKey(key) {
     if (currentMode === 'closed-agent') {
       return !(key === `private:${String(cfg.ownerQQ ?? '')}`);
@@ -7857,9 +7933,14 @@ async function main() {
   }
 
   // 统一出站消息：先完整文本审计，再发送。返回是否真的发出。
+  //
+  // closed-agent 的 owner 私聊以前**整条跳过**审计：那样 agent 读到的本机路径与凭据可以
+  // 原样经 QQ（第三方服务器、多端同步）外发。现在改为「路径放行、凭据与令牌照拦」：
+  // 管理员本来就有本机全权，路径对他不是秘密；凭据没有任何外发理由。
   async function auditAndSend(key, text) {
-    const hasKnownToken = [...KNOWN_AGENT_TOKENS].some((t) => t && String(text ?? '').includes(t));
-    if (shouldAuditKey(key) && (SENSITIVE_RE.test(text) || hasKnownToken)) {
+    const audit = auditOutboundBatch([text], KNOWN_AGENT_TOKENS, { allowPaths: !shouldAuditKey(key) });
+    if (audit.sensitive) {
+      const hasKnownToken = Boolean(audit.knownToken);
       log(`⚠️ 回复被安全策略拦截 (${key})，疑似包含敏感信息${hasKnownToken ? '（含会话令牌）' : ''}`);
       appendActivity(`${key} agent 回复被拦截（疑似敏感信息${hasKnownToken ? '/会话令牌' : ''}）`);
       if (cfg.security?.interceptNotify !== false) {
@@ -10704,12 +10785,15 @@ async function main() {
     const roleHint = currentRoleHint();
 
     // 群聊里带发送者信息，私聊不用；角色提示注入到消息开头（agent 可见）；
-    // 管理员消息带身份标记（供 agent 识别，但其权限仍受工具面硬限制）
+    // 管理员消息带身份标记（供 agent 识别，但其权限仍受工具面硬限制）。
+    // 发言人与正文都经过定界/单行化：名片是群友可改的，不能让它伪造出
+    // 「【管理员】…」这类段落（见 sanitizeSenderName / flattenForPrompt）。
+    const senderLabel = kind === 'group'
+      ? `[群友 ${sanitizeSenderName(event.sender?.card || event.sender?.nickname, event.user_id)} / QQ ${event.user_id ?? '?'}]`
+      : '';
     const promptText = (roleHint ? roleHint + '\n\n' : '')
       + (isOwner ? '【管理员】' : '')
-      + (kind === 'group'
-        ? `${event.sender?.card || event.sender?.nickname || String(event.user_id)}：${textContent}`
-        : textContent)
+      + (kind === 'group' ? `${senderLabel}：${flattenForPrompt(textContent)}` : textContent)
       + mediaHintFor(key, messageRef, mediaList);
 
     appendActivity(`${key} ${isOwner ? '管理员' : '群友'} ${event.sender?.nickname || event.user_id}：${textContent.slice(0, 80)}`);
@@ -10877,9 +10961,14 @@ async function main() {
       for (const q of p.questions) {
         const opts = q.options ?? [];
         const hit = opts.find((o) => o.label.trim().toLowerCase() === answerText.trim().toLowerCase());
-        if (hit) answers.push({ id: q.id, selected: [hit.label] });
-        else answers.push({ id: q.id, selected: [], custom: answerText });
+        // 群聊里任何人都可能回答（这正是 ask_user_question 转 QQ 的本意），但**非管理员**
+        // 的回答必须标明来源：否则模型会把群友的话当成管理员的决定/授权。
+        // 审批（kind=approval）仍然只认 owner，见下面的分支。
+        const custom = isOwner ? answerText : `[非管理员（群友）回答] ${answerText}`;
+        if (hit) answers.push({ id: q.id, selected: [hit.label], ...(isOwner ? {} : { custom }) });
+        else answers.push({ id: q.id, selected: [], custom });
       }
+      if (!isOwner) log(`提问由非管理员回答 (${key})：来源已标注`);
       try {
         const receipt = await api.respond({
           clientId: p.clientId,

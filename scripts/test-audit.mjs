@@ -7,6 +7,8 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const tests = [
   'test-audit-bridge.mjs', 'test-audit-protocol.mjs', 'test-audit-protocol-helpers.mjs',
   'test-audit-security.mjs', 'test-audit-security-mcp.mjs',
+  // 出站内容审计：拆条绕过（路径/令牌对半拆）、零宽/全角变形、表情 md5 不误伤。
+  'test-outbound-audit.mjs',
   'test-audit-setup.mjs', 'test-audit-setup-guards.mjs',
   // DSH 会话队列（inbox 投影）解析：0.2.0 把队列从 control baseline 的
   // `value.queues[<id>]` 挪进了 `value.projections[<id>].values.inbox`。

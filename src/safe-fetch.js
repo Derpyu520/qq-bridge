@@ -3,6 +3,9 @@
 // - 仅 http/https
 // - 禁止 localhost / .local / 私有 IP / 环回 / 链路本地 / CGNAT 等内网地址
 // - 域名先 DNS 解析并检查全部解析结果，避免 DNS rebinding
+// - 例外：域名解析结果**全是** fake-ip 代理段（198.18.0.0/15）时放行，否则 Clash 一类
+//   fake-ip 用户会整体拿不到图片/表情（issue #40）；IP 字面量仍按内网地址拒绝
+
 // - 手动跟随重定向，每一跳重新校验
 // - 响应体限量读取，每次请求有包含响应体的总时限
 import dns from 'node:dns';
@@ -61,6 +64,33 @@ function parseEmbeddedIpv4(h) {
     return `${(num >>> 24) & 255}.${(num >>> 16) & 255}.${(num >>> 8) & 255}.${num & 255}`;
   }
   return null;
+}
+
+/**
+ * Clash / Surge / OpenClash 等「fake-ip」透明代理的保留段（198.18.0.0/15，RFC 2544 基准段）。
+ *
+ * 这类代理会把**所有**域名都解析成这一段里的地址，连接时再由代理按 Host/SNI 还原成真实目标。
+ * 于是 QQ 的图片/表情 CDN（gxh.vip.qq.com、multimedia.nt.qq.com.cn 等）在桥接看来
+ * 「解析到内网地址」，被 SSRF 校验整体拦掉 —— 表现为图片、表情包全部拿不到（issue #40）。
+ *
+ * 注意它和 `isPrivateIp()` 的关系：**IP 字面量**（用户直接写 http://198.18.0.113/）
+ * 仍然按内网地址拒绝，只有「域名解析结果全是 fake-ip」时才放行，因为那时连接目标是
+ * 本地代理而不是内网主机。混入真实内网地址时仍按内网地址拒绝（见 resolveSafeAddresses）。
+ */
+export function isProxyFakeIp(ip) {
+  const h = String(ip || '').replace(/^\[|\]$/g, '');
+  if (net.isIP(h) !== 4) return false;
+  const parts = h.split('.').map(Number);
+  return parts[0] === 198 && (parts[1] === 18 || parts[1] === 19);
+}
+
+// 明显属于内网的主机名：单标签名（nas、router）与常见内网后缀。
+// fake-ip 代理会把这些名字也解析成 198.18.x.x，若不单独拦就会变成一条绕开 SSRF 防护的通道。
+const INTERNAL_HOST_SUFFIXES = ['.local', '.localdomain', '.lan', '.internal', '.intranet', '.home', '.corp', '.home.arpa'];
+
+function isInternalHostname(host) {
+  if (!host.includes('.')) return true;
+  return INTERNAL_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix));
 }
 
 export function isPrivateIp(ip) {
@@ -132,11 +162,19 @@ function orderAddresses(addresses) {
   return ordered;
 }
 
-/** 解析主机名并校验**全部**解析结果，返回可尝试的地址列表（IPv4 优先）。 */
+/**
+ * 解析主机名并校验**全部**解析结果，返回可尝试的地址列表（IPv4 优先）。
+ *
+ * fake-ip 代理（见 `isProxyFakeIp`）的处理：
+ * - 解析结果**全是** fake-ip ⇒ 放行。连接目标是本地代理，由代理按 Host/SNI 还原真实站点；
+ * - 既有 fake-ip 又有真实公网地址 ⇒ 丢掉 fake-ip，只连真实地址（更可信，也避免代理故障时白等）；
+ * - 混有真实内网地址 ⇒ 仍然拒绝（不让 fake-ip 成为绕开 SSRF 防护的通道）。
+ * IP 字面量与单标签/内网后缀主机名一律拒绝，不受此逻辑影响。
+ */
 export async function resolveSafeAddresses(hostname) {
   const h = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
   if (!h) throw new Error('主机名为空');
-  if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local')) {
+  if (h === 'localhost' || h.endsWith('.localhost') || isInternalHostname(h)) {
     throw new Error('禁止访问内网/本机地址');
   }
   if (net.isIP(h)) {
@@ -150,13 +188,17 @@ export async function resolveSafeAddresses(hostname) {
     throw new Error(`域名解析失败：${error?.message ?? error}`);
   }
   if (!addresses.length) throw new Error('域名没有解析结果');
-  for (const { address } of addresses) {
+  const fakeIps = addresses.filter((item) => isProxyFakeIp(item?.address));
+  const realIps = addresses.filter((item) => !isProxyFakeIp(item?.address));
+  for (const { address } of realIps) {
     if (isPrivateIp(address)) {
       throw new Error('域名解析到内网/本机地址，已阻止');
     }
   }
-  const ordered = orderAddresses(addresses);
-  return ordered.length ? ordered : [addresses[0].address];
+  const usable = realIps.length ? realIps : fakeIps;
+  if (!usable.length) throw new Error('域名没有解析结果');
+  const ordered = orderAddresses(usable);
+  return ordered.length ? ordered : [usable[0].address];
 }
 
 export async function resolveSafeHost(hostname) {

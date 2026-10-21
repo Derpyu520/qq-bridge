@@ -205,7 +205,9 @@ console.log('## preset 人设已描述语音能力（否则 AI 不知道自己�
   // DSH 0.1.7 起守卫的权威实现只有一份，在 qq-agent-presets bundle 里
   // （dsh/agent-presets/<preset>/qq-tool-restrict.mjs 只是 re-export 壳）。
   const restrict = fs.readFileSync(path.join(ROOT, 'plugins', 'qq-agent-presets', 'qq-tool-restrict.mjs'), 'utf8');
-  ok(restrict.includes("'mcp__snowluma__'"), 'preset 白名单以前缀放行 mcp__snowluma__*（覆盖语音工具）');
+  ok(restrict.includes("'mcp__snowluma__qq_send_voice'"), '守卫白名单显式登记 mcp__snowluma__qq_send_voice');
+  ok(restrict.includes("'mcp__snowluma__qq_list_voices'"), '守卫白名单显式登记 mcp__snowluma__qq_list_voices');
+  ok(!restrict.includes('SAFE_PREFIXES'), '守卫不再按命名空间前缀放行（改为显式全名）');
 }
 
 console.log('## 控制台契约');

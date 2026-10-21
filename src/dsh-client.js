@@ -396,7 +396,7 @@ export class NodeApiClient extends AbstractApiClient {
       if (canMint) return this._mintCookie(secret);
       throw new Error(
         'DSH 鉴权不可用：没有可用的 launch token（config.json 的 dsh.authToken 为空，日志里也没发现），'
-        + `也读不到 ${path.join(resolveDshHome(), '.credentials.yaml')} 里的 `
+        + `也读不到 ~/.dsh/.credentials.yaml 里的 `
         + `${BROWSER_SESSION_KEY} 签名密钥。请在 config.json 里显式设置 dsh.authToken，`
         + '或确认 DSH_HOME 指向真正的 .dsh 目录。'
       );
@@ -416,7 +416,10 @@ export class NodeApiClient extends AbstractApiClient {
       url.hash = '';
       url.searchParams.set('token', this.launchToken);
       const res = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(this.timeoutMs) });
-      const setCookie = res.headers.get('set-cookie');
+      // 多 Set-Cookie 时随便取第一个可能缓存到别的 cookie（表现为莫名 401）；
+      // 按 DSH 的 cookie 名前缀挑，取不到再退回第一个。
+      const allCookies = typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : [];
+      const setCookie = allCookies.find((c) => c.startsWith(COOKIE_PREFIX)) ?? res.headers.get('set-cookie');
       await res.body?.cancel();
       if (!setCookie) throw new Error(`DSH token exchange failed: HTTP ${res.status}`);
       if (epoch !== this._authEpoch) throw new Error('DSH auth session invalidated during token exchange');

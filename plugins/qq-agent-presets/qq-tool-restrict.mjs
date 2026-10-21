@@ -158,20 +158,69 @@ const KNOWN_DANGEROUS_GLOBAL_TOOLS = [
 // 供 test-preset-local-tools.mjs 导入并与 DSH 真实工具名对账，避免两份名单漂移。
 export const RESTRICTED_TOOL_NAMES = Object.freeze([...KNOWN_DANGEROUS_GLOBAL_TOOLS])
 
-// 执行期白名单：不在这些范围内的工具一律拒绝。
-// 前缀覆盖 DSH MCP client 暴露的命名空间工具。
-const SAFE_PREFIXES = [
-  'mcp__snowluma__',
-  'mcp__snowluma-host__',
-  'mcp__web-search-safe__',
-]
-
-// 无害模型侧工具：ask_user_question 用于把问题转给管理员/用户，
-// todo_write 仅维护任务列表。若后续 preset 不再挂载这些工具，保留无害。
-const SAFE_EXACT = new Set([
+// 执行期白名单：**显式全名**，不按命名空间前缀放行。
+//
+// 为什么不用 `mcp__snowluma__` 这类前缀：前缀等于"无条件信任这个 MCP server"——
+// 该 server 将来（或别人的一份分叉）新增一个 `qq_send_raw` / 上传 / 管理动作，
+// 不用改守卫就自动获得权限，最低权限面就失效了。改成全名清单后，新增工具必须
+// **人工**加进这里才可用（fail-closed，忘了加只会少一个功能，不会多一个口子）。
+//
+// 名单来源：`src/mcp-snowluma-safe.js` 实际注册的工具名（`scripts/test-preset-local-tools.mjs`
+// 会拿源码里的工具名与这份清单双向对账，防止漏登记）。含三个默认不注册、
+// 由配置开关控制的工具（qq_send_voice / qq_list_voices / qq_set_sticker_remark），
+// 否则用户一开开关，工具就出现在 schema 里却被执行期拒绝。
+export const SAFE_TOOL_NAMES = Object.freeze([
+  // —— mcp-snowluma：QQ 动作安全子集 ——
+  'mcp__snowluma__qq_status',
+  'mcp__snowluma__qq_list_groups',
+  'mcp__snowluma__qq_get_group_members',
+  'mcp__snowluma__qq_get_group_history',
+  'mcp__snowluma__qq_get_unread_messages',
+  'mcp__snowluma__qq_get_recent_messages',
+  'mcp__snowluma__qq_get_my_recent_messages',
+  'mcp__snowluma__qq_get_message_detail',
+  'mcp__snowluma__qq_get_message_images',
+  'mcp__snowluma__qq_get_forward_msg',
+  'mcp__snowluma__qq_get_active_members',
+  'mcp__snowluma__qq_get_prompt',
+  'mcp__snowluma__qq_social_state',
+  'mcp__snowluma__qq_wait_for_messages',
+  'mcp__snowluma__qq_mark_read',
+  'mcp__snowluma__qq_memory_query',
+  'mcp__snowluma__qq_memory_append',
+  'mcp__snowluma__qq_memory_remove',
+  'mcp__snowluma__qq_memory_clear',
+  'mcp__snowluma__qq_slang_query',
+  'mcp__snowluma__qq_slang_submit',
+  'mcp__snowluma__qq_get_self_image',
+  'mcp__snowluma__qq_list_stickers',
+  'mcp__snowluma__qq_get_sticker_image',
+  'mcp__snowluma__qq_sticker_note',
+  'mcp__snowluma__qq_set_sticker_remark',
+  'mcp__snowluma__qq_collect_sticker',
+  'mcp__snowluma__qq_send_sticker',
+  'mcp__snowluma__qq_send_poke',
+  'mcp__snowluma__qq_send_group_message',
+  'mcp__snowluma__qq_send_private_message',
+  'mcp__snowluma__qq_send_message',
+  'mcp__snowluma__qq_send_burst',
+  'mcp__snowluma__qq_reply',
+  'mcp__snowluma__qq_report_feedback',
+  'mcp__snowluma__qq_set_wake_config',
+  'mcp__snowluma__qq_send_voice',
+  'mcp__snowluma__qq_list_voices',
+  // —— mcp-snowluma-host：只读探活 ——
+  'mcp__snowluma-host__snowluma_status',
+  // —— mcp-web-search-safe：只读联网 ——
+  'mcp__web-search-safe__web_search',
+  'mcp__web-search-safe__web_fetch',
+  // —— 无害模型侧工具 ——
   'ask_user_question',
   'todo_write',
 ])
+
+// 无害模型侧工具（单独导出供测试断言"它们不在 restrict 名单里"）。
+export const SAFE_EXACT = Object.freeze(['ask_user_question', 'todo_write'])
 
 export function apply(ctx) {
   // 1) 把已知危险全局工具从 schema 隐藏（restrict 只影响继承的全局层，
@@ -194,11 +243,12 @@ export function apply(ctx) {
   }
 
   // 2) 执行期白名单：任何不在允许范围内的工具调用都会被拒绝。
+  //    显式全名（见 SAFE_TOOL_NAMES）：MCP server 新增工具不会自动获得权限。
+  const safe = new Set(SAFE_TOOL_NAMES)
   ctx.tools.guard((exec) => {
     const name = exec?.name
     if (typeof name !== 'string' || name.length === 0) return '工具名无效，已拒绝'
-    if (SAFE_EXACT.has(name)) return
-    if (SAFE_PREFIXES.some((prefix) => name.startsWith(prefix))) return
-    return `工具 "${name}" 不在 QQ 桥接白名单内，已拒绝（仅允许 QQ MCP 工具与无害模型侧工具）`
+    if (safe.has(name)) return
+    return `工具 "${name}" 不在 QQ 桥接白名单内，已拒绝（仅允许 ${SAFE_TOOL_NAMES.length} 个显式登记的工具）`
   })
 }

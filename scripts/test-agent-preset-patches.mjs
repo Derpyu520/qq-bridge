@@ -87,9 +87,11 @@ console.log('## 4. bundle 声明与安全边界');
 
   const canonical = path.join(BUNDLE_DIR, 'qq-tool-restrict.mjs');
   const canonicalText = read(canonical);
-  for (const needle of ["const SAFE_PREFIXES", "'mcp__snowluma__'", "'mcp__web-search-safe__'", 'SAFE_EXACT', 'return `工具 "']) {
+  for (const needle of ['SAFE_TOOL_NAMES', "'mcp__snowluma__qq_send_message'", "'mcp__web-search-safe__web_search'", 'SAFE_EXACT', 'return `工具 "']) {
     ok(canonicalText.includes(needle), `权威守卫包含 ${needle}`);
   }
+  ok(!canonicalText.includes('SAFE_PREFIXES') && !canonicalText.includes('name.startsWith(prefix)'),
+    '守卫不再按命名空间前缀放行（前缀 = 无条件信任该 MCP server）');
   // 一份实现：两个 preset 目录下的同名文件必须是 re-export 壳，且导出同名成员。
   const canonicalMod = await import(pathToFileURL(canonical).href);
   for (const name of PRESETS) {

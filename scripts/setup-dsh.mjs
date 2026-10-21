@@ -12,7 +12,13 @@
 // 用法：
 //   node scripts/setup-dsh.mjs [profile]
 //
-// 默认 profile 为 web；可用环境变量 DSH_HOME 指定 DSH 根目录。
+// profile 省略时自动探测 ~/.dsh/profiles：
+//   · 只有一个 profile   → 用它
+//   · 有 desktop / web 之一 → 用它（DSH 桌面版是 desktop，Web 版是 web）
+//   · 多个且判不出来     → 报错要求显式指定
+// 旧版写死 'web'：在 desktop profile 的机器上会新建一个空的 web profile 把 MCP/preset
+// 全装进去，运行中的 desktop 一点没变，脚本却照样打印 Done。
+// 可用环境变量 DSH_HOME 指定 DSH 根目录。
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -24,7 +30,32 @@ import { BUNDLE_DIR, PRESETS, buildPatches, patchFileFor } from './build-agent-p
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 const DSH_HOME = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
-const PROFILE = process.argv[2] || 'web';
+
+/** 探测要安装到哪个 profile：显式参数 > 唯一 profile > desktop/web > 报错。 */
+function detectProfile() {
+  const explicit = process.argv[2];
+  if (explicit) return explicit;
+  const root = path.join(DSH_HOME, 'profiles');
+  let names = [];
+  try {
+    names = fs.readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+      .map((entry) => entry.name);
+  } catch {}
+  if (names.length === 1) {
+    log(`未指定 profile，自动选用唯一的 profile: ${names[0]}`);
+    return names[0];
+  }
+  const preferred = names.filter((name) => name === 'desktop' || name === 'web');
+  if (preferred.length === 1) {
+    log(`未指定 profile，自动选用: ${preferred[0]}`);
+    return preferred[0];
+  }
+  if (names.length === 0) return 'web';
+  fatal(`检测到多个 DSH profile（${names.sort().join(', ')}），无法自动判定，请显式指定：node scripts/setup-dsh.mjs <profile>`);
+}
+
+const PROFILE = detectProfile();
 
 // A profile is a directory name, never a path (same boundary as DSH itself).
 if (PROFILE === '.' || PROFILE === '..' || PROFILE === 'node_modules'
@@ -124,6 +155,9 @@ function yamlSingleQuote(s) {
 
 // 由桥接托管的 MCP 条目 id：脚本对这三个 id 拥有所有权，可安全地按 id 增删。
 const MANAGED_MCP_IDS = ['mcp-snowluma', 'mcp-snowluma-host', 'mcp-web-search-safe'];
+// 标记块是「脚本拥有」的唯一区域：块内整体替换，块外一个字节都不动。
+const MCP_BLOCK_BEGIN = '# === qq-bridge MCP BEGIN ===';
+const MCP_BLOCK_END = '# === qq-bridge MCP END ===';
 
 function mcpEntries() {
   const node = process.execPath;
@@ -132,7 +166,7 @@ function mcpEntries() {
     'mcp-snowluma-host': { serverName: 'snowluma-host', script: path.join(REPO_ROOT, 'src', 'mcp-host-server.js') },
     'mcp-web-search-safe': { serverName: 'web-search-safe', script: path.join(REPO_ROOT, 'src', 'mcp-web-search-safe.js') },
   };
-  let out = '# === qq-bridge MCP BEGIN ===\n';
+  let out = `${MCP_BLOCK_BEGIN}\n`;
   out += '# 由 scripts/setup-dsh.mjs 维护；这段区块会被整体替换，请勿手工编辑内部条目。\n';
   for (const [id, s] of Object.entries(servers)) {
     out += `- insert:\n`;
@@ -147,24 +181,76 @@ function mcpEntries() {
     // qq_wait_for_messages 最长可等 10 分钟；DSH 默认 60s 会提前掐断工具调用。
     if (s.toolCallTimeoutMs) out += `        toolCallTimeoutMs: ${s.toolCallTimeoutMs}\n`;
   }
-  out += '# === qq-bridge MCP END ===\n';
+  out += `${MCP_BLOCK_END}\n`;
   return out;
 }
 
 function prepareCordisPatch() {
   const profileDir = path.join(DSH_HOME, 'profiles', PROFILE);
   const patchFile = path.join(profileDir, 'cordis.patch.yml');
-  const original = fs.existsSync(patchFile) ? fs.readFileSync(patchFile, 'utf8') : '';
-  const lines = original.replace(/^\uFEFF/, '').split(/\r?\n/);
-  // Repair only the historical invalid *root* [] followed by block operations.
-  // A nested [] or a line inside a literal scalar is user data and must survive.
+  const original = (fs.existsSync(patchFile) ? fs.readFileSync(patchFile, 'utf8') : '').replace(/^\uFEFF/, '');
+  const eol = original.includes('\r\n') ? '\r\n' : '\n';
+  // 块本身不带结尾换行：替换时要沿用原文件 END 行后面的那一个换行，才能做到字节级幂等
+  // （否则每跑一次就多出一个空行）。
+  const block = mcpEntries().replace(/\r?\n/g, eol).replace(/\r?\n$/, '');
+  const withoutRootEmpty = stripRootEmptySequence(original);
+  const span = findManagedBlock(withoutRootEmpty);
+  let text;
+  if (span) {
+    // 只替换 BEGIN/END 标记块内部：块外的注释、引号风格、!!js 标签一个字节都不动。
+    // 旧版这里把整份 YAML load→dump 重写，用户的注释会静默消失（实测丢过 profile 模板头部）。
+    const rest = withoutRootEmpty.slice(span.end);
+    text = withoutRootEmpty.slice(0, span.start) + block + (rest.startsWith(eol) ? rest : eol + rest);
+  } else {
+    // 没有标记块：要么是全新文件，要么是用户手写的。这里只追加、不改写已有内容；
+    // 若发现历史残留的托管条目又无法定位标记块，就报错让人工处理（绝不 yaml.dump 重排）。
+    const leftovers = MANAGED_MCP_IDS.filter((id) => new RegExp(`^\\s*-\\s*id:\\s*['"]?${id}['"]?\\s*$`, 'm').test(withoutRootEmpty));
+    if (leftovers.length) {
+      // 历史文件（旧版输出或手工编辑）里已有托管条目却没有标记块：按 id 结构化清理一次，
+      // 之后文件由标记块接管，不再需要 yaml.dump。
+      const cleaned = stripManagedEntriesStructurally(patchFile, withoutRootEmpty);
+      log(`⚠️ 未找到 MCP 标记块，已结构化清理 ${cleaned.removed} 条历史条目（该文件的注释会在这一步丢失，之后不再发生）`);
+      const base = cleaned.text.replace(/\s+$/, '');
+      text = base ? `${base}${eol}${eol}${block}${eol}` : `${block}${eol}`;
+    } else {
+      const base = withoutRootEmpty.replace(/\s+$/, '');
+      text = base ? `${base}${eol}${eol}${block}${eol}` : `${block}${eol}`;
+    }
+  }
+  // 校验：DSH 允许 !!js 而 js-yaml 不认识它，那种情况我们只动了标记块，跳过整体校验即可；
+  // 其它解析错误说明结果确实坏了，直接中止（不写文件）。
+  try {
+    const doc = yaml.load(text);
+    if (doc !== null && doc !== undefined && !Array.isArray(doc)) {
+      fatal(`${patchFile} must contain a YAML array; file unchanged`);
+    }
+  } catch (error) {
+    const message = String(error?.message ?? error);
+    if (!/unknown tag|!!js/i.test(message)) fatal(`failed to parse ${patchFile}; file unchanged: ${message}`);
+    log('⚠️ profile patch 里含 js-yaml 不认识的标签（如 !!js），已跳过整体校验：本次只替换 MCP 标记块');
+  }
+  return { patchFile, original, text };
+}
+
+/** 历史坏形状：顶格根级 `[]`（后面还要追加块级操作，留着就是非法 YAML）。只删那一行。 */
+function stripRootEmptySequence(text) {
+  const lines = text.split(/\r?\n/);
   const first = lines.findIndex((line) => line.trim() && !line.trimStart().startsWith('#'));
-  if (first >= 0 && lines[first].trim() === '[]'
-      && lines.slice(first + 1).some((line) => /^-\s/.test(line))) {
+  if (first >= 0 && !lines[first].startsWith(' ') && lines[first].trim() === '[]') {
     lines.splice(first, 1);
   }
+  return lines.join('\n');
+}
+
+/**
+ * 没有标记块、却已经有托管条目时的兜底清理：结构化地按 id 删除，其它条目原样保留。
+ *
+ * 这条路会丢注释（yaml.dump 重排），所以只在**无法定位标记块**的历史文件上走一次；
+ * 之后文件里就有标记块了，后续安装全部走字节级替换。
+ */
+function stripManagedEntriesStructurally(patchFile, text) {
   let doc;
-  try { doc = yaml.load(lines.join('\n')) ?? []; }
+  try { doc = yaml.load(text) ?? []; }
   catch (error) { fatal(`failed to parse ${patchFile}; file unchanged: ${error.message}`); }
   if (!Array.isArray(doc)) fatal(`${patchFile} must contain a YAML array; file unchanged`);
   let removed = 0;
@@ -177,19 +263,26 @@ function prepareCordisPatch() {
     if (!Array.isArray(operation.insert)) fatal(`insert must be an array in ${patchFile}; file unchanged`);
     const entries = operation.insert.filter((entry) => {
       if (!MANAGED_MCP_IDS.includes(entry?.id)) return true;
-      removed++;
+      removed += 1;
       return false;
     });
-    // Retain shared insert parents and their selectors/other operation fields.
+    // 共享 insert 的父操作与其它字段要保留。
     if (entries.length || Object.keys(operation).length > 1) kept.push({ ...operation, insert: entries });
   }
-  const text = (kept.length ? `${yaml.dump(kept, { lineWidth: -1, noRefs: true })}\n` : '') + mcpEntries();
-  return { patchFile, original, text, removed };
+  return { text: kept.length ? `${yaml.dump(kept, { lineWidth: -1, noRefs: true })}\n` : '', removed };
 }
 
-function patchCordis({ patchFile, original, text, removed }) {
+/** 定位 `# === qq-bridge MCP BEGIN/END ===` 标记块；没有返回 null。 */
+function findManagedBlock(text) {
+  const start = text.indexOf(MCP_BLOCK_BEGIN);
+  if (start < 0) return null;
+  const endAt = text.indexOf(MCP_BLOCK_END, start);
+  if (endAt < 0) return null;
+  return { start, end: endAt + MCP_BLOCK_END.length };
+}
+
+function patchCordis({ patchFile, original, text }) {
   ensureDir(path.dirname(patchFile));
-  // Parsing/serialization normalizes formatting; keep the original text (including comments).
   if (original && original !== text) {
     backupBeforeOverwrite(patchFile);
   }
@@ -200,7 +293,7 @@ function patchCordis({ patchFile, original, text, removed }) {
   } finally {
     fs.rmSync(temporary, { force: true });
   }
-  log(`cordis.patch.yml: MCP 条目已同步（清理旧条目 ${removed} 条，写入 ${MANAGED_MCP_IDS.length} 条）`);
+  log(`cordis.patch.yml: MCP 条目已同步（写入 ${MANAGED_MCP_IDS.length} 条，块外内容保持原样）`);
 }
 
 /**
@@ -274,9 +367,14 @@ function patchProfilePackage(links) {
   const pkgFile = path.join(profileDir, 'package.json');
   ensureDir(profileDir);
   let pkg = { name: `dsh-profile-${PROFILE}`, private: true, dependencies: {}, dsh: { profile: { bundles: [] } } };
+  let hadBom = false;
   if (fs.existsSync(pkgFile)) {
     try {
-      pkg = JSON.parse(fs.readFileSync(pkgFile, 'utf8'));
+      // Windows 编辑器/Set-Content 常写 UTF-8 BOM；JSON.parse 会因此整份拒绝。
+      // 读的时候吃掉 BOM，写回时保持原文件是否带 BOM（与 snowluma-conn 的持久化同一约定）。
+      const raw = fs.readFileSync(pkgFile, 'utf8');
+      hadBom = raw.charCodeAt(0) === 0xFEFF;
+      pkg = JSON.parse(hadBom ? raw.slice(1) : raw);
     } catch (e) {
       fatal(`failed to parse ${pkgFile}: ${e.message}`);
     }
@@ -298,7 +396,18 @@ function patchProfilePackage(links) {
       log(`package.json bundle added: ${name}`);
     }
   }
-  fs.writeFileSync(pkgFile, `${JSON.stringify(pkg, null, 2)}\n`, 'utf8');
+  // 原子写 + 覆盖前备份：package.json 被写坏 = profile 起不来（cannot resolve profile bundle），
+  // 而这里以前是直接 writeFileSync、且不走 backupBeforeOverwrite。
+  const nextText = `${hadBom ? '\uFEFF' : ''}${JSON.stringify(pkg, null, 2)}\n`;
+  const previous = fs.existsSync(pkgFile) ? fs.readFileSync(pkgFile, 'utf8') : null;
+  if (previous !== null && previous !== nextText) backupBeforeOverwrite(pkgFile);
+  const temporary = `${pkgFile}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(temporary, nextText, 'utf8');
+    fs.renameSync(temporary, pkgFile);
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
   log(`profile package.json ensured: ${pkgFile}`);
 }
 
@@ -351,13 +460,15 @@ function autoInstallProfileBundles() {
   }
 }
 
-// Validate the existing YAML before changing any presets or configuration.
+// 顺序：先只读地解析/校验 patch（失败就什么都没写），再建 bundle 链接与 profile package.json，
+// 最后才落 cordis.patch.yml —— 否则中途 fatal 会留下「MCP 已挂、bundle 没注册」的半写状态，
+// 表现是 DSH 能启动但桥接 fail-closed 拒绝建群会话。
 const cordisPatch = prepareCordisPatch();
 regeneratePresetPatches();
-patchCordis(cordisPatch);
 const links = {};
 for (const name of BUNDLE_NAMES) links[name] = ensureBundle(name);
 patchProfilePackage(links);
+patchCordis(cordisPatch);
 reportLegacyPresetDir();
 ensureLocalModeFile();
 autoInstallProfileBundles();

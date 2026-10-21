@@ -20,12 +20,22 @@ dns.promises.lookup = async (host) => {
     { address: '2606:4700:4700::1111', family: 6 },
     { address: '93.184.216.34', family: 4 },
   ];
+  // fake-ip 代理（Clash 等）会把所有域名解析成 198.18.0.0/15 里的地址（issue #40）。
+  if (host === 'multimedia.nt.qq.com.cn') return [{ address: '198.18.0.113', family: 4 }];
+  if (host === 'fakeip-mixed.test') return [
+    { address: '198.18.0.113', family: 4 },
+    { address: '93.184.216.34', family: 4 },
+  ];
+  if (host === 'fakeip-private.test') return [
+    { address: '198.18.0.113', family: 4 },
+    { address: '10.0.0.5', family: 4 },
+  ];
   throw new Error(`Unexpected DNS lookup in offline test: ${host}`);
 };
 let fetchModule;
 try { fetchModule = await import('../src/safe-fetch.js'); }
 finally { dns.promises.lookup = originalLookup; }
-const { isPrivateIp, safeFetch, safeFetchBuffer, validateFetchUrl } = fetchModule;
+const { isPrivateIp, isProxyFakeIp, resolveSafeAddresses, safeFetch, safeFetchBuffer, validateFetchUrl } = fetchModule;
 
 function mockTransport(t, scripts) {
   const requests = [];
@@ -135,6 +145,38 @@ test('redirect bodies are closed immediately and internal redirects are rejected
   await assert.rejects(safeFetch('http://93.184.216.34/'), /禁止/);
   assert.equal(requests.length, 1);
   assert.equal(responses[0].destroyed, true);
+});
+
+test('fake-ip proxy resolutions are allowed for hostnames, never for IP literals', async (t) => {
+  // 198.18.0.0/15 是 Clash 一类 fake-ip 代理的保留段：用户拿它与「内网地址」区分开。
+  assert.equal(isProxyFakeIp('198.18.0.113'), true);
+  assert.equal(isProxyFakeIp('198.19.255.255'), true);
+  assert.equal(isProxyFakeIp('198.20.0.1'), false);
+  assert.equal(isProxyFakeIp('10.0.0.1'), false);
+  assert.equal(isPrivateIp('198.18.0.113'), true, 'IP 字面量仍按内网地址处理');
+
+  // 直接写 fake-ip 字面量没有合法用途，必须继续拒绝（否则等于放开 SSRF）。
+  await assert.rejects(validateFetchUrl('http://198.18.0.113/'), /禁止/);
+  await assert.rejects(validateFetchUrl('http://198.19.1.1/emoji.gif'), /禁止/);
+
+  // 域名解析到 fake-ip：放行，并且连接仍然打在 fake-ip 上、保留原始 Host/SNI（由代理还原目标）。
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, 0, 0, 0, 0]);
+  const { requests } = mockTransport(t, [{ body: png }]);
+  const fetched = await safeFetchBuffer('https://multimedia.nt.qq.com.cn/download?appid=1&fileid=2', 1024);
+  assert.deepEqual(fetched.buffer, png);
+  assert.equal(requests[0].options.hostname, '198.18.0.113');
+  assert.equal(requests[0].options.headers.host, 'multimedia.nt.qq.com.cn');
+  assert.equal(requests[0].options.servername, 'multimedia.nt.qq.com.cn');
+
+  // 混入真实公网地址：只连真实地址，不把 fake-ip 当前提。
+  assert.deepEqual(await resolveSafeAddresses('fakeip-mixed.test'), ['93.184.216.34']);
+  // 混入真实内网地址：仍然拒绝，fake-ip 不能当成绕开 SSRF 的通道。
+  await assert.rejects(resolveSafeAddresses('fakeip-private.test'), /内网/);
+
+  // 单标签名与内网后缀主机名不享受 fake-ip 放行。
+  for (const url of ['http://nas/', 'http://router.lan/', 'http://wiki.internal/', 'http://host.local./']) {
+    await assert.rejects(validateFetchUrl(url), /禁止/, url);
+  }
 });
 
 test('public redirects still work without downloading their bodies', async (t) => {

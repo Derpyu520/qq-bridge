@@ -66,7 +66,9 @@ for (const p of ['qq-chat', 'qq-chat-v2']) {
   let schemaOk = false;
   try { persona.Config(row.config); schemaOk = true; } catch {}
   check(`preset ${p}: persona.config 通过 DSH schema`, schemaOk);
-  check(`preset ${p}: 保留 {{model}} / {{cwd}} 变量`, /\{\{model\}\}/.test(row.config.prefix) && /\{\{cwd\}\}/.test(row.config.suffix ?? ''));
+  // 0.2.1-rc.2 起 loop 只注册 provider / model：{{model}} 保留，{{cwd}} 必须**不存在**
+  // （否则整轮 prompt 装配失败，issue #39）。
+  check(`preset ${p}: 保留 {{model}} 且不含 {{cwd}}`, /\{\{model\}\}/.test(row.config.prefix) && !/\{\{cwd\}\}/.test(row.config.suffix ?? ''));
 }
 
 // ── 2. 部署侧：DSH 0.1.7 的 preset 机制 ──────────────────────────────────────
