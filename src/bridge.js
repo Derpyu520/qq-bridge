@@ -1397,6 +1397,33 @@ async function main() {
   const innerLife = createInnerLife({ stateDir: STATE_DIR, getConfig: () => cfg, log });
   const imageClient = createNovelAIClient({ getConfig: () => cfg, stateDir: STATE_DIR, log });
 
+  // config.json 热加载：手动改完保存后大多数字段立即生效（改端口/控制台令牌/人格卡上限
+  // 这类启动期才用的值仍需重启）。用 fs.watch + 800ms 去抖，避免编辑器「先清空再写入」
+  // 让我们读到半个 JSON；解析失败就保留旧配置，绝不把进程带崩。
+  function watchConfigFile() {
+    const configPath = path.join(ROOT, 'config.json');
+    let timer = null;
+    try {
+      fs.watch(configPath, { persistent: false }, () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          try {
+            const fresh = loadConfig();
+            for (const key of Object.keys(cfg)) delete cfg[key];
+            Object.assign(cfg, fresh);
+            log('[config] config.json 已重新加载（端口/控制台令牌/人格卡上限等启动期值仍需重启）');
+          } catch (error) {
+            log(`[config] 重新加载失败，继续使用旧配置：${error?.message ?? error}`);
+          }
+        }, 800);
+      });
+      log('[config] 已监听 config.json，手改保存后自动生效');
+    } catch (error) {
+      log(`[config] 无法监听 config.json（改动需重启生效）：${error?.message ?? error}`);
+    }
+  }
+  watchConfigFile();
+
   // ── 群聊黑话/网络用语学习（slang） ──────────────────────────────────────
   let slangEntries = [];
   // 读失败时（被占用 / 权限 / JSON 损坏）必须**暂停写入**：否则内存里的空数组

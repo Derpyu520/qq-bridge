@@ -57,7 +57,7 @@ export function extractImageFromZip(buf) {
 }
 
 export function createNovelAIClient({ getConfig, stateDir, log = () => {} }) {
-  let chain = Promise.resolve();
+  let busy = false;
   let lastAt = 0;
   let day = '';
   let dayCount = 0;
@@ -120,13 +120,16 @@ export function createNovelAIClient({ getConfig, stateDir, log = () => {} }) {
   }
 
   /**
-   * 生成一张图。返回 { buffer, prompt, negative, model, seed? }。
-   * 调用会排队串行执行，两次之间至少间隔 minIntervalMs。
+   * 生成一张图。返回 { buffer, prompt, negative, model }。
+   * 同一时刻只允许一张：上一张没完成时直接拒绝（不排队），两次之间仍至少间隔 minIntervalMs。
    */
   function generate({ prompt, negative, width, height, steps, sampler, guidance, model, seed } = {}) {
-    const run = chain.then(async () => {
-      const c = cfg();
-      if (c.enabled === false) throw new Error('生图功能已关闭（config.imageGen.enabled=false）');
+    if (busy) return Promise.reject(new Error('上一张图还在生成，等它出来再要（同一时间只允许一张）'));
+    busy = true;
+    return (async () => {
+      try {
+        const c = cfg();
+        if (c.enabled === false) throw new Error('生图功能已关闭（config.imageGen.enabled=false）');
       if (!String(c.apiKey || '').trim()) throw new Error('没有配置 NovelAI API key（config.imageGen.apiKey）');
       ensureQuota(c);
       const composed = composePrompt(prompt, negative, c);
@@ -198,11 +201,12 @@ export function createNovelAIClient({ getConfig, stateDir, log = () => {} }) {
         const files = fs.readdirSync(dir).filter((f) => f.endsWith('.png')).sort();
         for (const f of files.slice(0, Math.max(0, files.length - 300))) fs.rmSync(path.join(dir, f), { force: true });
       } catch {}
-      log(`[novelai] 生成完成 ${path.basename(file)} ${(png.length / 1024).toFixed(0)}KB model=${body.model} ${w}x${h} steps=${params.steps}`);
-      return { buffer: png, file, prompt: composed.prompt, negative: composed.negative, model: body.model, width: w, height: h };
-    });
-    chain = run.catch(() => {});
-    return run;
+        log(`[novelai] 生成完成 ${path.basename(file)} ${(png.length / 1024).toFixed(0)}KB model=${body.model} ${w}x${h} steps=${params.steps}`);
+        return { buffer: png, file, prompt: composed.prompt, negative: composed.negative, model: body.model, width: w, height: h };
+      } finally {
+        busy = false;
+      }
+    })();
   }
 
   return { generate, config: cfg, extractImageFromZip };
