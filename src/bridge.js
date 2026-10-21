@@ -2339,14 +2339,20 @@ async function main() {
   }
 
   function withSlangContext(promptText) {
-    const now = new Date();
-    const timeLine = `【当前时间】${now.toLocaleString('zh-CN', { hour12: false })}（${Intl.DateTimeFormat().resolvedOptions().timeZone}）`;
-    const parts = [timeLine];
+    const slim = String(cfg.socialV2?.prompt?.profile ?? 'slim') !== 'full';
+    const parts = [];
+    if (!slim) {
+      // 瘦身模式下不再注入【当前时间】：唤醒 prompt 开头的【现在】已经给了日期/星期/时段，
+      // 两行时间信息是重复的。
+      const now = new Date();
+      parts.push(`【当前时间】${now.toLocaleString('zh-CN', { hour12: false })}（${Intl.DateTimeFormat().resolvedOptions().timeZone}）`);
+    }
     if (cfg.slang?.enabled !== false) {
-      const block = buildSlangContext(slangEntries, cfg.slang?.injectMax ?? 8);
+      const configured = Number(cfg.slang?.injectMax) || 8;
+      const block = buildSlangContext(slangEntries, slim ? Math.min(4, configured) : configured);
       if (block) parts.push(block);
     }
-    return parts.join('\n\n') + '\n\n' + promptText;
+    return parts.length ? parts.join('\n\n') + '\n\n' + promptText : promptText;
   }
 
   if (!cfg.allow.private.length && !cfg.allow.groups.length && cfg.allowAllWhenEmpty) {
@@ -10342,8 +10348,13 @@ async function main() {
 
   function buildWakePromptV2(key, reason) {
     const roleState = readRoleState();
+    // 瘦身开关：slim（默认）只保留「现在/状态/待办/语感」这些每轮真正变化的东西，
+    // 静态规则交给 preset 的系统提示，不再逐轮重复。切 full 回退到原来的长版。
+    const slimPrompt = String(cfg.socialV2?.prompt?.profile ?? 'slim') !== 'full';
     const roleLine = roleState.role ? `【当前角色】${roleState.role}（完整角色卡请调用 qq_get_prompt 查看）\n\n` : '';
-    const identityLine = selfIdentityTextV2();
+    const identityLine = (slimPrompt && (selfDisplayName || selfUserId))
+      ? `【你的身份】你是「${selfDisplayName || '（昵称未取到）'}」（QQ ${selfUserId || '?'}）：@你、叫你名字、引用你的话，指的都是你。\n\n`
+      : selfIdentityTextV2();
     const st = getSocialV2State(key);
     const tokenLine = `【会话令牌】${st.agentToken}（调用二代状态工具时请在参数中带上此令牌）\n\n`;
     const memoryText = formatMemoryV2(st);
@@ -10352,7 +10363,9 @@ async function main() {
     // 避免唤醒 prompt 出现两份黑话表。
     const participationText = formatParticipationV2(st);
     const participationLine = participationText ? `${participationText}\n\n` : '';
-    const antiAiLine = '【反AI味】你不是客服：不用有求必应，可以装傻、已读乱回、拒绝推荐；少用“一绝/真管用/保证/绝对”这类词。\n\n';
+    const antiAiLine = slimPrompt
+      ? '【别像AI】不是客服：可以有求不应、装傻、已读乱回；别用「确实/其实/希望对你有帮助/总的来说」。\n\n'
+      : '【反AI味】你不是客服：不用有求必应，可以装傻、已读乱回、拒绝推荐；少用“一绝/真管用/保证/绝对”这类词。\n\n';
     // 语感样本：从最近的群聊/对方消息里提取长度、标点、口头禅，再给几句真实范例。
     // 只学语气与节奏，不学内容、不点名模仿谁——越界就变成「学舌」。
     const styleCfg = cfg.socialV2?.style ?? {};
@@ -10376,13 +10389,22 @@ async function main() {
     }
     const stickerCfg = cfg.socialV2?.sticker ?? {};
     const stickerLine = stickerCfg.enabled !== false && stickerCfg.includeInPrompt !== false
-      ? `${buildStickerStrategyHint()}\n${buildStickerContext(stickerEntries, stickerCfg.promptMaxStickers ?? 8)}\n\n`
+      ? (slimPrompt
+        // 瘦身版：只给图库清单（4 张），使用策略交给 preset 里的【表情包】规则。
+        ? `${buildStickerContext(stickerEntries, Math.min(4, Number(stickerCfg.promptMaxStickers) || 4))}\n\n`
+        : `${buildStickerStrategyHint()}\n${buildStickerContext(stickerEntries, stickerCfg.promptMaxStickers ?? 8)}\n\n`)
       : '';
     const preSleepMs = Math.max(0, Number(cfg.socialV2?.wake?.preSleepWaitMs) || 300000);
-    const proactiveLine = '【积极性】不要习惯性潜水：群里有你能接的话题就主动参与，偶尔插一句别人的话题也很正常；只有确实没话可说、对方已明确结束、或长时间没人说话时才潜水。\n\n';
+    const proactiveLine = slimPrompt
+      ? '【积极性】有能接的话题就主动插一句，别习惯性潜水；确实没话就安静。\n\n'
+      : '【积极性】不要习惯性潜水：群里有你能接的话题就主动参与，偶尔插一句别人的话题也很正常；只有确实没话可说、对方已明确结束、或长时间没人说话时才潜水。\n\n';
     const replyTiming = replyTimingV2(st);
-    const replyLine = `【首回复节奏】先处理已有消息，完整的问题及时回答。需要确认对方是否继续补充时，用 qq_wait_for_messages(purpose="reply", quietMs=${replyTiming.quietMs})；从最后来信计时，合批和读提示词的耗时也算，目前还差约 ${Math.ceil(replyTiming.remainingQuietMs / 1000)} 秒静默。已安静够久可直接回，工具也会立即返回并补上思考期间的新消息。只有明确没说完、你确实要等下文时，才用普通 messages 长等待。\n\n`;
-    const preSleepLine = `【沉睡前强制等待】这是决定潜水收尾时的步骤，不是首回复的前置条件。除非对方明确说“不聊了/晚安/下了/拜拜”等结束语，否则每次设置潜水/下一次唤醒前，必须先调用 qq_wait_for_messages(timeoutMs=${preSleepMs}) 完成一次沉睡前观察；回复前 purpose="reply" 的短静默不能代替这次完整观察。若 ${Math.round(preSleepMs / 60000)} 分钟内没人说话，返回 preSleepWaitSatisfied=true，可以设置下一次唤醒并沉睡；若期间有人发新消息，先查看返回的 newMessages——判断不需要你参与就可以直接沉睡，若你选择参与回复，则下次想睡时需要重新等待观察窗口。如果返回里带 preSleepWaitRemainingMs，就按剩余时间继续等待。\n\n`;
+    const replyLine = slimPrompt
+      ? `【首回复】想确认对方说完没，用 qq_wait_for_messages(purpose="reply", quietMs=${replyTiming.quietMs})（还差约 ${Math.ceil(replyTiming.remainingQuietMs / 1000)} 秒静默）；别拖太久。\n\n`
+      : `【首回复节奏】先处理已有消息，完整的问题及时回答。需要确认对方是否继续补充时，用 qq_wait_for_messages(purpose="reply", quietMs=${replyTiming.quietMs})；从最后来信计时，合批和读提示词的耗时也算，目前还差约 ${Math.ceil(replyTiming.remainingQuietMs / 1000)} 秒静默。已安静够久可直接回，工具也会立即返回并补上思考期间的新消息。只有明确没说完、你确实要等下文时，才用普通 messages 长等待。\n\n`;
+    const preSleepLine = slimPrompt
+      ? `【收尾】决定潜水/设下一次唤醒前，必须先 qq_wait_for_messages(timeoutMs=${preSleepMs}) 观察一次；没人说话再设，有人说话先看 newMessages。\n\n`
+      : `【沉睡前强制等待】这是决定潜水收尾时的步骤，不是首回复的前置条件。除非对方明确说“不聊了/晚安/下了/拜拜”等结束语，否则每次设置潜水/下一次唤醒前，必须先调用 qq_wait_for_messages(timeoutMs=${preSleepMs}) 完成一次沉睡前观察；回复前 purpose="reply" 的短静默不能代替这次完整观察。若 ${Math.round(preSleepMs / 60000)} 分钟内没人说话，返回 preSleepWaitSatisfied=true，可以设置下一次唤醒并沉睡；若期间有人发新消息，先查看返回的 newMessages——判断不需要你参与就可以直接沉睡，若你选择参与回复，则下次想睡时需要重新等待观察窗口。如果返回里带 preSleepWaitRemainingMs，就按剩余时间继续等待。\n\n`;
     const lastMsg = [...(Array.isArray(st.recentMessages) ? st.recentMessages : [])].reverse().find((m) => m && !m.isSelf);
     const lastAiMin = st.lastAiReplyAt ? Math.max(0, Math.round((Date.now() - Number(st.lastAiReplyAt)) / 60000)) : null;
     const statusBits = [`未读 ${(st.unread || []).length} 条`];
@@ -10413,7 +10435,9 @@ async function main() {
     const innerText = innerLife.wakeBrief(key);
     const innerLine = innerText ? `${innerText}\n\n` : '';
     const innerGuide = (v2ToolEnabled('diary') || v2ToolEnabled('heart') || v2ToolEnabled('promise'))
-      ? '【内在状态怎么用】你有三样别人看不到的东西：日记（qq_diary_write 记、qq_diary_search 翻，普通 7 天/重要 30 天/非常重要永不忘）、心情与好感度（qq_heart_update，只在情绪真的动了的时候动、一次最多几个点）、没兑现的约定（qq_promise_add，答应过的事到点会被单独唤醒）。日程表记这两天的小事（qq_schedule_add / qq_schedule_fuzz / qq_schedule_drop），画像记对他的长期认识（qq_profile_set / qq_profile_confirm / qq_profile_drop）。别为了用而用，也不要每轮都写日记。\n\n'
+      ? (slimPrompt
+        ? '【内在状态】日记/心情/约定/日程/画像都有工具，只在真的需要时用；别为了用而用，也别每轮写日记。\n\n'
+        : '【内在状态怎么用】你有三样别人看不到的东西：日记（qq_diary_write 记、qq_diary_search 翻，普通 7 天/重要 30 天/非常重要永不忘）、心情与好感度（qq_heart_update，只在情绪真的动了的时候动、一次最多几个点）、没兑现的约定（qq_promise_add，答应过的事到点会被单独唤醒）。日程表记这两天的小事（qq_schedule_add / qq_schedule_fuzz / qq_schedule_drop），画像记对他的长期认识（qq_profile_set / qq_profile_confirm / qq_profile_drop）。别为了用而用，也不要每轮都写日记。\n\n')
       : '';
     // 当前时间必须显式给：模型只能从消息时间戳猜日期，跨天时「明天」到底指哪天它是懵的。
     const nowDate = new Date();
@@ -10553,6 +10577,8 @@ async function main() {
     saveSocialV2State();
     const promptText = buildWakePromptV2(key, reason);
     log(`[reserved2] 唤醒 ${key}（${reason}）`);
+    // prompt 体积观测：瘦身前后用同一条日志对比（中文约 2.2 字符/token）。
+    log(`[prompt] ${key} ${reason} ${promptText.length} 字符 ≈ ${Math.round(promptText.length / 2.2)} token`);
     const rollbackWakeTime = () => {
       const idx = st.wakeTimes.lastIndexOf(wakeTime);
       if (idx >= 0) st.wakeTimes.splice(idx, 1);

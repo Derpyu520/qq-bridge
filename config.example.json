@@ -275,7 +275,7 @@
       "affinityMaxDeltaPerTurn": 5,
       "affinityDailyCap": 15,
       "missingIdleMs": 7200000,
-      "diaryBriefLimit": 3,
+      "diaryBriefLimit": 2,
       "profileStaleDays": 30,
       "profileDropDays": 60,
       "scheduleReviewDays": 3
@@ -285,6 +285,9 @@
       "maxExamples": 4,
       "maxChars": 600,
       "lookback": 40
+    },
+    "prompt": {
+      "profile": "slim"
     }
   },
   "webSearch": {
