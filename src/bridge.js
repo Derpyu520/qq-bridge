@@ -6849,6 +6849,22 @@ async function main() {
           }
           return;
         }
+        // 调试：不真正发送，只按当前配置构建一次唤醒 prompt，返回体积（可选全文）。
+        // 用于调 prompt 瘦身/enabled 开关时快速量体积，避免为了看一眼就得真唤醒一次。
+        if (url.pathname === '/api/debug/prompt' && req.method === 'GET') {
+          const key = String(url.searchParams.get('key') ?? '').trim();
+          const reason = String(url.searchParams.get('reason') ?? 'private').trim() || 'private';
+          if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
+          try {
+            const text = buildWakePromptV2(key, reason);
+            const payload = { ok: true, key, reason, profile: String(cfg.socialV2?.prompt?.profile ?? 'slim'), chars: text.length, tokens: Math.round(text.length / 2.2) };
+            if (url.searchParams.get('full') === '1') payload.text = text;
+            sendJson(payload);
+          } catch (error) {
+            sendJson({ ok: false, error: String(error?.message ?? error).slice(0, 200) }, 500);
+          }
+          return;
+        }
         // 网上表情包（PigHub 猪猪）：搜索 / 取图并发送。
         // 本地收藏（大肥鱼）优先，猪猪作为补充——这个优先级写在人设卡与工具描述里。
         if (url.pathname === '/api/socialV2/pigstickers' && req.method === 'GET') {
@@ -9281,10 +9297,13 @@ async function main() {
         promptText += `\n\n【本次消息快照】\n${JSON.stringify(wakeSnapshot)}\n以上消息已提供，无需重复查询；partial=true 时用 qq_get_unread_messages(afterSeq=readThroughSeq) 继续读取。先处理当前消息；回复前如需确认后续补充，用 qq_wait_for_messages(purpose="reply") 补足短静默，已安静够久会立即返回，不要先长等。收尾只确认你已处理的 readThroughSeq（本地 seq，非 QQ messageId），传给 qq_mark_read 或 qq_set_wake_config 的 throughSeq；新到消息留待处理。`;
       }
     }
-    let content = [{ type: 'text', text: withSlangContext(promptText) }];
+    // 真实投递体积（含快照与黑话表）：和上面 base 那条一起看，才能判断瘦身到底省了多少。
+    const deliveredText = withSlangContext(promptText);
+    log(`[prompt] ${key} ${opts.wakeReason ?? ''} 投递 ${deliveredText.length} 字符 ≈ ${Math.round(deliveredText.length / 2.2)} token`);
+    let content = [{ type: 'text', text: deliveredText }];
     if (Array.isArray(opts.media) && opts.media.length > 0) {
       const imageParts = await resolveMediaList(opts.media);
-      content = [{ type: 'text', text: withSlangContext(promptText) }, ...imageParts];
+      content = [{ type: 'text', text: deliveredText }, ...imageParts];
     }
     // 媒体解析成功后再标记退场，避免解析异常时残留退场标记。
     if (!isCurrentSession(key, sessionId)) throw new Error('投递前会话已重置或权限已变化');
