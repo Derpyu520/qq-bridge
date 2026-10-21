@@ -56,6 +56,7 @@ import {
 import { createInnerLife } from './inner-life.js';
 import { createNovelAIClient } from './novelai.js';
 import { createWebStickerStore } from './sticker-web.js';
+import { buildStyleHint } from './style-sample.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -10352,6 +10353,27 @@ async function main() {
     const participationText = formatParticipationV2(st);
     const participationLine = participationText ? `${participationText}\n\n` : '';
     const antiAiLine = '【反AI味】你不是客服：不用有求必应，可以装傻、已读乱回、拒绝推荐；少用“一绝/真管用/保证/绝对”这类词。\n\n';
+    // 语感样本：从最近的群聊/对方消息里提取长度、标点、口头禅，再给几句真实范例。
+    // 只学语气与节奏，不学内容、不点名模仿谁——越界就变成「学舌」。
+    const styleCfg = cfg.socialV2?.style ?? {};
+    let styleLine = '';
+    if (styleCfg.enabled !== false) {
+      const pool = [
+        ...(Array.isArray(st.recentMessages) ? st.recentMessages : []),
+        ...(Array.isArray(st.unread) ? st.unread : [])
+      ];
+      const isGroup = key.startsWith('group:');
+      const hint = buildStyleHint(pool, {
+        maxExamples: Math.max(1, Math.min(8, Number(styleCfg.maxExamples) || 4)),
+        maxChars: Math.max(200, Number(styleCfg.maxChars) || 600),
+        lookback: Math.max(10, Number(styleCfg.lookback) || 40),
+        title: isGroup ? '这个群怎么说话' : '他平时怎么说话',
+        closing: isGroup
+          ? undefined
+          : '跟着他的节奏和句子长度说话，但不要复读他的话；别用「其实/确实如此/希望对你有帮助」这类客服腔。'
+      });
+      if (hint) styleLine = `${hint}\n\n`;
+    }
     const stickerCfg = cfg.socialV2?.sticker ?? {};
     const stickerLine = stickerCfg.enabled !== false && stickerCfg.includeInPrompt !== false
       ? `${buildStickerStrategyHint()}\n${buildStickerContext(stickerEntries, stickerCfg.promptMaxStickers ?? 8)}\n\n`
@@ -10401,7 +10423,7 @@ async function main() {
     const slot = nowDate.getHours() < 5 ? '凌晨' : nowDate.getHours() < 9 ? '早上' : nowDate.getHours() < 12 ? '上午'
       : nowDate.getHours() < 14 ? '中午' : nowDate.getHours() < 18 ? '下午' : nowDate.getHours() < 23 ? '晚上' : '深夜';
     const nowLine = `【现在】${nowDate.getFullYear()}年${nowDate.getMonth() + 1}月${nowDate.getDate()}日 ${weekNames[nowDate.getDay()]} ${hh}:${mi}（${slot}）\n\n`;
-    const base = nowLine + roleUpdateHint() + roleLine + identityLine + tokenLine + initialPromptLine + antiAiLine + proactiveLine + stickerLine + replyLine + statusLine + innerGuide + innerLine + wakeLine + memoryLine + participationLine + preSleepLine;
+    const base = nowLine + roleUpdateHint() + roleLine + identityLine + tokenLine + initialPromptLine + antiAiLine + styleLine + proactiveLine + stickerLine + replyLine + statusLine + innerGuide + innerLine + wakeLine + memoryLine + participationLine + preSleepLine;
     if (reason === 'bootstrap') {
       return `${base}【引导唤醒】你已接入 QQ 会话 ${key}。\n当前是二代仿真模式：你的文本输出不会自动发送到 QQ，所有发言必须通过工具完成。\n请先调用 qq_get_prompt 查看角色、推荐值、可用工具和状态；有待回应的消息先按首回复节奏处理，最后才用 qq_set_wake_config 设置你希望如何被唤醒。`;
     }
