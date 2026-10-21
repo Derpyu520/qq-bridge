@@ -1,6 +1,7 @@
 {
   "dsh": {
     "baseUrl": "http://127.0.0.1:3080",
+    "autoDiscoverPort": true,
     "provider": "deepseek-official",
     "model": "deepseek-flash",
     "reasoningEffort": "max",

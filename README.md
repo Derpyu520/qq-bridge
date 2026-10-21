@@ -109,7 +109,8 @@ npm install        # 安装依赖（postinstall 会自动修补 @snowluma/sdk �
 
 | 字段 | 说明 |
 | --- | --- |
-| `dsh.baseUrl` | DSH Web 地址，默认 `http://127.0.0.1:3080` |
+| `dsh.baseUrl` | DSH Web 地址，默认 `http://127.0.0.1:3080`。⚠️ **DSH 桌面版的端口每次启动都会变**（安装包内写死 `--port 0`，由系统分配），所以写死的值很容易过期；默认开启自动发现，见下一行 |
+| `dsh.autoDiscoverPort` | 默认 `true`。启动时先验证 `dsh.baseUrl`，不通就自动找本机上真正在跑的 DSH（先看 DSH 进程自己监听的端口，再退到全端口特征探测），**命中即写回 `config.json`**；运行中如果事件流连续「连上但一帧未收」，也会复检一次并在端口变化时热切换、重放会话订阅。端口对不上时的典型症状是日志里只有「DSH 事件流已结束（本次收到 0 帧）」，很容易被误判成协议不兼容（issue #34）。**想固定指向某个 DSH 实例（多开、指向另一个 profile）时设为 `false`** —— 那时绝不改 URL、也不写回 |
 | `dsh.provider` / `dsh.model` / `dsh.reasoningEffort` | DSH 会话使用的模型/推理强度；若你的 DSH 没有示例中的模型，改成 DSH 设置页里可用的模型即可（选择失败只打日志，不阻塞启动） |
 | `dsh.authToken` | DSH launch token（进程启动凭据）。**通常应留空**：留空时桥接用 `~/.dsh/.credentials.yaml` 里持久化的签名密钥**离线铸造**会话 Cookie，不依赖任何进程期状态（DSH 0.1.7 起启动 token 只存在于内存、日志里那条是上一个进程的陈旧值，换 Cookie 只会 401）。只有显式填了才会优先走 token 交换 |
 | `dsh.authHeader` / `dsh.authPrefix` | 保留字段，当前新版 DSH 链路使用 Cookie 交换，不再直接发送该鉴权头 |

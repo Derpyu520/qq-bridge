@@ -159,6 +159,13 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     NodeApiClient: class { constructor() { return api; } },
     SnowLumaWebSocketClient: FakeBot, text: (s) => s,
     discoverDshLaunchToken: () => '', unwrap, createTurnCollector,
+    // DSH 端点自动发现：测试不打宿主机网络。桩成「配置值即最优」——
+    // 这样启动流程走常规分支（不触发自动校正），也不会把 config 写回临时目录以外的地方。
+    discoverDshBaseUrl: async ({ configured } = {}) => ({
+      baseUrl: configured || null, source: configured ? 'configured' : 'none', candidates: [], scanned: 0
+    }),
+    persistDshBaseUrl: () => ({ updated: false, from: null, to: null }),
+    probeDshBaseUrl: async () => ({ ok: true, reason: 'auth-required' }),
     ...markdown, ...sensitive, ...wait, ...safeFetch, ...forward, ...slang, ...sticker,
     ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...presetPrompt,
     // ACL 收紧会 spawn icacls 去改**真实**文件系统；测试不该做这件事（同理见下面的

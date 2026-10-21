@@ -14,7 +14,11 @@ const prefix = persona?.config?.prefix ?? '';
 test('reserved2 YAML resolves to the expected persona and template variables', () => {
   assert.equal(persona?.name, '@deepseek-ai/dsh-persona');
   assert.match(prefix, /\{\{model\}\}/);
-  assert.match(persona.config.suffix, /\{\{cwd\}\}/);
+  // DSH 0.2.1-rc.2 的 `deployment:persona-suffix` 只注册 provider/model，
+  // 引用 {{cwd}} 会让**整个回合**以 `unknown prompt variable "{{cwd}}"` 失败（issue #39）。
+  // 这个 preset 本来就不挂载任何本地工具，工作目录对模型毫无意义，所以必须没有 suffix。
+  assert.equal(Object.hasOwn(persona.config, 'suffix'), false,
+    'persona 不应设置 suffix：0.2.1 的 persona-suffix 只注册 provider/model（issue #39）');
   assert.equal(Object.hasOwn(persona.config, 'text'), false);
 });
 

@@ -17,6 +17,7 @@ import { GEN1_ROLE_LINE_RE, parseRoleSections, roleCharStats, roleSectionReport,
 import { fileURLToPath } from 'node:url';
 import { SnowLumaWebSocketClient, text } from '@snowluma/sdk';
 import { NodeApiClient, unwrap, createTurnCollector, discoverDshLaunchToken } from './dsh-client.js';
+import { discoverDshBaseUrl, persistDshBaseUrl, persistDshFields, probeDshBaseUrl } from './dsh-endpoint.js';
 import { mdToPlain, splitForQQ, truncateText, truncateTextTail } from './md-to-plain.js';
 import { SENSITIVE_RE } from './sensitive.js';
 import { looksLikeUnfinished } from './v2-wait.js';
@@ -2325,16 +2326,59 @@ async function main() {
     log('ℹ️  socialV2.voice.allowAbsolutePath=true 已不再放宽 AI 通道：AI 发的语音始终只允许来自语音库（库外文件请用语音工具/CLI 发送）');
   }
 
+  // ── DSH 端点自动校正（见 src/dsh-endpoint.js 头部）──────────────────────────
+  // DSH 桌面版的 web 端口由系统随机分配（安装包内写死 `--port 0`），每重启一次就变，
+  // 而 baseUrl 是写死的配置。对不上时 WS 握手静默失败，日志只剩一句
+  // 「DSH 事件流已结束（本次收到 0 帧）」，很容易被当成协议不兼容（issue #34）。
+  // 这里在握手之前先确认端点；端口没变时只多一次本机 HTTP 探测（实测 ~3ms）。
+  // 关掉：config.json 里 `dsh.autoDiscoverPort: false`（想固定指向某个实例时用）。
+  if (cfg.dsh.autoDiscoverPort !== false) {
+    const ep = await discoverDshBaseUrl({
+      configured: cfg.dsh.baseUrl,
+      skipPorts: [cfg.consolePort]
+    });
+    if (ep.skipped === 'remote') {
+      log(`DSH 端点：${cfg.dsh.baseUrl}（远程地址，跳过自动发现）`);
+    } else if (!ep.baseUrl) {
+      log(`⚠️  未发现可用的 DSH 端点：配置值 ${cfg.dsh.baseUrl} 不可达，本机 ${ep.scanned} 个监听端口都没有 DSH 特征。`
+        + '请确认 DSH 已启动 —— 桌面版的端口每次启动都会变，桥接找不到时可用 dsh.baseUrl 手工指定。');
+    } else if (ep.baseUrl !== cfg.dsh.baseUrl) {
+      log(`🔄 DSH 端点已自动校正：${cfg.dsh.baseUrl} → ${ep.baseUrl}`
+        + `（来源：${ep.source === 'process' ? 'DSH 进程监听端口' : '本机端口扫描'}，已验证响应特征）`);
+      cfg.dsh.baseUrl = ep.baseUrl;
+      try {
+        const w = persistDshBaseUrl(path.join(ROOT, 'config.json'), ep.baseUrl);
+        if (w.updated) log('   已写回 config.json：dsh.baseUrl');
+      } catch (error) {
+        log(`   ⚠️ 写回 config.json 失败（本次仍用发现到的端点）：${error?.message ?? error}`);
+      }
+    } else {
+      log(`DSH 端点：${ep.baseUrl}（可达）`);
+    }
+    const others = ep.candidates.filter((c) => `http://127.0.0.1:${c.port}` !== cfg.dsh.baseUrl);
+    if (others.length > 0) {
+      // 同时开着 desktop 与 web 两份 profile 时会出现这种情况：说清楚选了哪个，
+      // 避免用户对着「明明开着 DSH，它却连到别处」猜。
+      log(`   本机另有 DSH 候选端口：${others.map((c) => `${c.port}（${c.source}）`).join('、')}，未采用`);
+    }
+  }
+
   // DSH 侧
-  const api = new NodeApiClient(cfg.dsh.baseUrl, undefined, {
-    token: cfg.dsh.authToken,
-    // true=用户在 config.json 里显式填的；false=从日志猜的。猜来的不优先于离线铸造。
-    tokenExplicit: cfg.dsh.authTokenExplicit === true,
-    header: cfg.dsh.authHeader,
-    prefix: cfg.dsh.authPrefix,
-    // 默认只允许把 launch token 交给回环地址；远程 DSH 需要显式 opt-in（见 dsh-client.ensureAuth）。
-    allowRemote: cfg.dsh.allowRemote === true
-  });
+  //
+  // 抽成工厂是给「运行时换端口」用的：Cookie 是按 authority（host:port）签名的，
+  // 换端口后旧实例的 Cookie 一律失效，必须整个重建客户端，改 baseUrl 字段没用。
+  function createDshApi(baseUrl) {
+    return new NodeApiClient(baseUrl, undefined, {
+      token: cfg.dsh.authToken,
+      // true=用户在 config.json 里显式填的；false=从日志猜的。猜来的不优先于离线铸造。
+      tokenExplicit: cfg.dsh.authTokenExplicit === true,
+      header: cfg.dsh.authHeader,
+      prefix: cfg.dsh.authPrefix,
+      // 默认只允许把 launch token 交给回环地址；远程 DSH 需要显式 opt-in（见 dsh-client.ensureAuth）。
+      allowRemote: cfg.dsh.allowRemote === true
+    });
+  }
+  let api = createDshApi(cfg.dsh.baseUrl);
   // DSH 的模型目录 RPC：0.1.5 是 `session/modelCatalog`。**不能走基类门面**
   // `api.sessions.modelCatalog` —— 桥接钉住的 `@deepseek-ai/dsh-host-apiproxy@0.1.1-rc.2`
   // 的 sessions 门面里根本没有这个方法（只有 `models` → 已下线的 `session/models`），
@@ -7879,21 +7923,90 @@ async function main() {
   // 返回 'applied' | 'not-found' | 'failed'。
   // 'not-found' 表示 DSH 侧会话已经不存在（DSH 重启、异常退出、归档竞态），
   // 本地映射已失效，调用方必须退役重建，否则每条消息都会对着一个不存在的会话重试。
+  /**
+   * provider 名对不上时，按 DSH 自己的模型目录算出该用哪个。
+   *
+   * 为什么需要：provider 名会随 DSH 的版本/登录方式变 —— `agent-default-model` 的
+   * **base 默认值**是 `deepseek-official`（web/API-key 时代），而桌面版账号登录后
+   * user 层覆盖成 `deepseek-account`。名字对不上时 selectModel 只会回一句
+   * `session/model-unavailable: Select an available model before sending a message.`
+   * —— 完全没提「provider 名错了」，很容易被当成模型下线或额度问题（实测复现过：
+   * 同一个会话 official 必失败、account 必成功）。
+   *
+   * 这里**只算不写**：改不改配置由调用方在重试成功后决定，避免把一次瞬时故障
+   * 写成永久的配置改动。
+   * 只换 provider，保留模型名与思考强度（那是用户的意图）；只有在默认 provider
+   * 里找不到同名模型时才整套换成目录里的 default。
+   */
+  async function resolveModelSelection(selection) {
+    const resp = await fetchModelCatalog();
+    const catalog = resp?.result?.ok ? resp.result.value : null;
+    const def = catalog?.default;
+    const routable = Array.isArray(catalog?.routableProviders) ? catalog.routableProviders.map(String) : [];
+    if (!def?.provider) return selection;
+    if (routable.includes(selection.provider)) return selection; // provider 本来就可用
+    const modelExists = (catalog.groups ?? []).some((g) => String(g.id) === String(def.provider)
+      && (g.models ?? []).some((m) => String(m.id) === selection.model));
+    const next = modelExists
+      ? { provider: String(def.provider), model: selection.model, effort: selection.effort }
+      : {
+        provider: String(def.provider),
+        model: String(def.model ?? selection.model),
+        effort: String(def.reasoningEffort ?? selection.effort)
+      };
+    log(`   按 DSH 模型目录校正：${selection.provider}/${selection.model} → ${next.provider}/${next.model}`
+      + `（可用 provider：${routable.join(', ') || '空'}）`);
+    return next;
+  }
+
   async function ensureChatModel(sessionId) {
     if (modelAppliedSessions.get(sessionId) === modelSelectionEpoch) return 'applied';
-    const provider = String(cfg.dsh?.provider || 'deepseek-official');
-    const model = String(cfg.dsh?.model || 'deepseek-flash');
-    const effort = String(cfg.dsh?.reasoningEffort || REASONING_EFFORT_DEFAULT);
+    const configured = {
+      provider: String(cfg.dsh?.provider || 'deepseek-official'),
+      model: String(cfg.dsh?.model || 'deepseek-flash'),
+      effort: String(cfg.dsh?.reasoningEffort || REASONING_EFFORT_DEFAULT)
+    };
+    let selection = configured;
     let lastError = null;
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       try {
-        const result = unwrap(await api.sessions.selectModel({ sessionId, provider, model, reasoningEffort: effort }), 'session.selectModel');
+        const result = unwrap(await api.sessions.selectModel({
+          sessionId,
+          provider: selection.provider,
+          model: selection.model,
+          reasoningEffort: selection.effort
+        }), 'session.selectModel');
         modelAppliedSessions.set(sessionId, modelSelectionEpoch);
         log(`已设置会话模型 ${sessionId} -> ${result.selected.provider}/${result.selected.model} (${result.selected.reasoningEffort ?? '默认'})`);
+        // 校正过的选择**真正生效之后**才落盘：重试没成功就不该动用户配置。
+        if (selection.provider !== configured.provider || selection.model !== configured.model
+          || selection.effort !== configured.effort) {
+          cfg.dsh.provider = selection.provider;
+          cfg.dsh.model = selection.model;
+          cfg.dsh.reasoningEffort = selection.effort;
+          try {
+            const w = persistDshFields(path.join(ROOT, 'config.json'), {
+              provider: selection.provider,
+              model: selection.model,
+              reasoningEffort: selection.effort
+            });
+            if (w.updated) log(`   已写回 config.json：${Object.keys(w.changed).map((k) => `dsh.${k}`).join(' / ')}`);
+          } catch (error) {
+            log(`   ⚠️ 写回 config.json 失败（本次仍用校正后的选择）：${error?.message ?? error}`);
+          }
+        }
         return 'applied';
       } catch (error) {
         lastError = error;
         log(`设置会话模型失败 ${sessionId}（第 ${attempt}/2 次）: ${error?.message ?? error}`);
+        // 「选不到模型」几乎都是 provider 名过期，不是模型下线：按目录校正后重试一次。
+        if (attempt === 1 && /model-unavailable|no available model|not available/i.test(String(error?.message ?? ''))) {
+          try {
+            selection = await resolveModelSelection(selection);
+          } catch (e) {
+            log(`   按 DSH 模型目录校正失败：${e?.message ?? e}`);
+          }
+        }
         if (attempt < 2) await sleep(1000);
       }
     }
@@ -11038,6 +11151,72 @@ async function main() {
     return { collector, ended };
   }
 
+  /**
+   * 运行时 DSH 端点复检（启动时那次发现只管当时）。
+   *
+   * 触发场景：「连上事件流 → 一帧未收 → 断开」。这个形状有两个成因，必须分开：
+   *   · DSH 重启了、端口换了（桌面版 `--port 0`，日常操作）→ 换个端点就能自己接回去；
+   *   · 真的协议/版本不兼容（issue #34 的另一种）→ 换端点没用，只能提示核对版本。
+   * 先花 400ms 判活，再决定是「查端口」还是「认命报版本」。
+   *
+   * @returns {'switched'|'checked'|'throttled'|'disabled'}
+   */
+  let dshRecheckAt = 0;
+  async function recheckDshEndpoint() {
+    if (cfg.dsh.autoDiscoverPort === false) return 'disabled';
+    const before = cfg.dsh.baseUrl;
+    // 两种情况要区别对待：
+    //   · 端点还活着但一帧不给 → 不是端口问题（流被服务端关 / 协议不兼容），别急着扫端口；
+    //   · 端点已经不在了 → 八成是 DSH 重启换了端口，立刻找，等不起。
+    // 早期版本不区分这两种、统一 60s 限流，结果 DSH 刚重启那一下正好被限掉，
+    // 要等一分钟才自愈（实测复现过：日志一路刷「0 帧」）。
+    const quick = await probeDshBaseUrl(before).catch(() => ({ ok: false }));
+    const gateMs = quick.ok ? 60_000 : 5_000;
+    if (Date.now() - dshRecheckAt < gateMs) return 'throttled';
+    dshRecheckAt = Date.now();
+    if (quick.ok) return 'checked'; // 端点没变：确认过一次就够，交给调用方去报版本问题
+    const ep = await discoverDshBaseUrl({
+      configured: before,
+      skipPorts: [cfg.consolePort]
+    }).catch(() => null);
+    if (!ep?.baseUrl || ep.baseUrl === before) return 'checked';
+    log(`🔄 检测到 DSH 端点变化：${before} → ${ep.baseUrl}`
+      + `（来源：${ep.source === 'process' ? 'DSH 进程监听端口' : '本机端口扫描'}），重建连接`);
+    cfg.dsh.baseUrl = ep.baseUrl;
+    try {
+      const w = persistDshBaseUrl(path.join(ROOT, 'config.json'), ep.baseUrl);
+      if (w.updated) log('   已写回 config.json：dsh.baseUrl');
+    } catch (error) {
+      log(`   ⚠️ 写回 config.json 失败（本次仍用发现到的端点）：${error?.message ?? error}`);
+    }
+    // Cookie 是按 authority（host:port）签发的，换端口后旧实例的 Cookie 必然 401，
+    // 所以必须整个重建客户端 —— 只改 baseUrl 字段会被旧 Cookie 卡住。
+    // follow 列表也要跟着重放：订阅状态活在旧实例的 _desiredFollows 里，不重放的话
+    // 新连接虽然「正常」，但每个群都收不到事件，表现为「它不理我了」。
+    const resubscribe = new Set(Object.values(state.sessions));
+    for (const sid of learnerSessions) resubscribe.add(sid);
+    if (slangLearnerSessionId) resubscribe.add(slangLearnerSessionId);
+    api = createDshApi(ep.baseUrl);
+    for (const sid of resubscribe) {
+      try {
+        api.events.follow(sid);
+      } catch (error) {
+        log(`   重订阅会话失败（${String(sid).slice(0, 8)}…）：${error?.message ?? error}`);
+      }
+    }
+    if (resubscribe.size > 0) log(`   已重订阅 ${resubscribe.size} 个会话`);
+    // DSH 重启过（端口变了）通常也意味着 preset / MCP 配置重新加载过：立刻重拉一次清单。
+    // 不重拉的话，启动时缓存的那份「standard, ptc, minimal, cordis」会一直挡着会话创建，
+    // 日志一直喊「请先运行 setup-dsh.mjs 并重启 DSH」——而实际上你已经装好并重启了，
+    // 唯一缺的是让桥接自己再看一眼（本轮实测就撞在这里，只能靠重启桥接绕过）。
+    try {
+      await refreshPresetList();
+    } catch (error) {
+      log(`   重拉 preset 清单失败：${error?.message ?? error}`);
+    }
+    return 'switched';
+  }
+
   async function pumpMux() {
     // 事件流重连退避：DSH 侧流被立刻关闭时（例如版本不兼容，见 issue #34），
     // 固定 3 秒重连会以每分钟 20 行的速度刷屏，真正有用的错误反而被淹没。
@@ -11502,9 +11681,17 @@ async function main() {
       } else {
         failureStreak += 1;
         retryMs = Math.min(30000, retryMs * 2);
-        if (failureStreak === 3) {
-          log('⚠️ 连续多次连上 DSH 事件流后一帧都没收到就断开：多半是 DSH 侧事件流协议/版本不匹配'
-            + '（可在 DSH 里核对版本，或查看 issue #34）。已改为指数退避重连，不再每 3 秒刷屏。');
+        // 先怀疑「DSH 换端口了」——桌面版每次启动都换，这是最常见的成因，
+        // 能自愈就别打扰用户；自愈不了才报版本问题。
+        const recheck = await recheckDshEndpoint().catch(() => 'checked');
+        if (recheck === 'switched') {
+          failureStreak = 0;
+          retryMs = 3000;
+        } else if (failureStreak === 3) {
+          log('⚠️ 连续多次连上 DSH 事件流后一帧都没收到就断开：'
+            + (recheck === 'checked' ? '已复检本机端口，端点没变，' : '')
+            + '多半是 DSH 侧事件流协议/版本不匹配（可在 DSH 里核对版本，或查看 issue #34）。'
+            + '已改为指数退避重连，不再每 3 秒刷屏。');
         }
       }
       await sleep(retryMs);
@@ -11593,10 +11780,20 @@ async function main() {
         log(`机器人昵称: ${login.nickname}`);
       }
       if (login?.user_id != null) selfUserId = String(login.user_id);
-    }).catch(() => {});
+    }).catch((error) => {
+      // 「WS 连上了」不等于「HTTP token 是对的」：HTTP 与 WS 是两个不同的值
+      // （见 applyHealedTokens 的说明）。换账号后，config 里那串可能是**旧账号的 WS token**，
+      // 于是 WS 侥幸连上、HTTP 全 401 —— 群里看到的是「接了但不说话」，日志里只有一句
+      // send_private_msg unauthorized（issue 现场）。旧代码在这里 `.catch(() => {})` 静默吞掉，
+      // 等于把唯一的早期信号扔了。这里改成：报出来 + 立刻自愈一次。
+      log(`⚠️ 读取机器人信息失败（HTTP token 可能已过期）：${String(error?.message ?? error).slice(0, 160)}`);
+      void healTokenIfStale('http-token-stale');
+    });
     // 连接成功后顺手确认一下 token 是否已跟当前账号对齐；不一致就写回 config.json，
     // 让 MCP 工具（另一个进程）也能拿到正确的 token。
     void syncTokenToFile();
+    // WS 通了不代表 HTTP token 可用（两个不同的 token）：单独验一次，401 就自愈。
+    void verifySnowlumaHttpToken();
   });
 
   /**
@@ -11675,6 +11872,39 @@ async function main() {
       // 前 4 个字符同样是凭据的一部分（CWE-532，见 PR #13）。
       if (r.updated) log('🔄 已把当前 token 写回 config.json');
     } catch {}
+  }
+
+  /**
+   * 启动/重连后校验一次**HTTP** token。
+   *
+   * 为什么不能靠 `bot.getLoginInfo()`：它走的是 OneBot **WS** 通道（用 WS token），
+   * 而发送消息/读消息工具走 **HTTP**（另一个 token）。换账号后 config 里那串可能正好是
+   * 旧账号的 WS token —— WS 侥幸连上、`getLoginInfo` 也成功，但每条 `send_private_msg`
+   * 都 401（issue 现场：QQ 里一句话都发不出去，日志只有 unauthorized）。
+   * 所以这里直接用 HTTP 打一次 `get_login_info`，不通就自愈。
+   */
+  async function verifySnowlumaHttpToken() {
+    const base = String(cfg.snowluma.httpUrl || '').replace(/\/+$/, '');
+    if (!base) return;
+    try {
+      const res = await fetch(`${base}/get_login_info`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(cfg.snowluma.accessToken ? { authorization: `Bearer ${cfg.snowluma.accessToken}` } : {})
+        },
+        body: '{}',
+        signal: AbortSignal.timeout(4000)
+      });
+      const body = await res.json().catch(() => ({}));
+      if (body?.status === 'ok' && body?.retcode === 0) return;
+      log(`⚠️ SnowLuma HTTP token 不可用（retcode=${body?.retcode ?? res.status} ${body?.wording ?? ''}）：`
+        + '发送消息与读取类工具都会 401，尝试自愈…');
+      await healTokenIfStale('http-token-invalid');
+    } catch (error) {
+      // 探测本身失败不说明 token 有问题（可能只是 SnowLuma 还没起来），只记一句。
+      log(`（SnowLuma HTTP 探测未完成：${error?.message ?? error}）`);
+    }
   }
 
   let tokenHealAt = 0;

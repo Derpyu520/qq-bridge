@@ -10,6 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import { NodeApiClient, unwrap, createTurnCollector, discoverDshLaunchToken } from './dsh-client.js';
+import { discoverDshBaseUrl } from './dsh-endpoint.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -36,16 +37,25 @@ async function cleanupSelfTestSession() {
 }
 
 async function main() {
-  const baseUrl = process.argv[2] ?? 'http://127.0.0.1:3080';
+  // 端点：显式传参 > config.json > 自动发现。
+  // 这里以前写死 3080，而 DSH 桌面版的端口每次启动都变（`--port 0`），
+  // 自测几乎必定「连不上」——那会被误读成桥接协议有问题，实际只是端口过期。
+  let configured = process.argv[2] ?? '';
   let auth;
   try {
     const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
+    configured = configured || cfg.dsh?.baseUrl || '';
     auth = {
       token: cfg.dsh?.authToken || discoverDshLaunchToken(),
       header: cfg.dsh?.authHeader,
       prefix: cfg.dsh?.authPrefix
     };
   } catch {}
+  const ep = await discoverDshBaseUrl({ configured: configured || 'http://127.0.0.1:3080' });
+  const baseUrl = ep.baseUrl ?? configured ?? 'http://127.0.0.1:3080';
+  if (ep.baseUrl && configured && ep.baseUrl !== configured) {
+    console.log(`🔄 DSH 端点已自动校正：${configured} → ${ep.baseUrl}`);
+  }
   const api = new NodeApiClient(baseUrl, undefined, auth);
   selfTestApi = api;
   const promptText = process.argv[3] ?? '只回复两个字：收到';

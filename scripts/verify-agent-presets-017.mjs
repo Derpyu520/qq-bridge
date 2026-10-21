@@ -12,8 +12,16 @@
 // 强行退出会在 Windows 上触发 libuv 断言（0xC0000409），把成功跑成非 0 退出码。
 // 这里只设 process.exitCode，让事件循环自己排空。
 import { discoverDshSessionCookie } from '../src/dsh-client.js';
+import { discoverDshBaseUrl } from '../src/dsh-endpoint.js';
 
-const BASE = process.argv[2] || process.env.DSH_BASE_URL || 'http://127.0.0.1:3080';
+// 端口不能写死：DSH 桌面版每次启动都换端口（`--port 0`），写死 3080 会让这个校验
+// 在没跑过 setup 和跑过 setup 时都报同一种「fetch failed」，完全分不清原因。
+const CONFIGURED = process.argv[2] || process.env.DSH_BASE_URL || '';
+const DISCOVERED = await discoverDshBaseUrl({ configured: CONFIGURED || 'http://127.0.0.1:3080' });
+const BASE = DISCOVERED.baseUrl || CONFIGURED || 'http://127.0.0.1:3080';
+if (DISCOVERED.baseUrl && CONFIGURED && DISCOVERED.baseUrl !== CONFIGURED) {
+  console.log(`🔄 DSH 端点已自动校正：${CONFIGURED} → ${DISCOVERED.baseUrl}`);
+}
 const WANTED = ['qq-chat', 'qq-chat-v2'];
 
 let failed = 0;
