@@ -7085,6 +7085,14 @@ async function main() {
   const lastSendFailed = new Map(); // key -> true（下一次成功即清除）
 
   function sendToQQ(key, msg) {
+    // quiet turn: a round that outputs nothing but [SILENT] must not reach QQ.
+    // reserved2 already checks isSilentMarker in its own branch; this covers
+    // closed-agent (admin DM), where the same agent has full tool access but
+    // no way to say "I did something, I don't want to speak". See #42.
+    if (isSilentMarker(msg)) {
+      log(`[SILENT] quiet turn, skip sending (${key})`);
+      return Promise.resolve();
+    }
     const assertSendAllowed = captureSendGuard(key);
     const safeMsg = redactKnownTokensOnly(msg);
     const [kind, id] = key.split(':');
