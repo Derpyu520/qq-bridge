@@ -54,6 +54,7 @@ import {
   markStickerUsed
 } from './sticker-lib.js';
 import { createInnerLife } from './inner-life.js';
+import { createNovelAIClient } from './novelai.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -999,6 +1000,10 @@ function loadConfig() {
     log(`人格注入上限已按范围校正为 ${roleInjectMaxChars} 字符（配置值 ${cfg.role.maxInjectChars}，允许 1000~20000）`);
   }
 
+  // 画图（NovelAI）。这里必须显式收进 cfg：loadConfig 是按字段白名单组装的，
+  // 不列出来的顶层键会被静默丢掉（表现为「配了 key 却提示没配」）。
+  cfg.imageGen = { ...(cfg.imageGen ?? {}), ...(file.imageGen ?? {}) };
+
   return cfg;
 }
 
@@ -1390,6 +1395,7 @@ async function main() {
   // ── 内在状态：日记（分级遗忘）/ 心情与好感度 / 未完成的约定 ──────────────
   // 与 social-v2.json 分开放：这三份是「人格层」数据，会话重置（/reset）不应该连带清掉。
   const innerLife = createInnerLife({ stateDir: STATE_DIR, getConfig: () => cfg, log });
+  const imageClient = createNovelAIClient({ getConfig: () => cfg, stateDir: STATE_DIR, log });
 
   // ── 群聊黑话/网络用语学习（slang） ──────────────────────────────────────
   let slangEntries = [];
@@ -6759,6 +6765,54 @@ async function main() {
           sendJson({ ok: true, key, count: list.length, items: list, formatted: innerLife.profileLine(key) || '（还没有画像）' });
           return;
         }
+        if (url.pathname === '/api/socialV2/draw' && req.method === 'POST') {
+          // NovelAI 生图：生成后直接以图片消息发到当前会话（和表情包一样属于「发送动作」）。
+          const body = await readBody();
+          const key = String(body.key ?? '').trim();
+          if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
+          if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2ToolEnabled('imageGen')) { sendJson({ ok: false, error: '工具未启用：qq_draw' }, 403); return; }
+          const imgCfg = cfg.imageGen ?? {};
+          if (imgCfg.enabled === false) { sendJson({ ok: false, error: '生图功能已关闭（config.imageGen.enabled）' }, 403); return; }
+          // 默认只允许 owner 私聊：生图是花钱的外部请求，别让群里任何人一句话就烧额度。
+          if (imgCfg.ownerOnly !== false) {
+            const m = /^private:(\d+)$/.exec(key);
+            if (!m || String(cfg.ownerQQ ?? '') !== m[1]) {
+              sendJson({ ok: false, error: '画图目前只允许管理员（ownerQQ）私聊使用；如需开放请改 config.imageGen.ownerOnly=false' }, 403);
+              return;
+            }
+          }
+          const [kind, sid] = key.split(':');
+          if (kind !== 'private' && kind !== 'group') { sendJson({ ok: false, error: '非法会话 key' }, 400); return; }
+          const startedAt = Date.now();
+          try {
+            const result = await imageClient.generate({
+              prompt: body.prompt,
+              negative: body.negative,
+              width: body.width,
+              height: body.height,
+              steps: body.steps
+            });
+            await onebotSendImage(kind, sid, result.buffer);
+            appendActivity(`${key} [draw] 生成并发出一张图（${result.model} ${result.width}x${result.height}）`);
+            sendJson({
+              ok: true,
+              key,
+              model: result.model,
+              width: result.width,
+              height: result.height,
+              bytes: result.buffer.length,
+              ms: Date.now() - startedAt,
+              file: path.basename(result.file),
+              note: '图片已经直接发到会话里了，不需要再调用发送工具；用一句话自然带过即可，不要汇报参数。'
+            });
+          } catch (error) {
+            log(`⚠️ 生图失败 (${key})：${String(error?.message ?? error).slice(0, 300)}`);
+            sendJson({ ok: false, error: String(error?.message ?? error).slice(0, 300) }, 502);
+          }
+          return;
+        }
 
         if (req.method === 'POST' && url.pathname === '/api/socialV2/memory-remove') {
           const body = await readBody();
@@ -7505,6 +7559,36 @@ async function main() {
     if (!res.ok || body.status !== 'ok' || body.retcode !== 0) {
       const hint = res.status === 426 ? '（HTTP 426：snowluma.httpUrl 可能指向了 WebSocket 端口，请检查 config.json 的 snowluma.httpUrl 是否为 OneBot HTTP API 地址）' : '';
       throw new Error(`OneBot ${action} 失败: ${body.wording || body.retcode || res.status}${hint}`);
+    }
+    return body.data;
+  }
+
+  // 发图：和 onebotSend 同一套鉴权与限流，只是消息段换成 image。
+  async function onebotSendImage(kind, id, imageBuffer, replyToMessageId) {
+    if (!imageBuffer || !imageBuffer.length) throw new Error('图片为空');
+    const action = kind === 'private' ? 'send_private_msg' : 'send_group_msg';
+    const b64 = Buffer.from(imageBuffer).toString('base64');
+    const segments = [];
+    if (replyToMessageId !== undefined && replyToMessageId !== null && String(replyToMessageId).trim() !== '') {
+      const rid = String(replyToMessageId).trim();
+      if (!/^-?[1-9]\d*$/.test(rid)) throw new Error('replyToMessageId 必须是非零整数');
+      segments.push({ type: 'reply', data: { id: rid } });
+    }
+    segments.push({ type: 'image', data: { file: `base64://${b64}` } });
+    const params = kind === 'private' ? { user_id: Number(id), message: segments } : { group_id: Number(id), message: segments };
+    const httpUrl = String(cfg.snowluma?.httpUrl || 'http://127.0.0.1:3000').replace(/\/+$/, '');
+    const res = await fetch(`${httpUrl}/${action}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(cfg.snowluma?.accessToken ? { authorization: `Bearer ${cfg.snowluma.accessToken}` } : {})
+      },
+      body: JSON.stringify(params),
+      signal: AbortSignal.timeout(60000)
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || body.status !== 'ok' || body.retcode !== 0) {
+      throw new Error(`OneBot ${action}（图片）失败: ${body.wording || body.retcode || res.status}`);
     }
     return body.data;
   }

@@ -145,7 +145,8 @@
       "heart": true,
       "promise": true,
       "schedule": true,
-      "profile": true
+      "profile": true,
+      "imageGen": true
     },
     "wake": {
       "defaultMode": "diving",
@@ -289,5 +290,22 @@
     "maxTokens": 4096,
     "maxResults": 8,
     "timeoutMs": 35000
+  },
+  "imageGen": {
+    "enabled": true,
+    "model": "nai-diffusion-5-curated",
+    "width": 1024,
+    "height": 1024,
+    "steps": 25,
+    "sampler": "k_euler_ancestral",
+    "guidance": 7,
+    "proxy": "http://127.0.0.1:10808",
+    "minIntervalMs": 5000,
+    "maxPerDay": 60,
+    "timeoutMs": 120000,
+    "basePrompt": "",
+    "negativePrompt": "lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, username, blurry",
+    "apiKey": "",
+    "ownerOnly": true
   }
 }

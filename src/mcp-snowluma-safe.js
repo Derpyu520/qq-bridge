@@ -340,6 +340,7 @@ const TOOL_CONFIG_FLAGS = {
   qq_profile_set: 'profile',
   qq_profile_confirm: 'profile',
   qq_profile_drop: 'profile',
+  qq_draw: 'imageGen',
   qq_slang_query: 'slangQuery',
   qq_slang_submit: 'slangSubmit',
   qq_send_voice: 'sendVoice',
@@ -1324,6 +1325,34 @@ server.tool(
       return { content: [{ type: 'text', text: serializeModelData(data) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `作废画像失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+// ── 画图（NovelAI）────────────────────────────────────────────────────────────
+server.tool(
+  'qq_draw',
+  '用 NovelAI 画一张图，并直接发到当前会话。适合「画个自拍」「画一下你刚才说的场景」。生成大约 20~40 秒；全局限速每 5 秒一张、每天有额度，别连续要图。默认只允许管理员私聊使用。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    prompt: z.string().describe('画面描述（英文 danbooru 标签效果最好，中文也能用）。不用写画风，固定正向提示词会自动加上'),
+    negative: z.string().optional().describe('额外负面提示词（固定负面词会自动加上）'),
+    width: z.number().optional().describe('宽度，默认 1024'),
+    height: z.number().optional().describe('高度，默认 1024'),
+    steps: z.number().optional().describe('步数，默认 25')
+  },
+  async ({ key, token, prompt, negative, width, height, steps }) => {
+    try {
+      const data = await agentApi('/api/socialV2/draw', {
+        method: 'POST',
+        body: JSON.stringify({ key, prompt, negative: negative || '', width, height, steps }),
+        headers: { 'x-agent-token': token },
+        timeoutMs: 180000
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `画图失败：${error?.message ?? error}` }], isError: true };
     }
   }
 );
