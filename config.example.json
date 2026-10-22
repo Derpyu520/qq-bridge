@@ -147,7 +147,8 @@
       "schedule": true,
       "profile": true,
       "imageGen": true,
-      "webSticker": true
+      "webSticker": true,
+      "bili": true
     },
     "wake": {
       "defaultMode": "diving",
@@ -317,5 +318,13 @@
     "negativePrompt": "lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, username, blurry",
     "apiKey": "",
     "ownerOnly": true
+  },
+  "bilibili": {
+    "enabled": true,
+    "cookie": "",
+    "minIntervalMs": 60000,
+    "maxVideoMinutes": 30,
+    "maxTranscriptChars": 8000,
+    "cacheTtlMs": 86400000
   }
 }

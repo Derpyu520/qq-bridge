@@ -343,6 +343,7 @@ const TOOL_CONFIG_FLAGS = {
   qq_draw: 'imageGen',
   qq_pig_sticker_search: 'webSticker',
   qq_pig_sticker_send: 'webSticker',
+  qq_bili: 'bili',
   qq_slang_query: 'slangQuery',
   qq_slang_submit: 'slangSubmit',
   qq_send_voice: 'sendVoice',
@@ -1403,6 +1404,30 @@ server.tool(
       return { content: [{ type: 'text', text: serializeModelData(data) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `发猪猪表情失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+// ── B 站视频解析 ────────────────────────────────────────────────────────────
+server.tool(
+  'qq_bili',
+  '解析一个 B 站视频：返回标题/UP/时长/播放点赞、简介、AI 字幕全文（登录态可用）和热评。拿到后自己写 3~5 条要点总结，不要原样转贴字幕。有人发 B 站链接或问「这视频讲了啥」时用。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    url: z.string().describe('B 站链接、b23.tv 短链，或 BV/av 号')
+  },
+  async ({ key, token, url }) => {
+    try {
+      const data = await agentApi('/api/socialV2/bili', {
+        method: 'POST',
+        body: JSON.stringify({ key, url }),
+        headers: { 'x-agent-token': token },
+        timeoutMs: 180000
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `解析 B 站视频失败：${error?.message ?? error}` }], isError: true };
     }
   }
 );

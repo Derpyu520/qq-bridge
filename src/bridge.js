@@ -57,6 +57,7 @@ import { createInnerLife } from './inner-life.js';
 import { createNovelAIClient } from './novelai.js';
 import { createWebStickerStore } from './sticker-web.js';
 import { buildStyleHint } from './style-sample.js';
+import { createBiliClient } from './bilibili.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -1399,6 +1400,7 @@ async function main() {
   const innerLife = createInnerLife({ stateDir: STATE_DIR, getConfig: () => cfg, log });
   const imageClient = createNovelAIClient({ getConfig: () => cfg, stateDir: STATE_DIR, log });
   const webStickers = createWebStickerStore({ stateDir: STATE_DIR, log });
+  const biliClient = createBiliClient({ getConfig: () => cfg, stateDir: STATE_DIR, log });
 
   // config.json 热加载：手动改完保存后大多数字段立即生效（改端口/控制台令牌/人格卡上限
   // 这类启动期才用的值仍需重启）。用 fs.watch + 800ms 去抖，避免编辑器「先清空再写入」
@@ -6862,6 +6864,22 @@ async function main() {
             sendJson(payload);
           } catch (error) {
             sendJson({ ok: false, error: String(error?.message ?? error).slice(0, 200) }, 500);
+          }
+          return;
+        }
+        // B 站视频解析：返回视频信息 + 字幕 + 热评的 digest，摘要由模型自己写。
+        if (url.pathname === '/api/socialV2/bili' && req.method === 'POST') {
+          const body = await readBody();
+          const key = String(body.key ?? '').trim();
+          if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
+          if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2ToolEnabled('bili')) { sendJson({ ok: false, error: '工具未启用：qq_bili' }, 403); return; }
+          try {
+            const r = await biliClient.digest(body.url);
+            sendJson({ ok: true, key, ...r });
+          } catch (error) {
+            sendJson({ ok: false, error: String(error?.message ?? error).slice(0, 240) }, 502);
           }
           return;
         }
