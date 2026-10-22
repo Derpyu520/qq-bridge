@@ -16,7 +16,7 @@ import { extractPresetPrefix, presetPromptBlockers, presetPromptWarnings, render
 import { GEN1_ROLE_LINE_RE, parseRoleSections, roleCharStats, roleSectionReport, selectRoleText } from './role-card.js';
 import { fileURLToPath } from 'node:url';
 import { SnowLumaWebSocketClient, text } from '@snowluma/sdk';
-import { NodeApiClient, unwrap, createTurnCollector, discoverDshLaunchToken } from './dsh-client.js';
+import { NodeApiClient, unwrap, createTurnCollector, discoverDshLaunchToken, discoverDshSessionCookie } from './dsh-client.js';
 import { mdToPlain, splitForQQ, truncateText, truncateTextTail } from './md-to-plain.js';
 import { SENSITIVE_RE, auditOutboundBatch } from './sensitive.js';
 import { looksLikeUnfinished } from './v2-wait.js';
@@ -1277,6 +1277,86 @@ function log(...args) {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const convKey = (kind, id) => `${kind}:${id}`;
+
+// ── DSH 端口自动发现 ─────────────────────────────────────────────────────────
+// DSH 每次启动挑一个随机回环端口，config.json 的 baseUrl 很容易过期（实测一天变 5 次）。
+// 探测方式：用 ~/.dsh 里的签名密钥铸一张会话 Cookie，POST /api/settings/describe，
+// 200 就说明这个端口上是 DSH（其它本机服务不会认这张 Cookie，也不会回这个 JSON-RPC 形状）。
+async function probeDshBase(baseUrl) {
+  const base = String(baseUrl || '').replace(/\/+$/, '');
+  if (!base) return false;
+  const cookie = discoverDshSessionCookie(base);
+  if (!cookie) return false;
+  try {
+    const res = await fetch(`${base}/api/settings/describe`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: '{}',
+      signal: AbortSignal.timeout(1500),
+    });
+    if (res.status !== 200) return false;
+    // 只看状态码不够：本机任何「对未知路径回 200」的服务都会被误认成 DSH（实测 4310 就被误判过）。
+    // DSH 的响应一定是 JSON-RPC 形状的 `type: 'server-response'`。
+    const body = await res.json().catch(() => null);
+    return body?.type === 'server-response';
+  } catch {
+    return false;
+  }
+}
+
+/** 列出本机 127.0.0.1 上正在监听的 TCP 端口。 */
+function listLoopbackListeningPorts() {
+  const ports = [];
+  try {
+    if (process.platform === 'win32') {
+      const out = execFileSync('netstat', ['-ano', '-p', 'tcp'], { encoding: 'utf8', timeout: 5000, windowsHide: true });
+      for (const line of out.split(/\r?\n/)) {
+        const m = /^\s*TCP\s+127\.0\.0\.1:(\d+)\s+\S+\s+LISTENING/i.exec(line);
+        if (m) ports.push(Number(m[1]));
+      }
+    } else {
+      const out = execFileSync('ss', ['-ltn'], { encoding: 'utf8', timeout: 5000 });
+      for (const line of out.split(/\r?\n/)) {
+        const m = /127\.0\.0\.1:(\d+)/.exec(line);
+        if (m) ports.push(Number(m[1]));
+      }
+    }
+  } catch {}
+  return [...new Set(ports)];
+}
+
+/**
+ * 找 DSH 的真实地址：先探配置值 → 再扫监听端口 → 都没有就等一会儿（开机时桥接常比 DSH 早起）。
+ * @returns {Promise<string>} 找到的 baseUrl；找不到返回 ''。
+ */
+async function discoverDshBase(configured, { rounds = 8, intervalMs = 10000, skipPorts = [] } = {}) {
+  // 这些端口是我们自己的服务或 SnowLuma，扫到了也不用探（由调用方传入，避免依赖 cfg 作用域）。
+  const skip = new Set([3100, 3000, 3001, 5099, ...skipPorts.map(Number)]);
+  for (let round = 0; round < rounds; round += 1) {
+    if (await probeDshBase(configured)) return configured;
+    for (const port of listLoopbackListeningPorts()) {
+      if (port <= 1024 || skip.has(port)) continue;
+      const base = `http://127.0.0.1:${port}`;
+      if (base === configured) continue;
+      if (await probeDshBase(base)) return base;
+    }
+    if (round < rounds - 1) await sleep(intervalMs);
+  }
+  return '';
+}
+
+/** 把新发现的 DSH 地址写回 config.json（只改 dsh.baseUrl 一个字段）。 */
+function persistDshBaseUrl(baseUrl) {
+  try {
+    const file = path.join(ROOT, 'config.json');
+    const doc = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+    doc.dsh = { ...(doc.dsh ?? {}), baseUrl };
+    atomicWriteJson(file, doc);
+  } catch (error) {
+    log(`⚠️ 自动发现的 DSH 地址写回 config.json 失败：${error?.message ?? error}`);
+  }
+}
+
 const SEND_TIMEOUT_MS = 15000;
 // DSH 控制类调用（停任务/归档会话）的超时。这些 await 以前是裸的：DSH 接受了连接但
 // 不返回响应时，HTTP handler 永不返回，控制台与群消息一起失去响应（issue #32）。
@@ -2389,6 +2469,20 @@ async function main() {
   }
 
   // DSH 侧
+  //
+  // DSH 每次启动会挑一个**随机的回环端口**（本机实测一天内变了 5 次：3080→62012→53314→
+  // 56109→49336→58821），config.json 里写死的 baseUrl 很容易过期，表现为桥接一直
+  // 「DSH 事件流一帧都没收到」。开机自启时还多一个问题：桥接可能比 DSH 先起来。
+  // 所以这里先探配置值，不行就扫本机监听端口、再用「铸 Cookie + settings/describe 是否 200」
+  // 确认哪个是 DSH；都没有就等最多 ~30 秒。找到新端口时写回 config.json。
+  const resolvedDshBase = await discoverDshBase(cfg.dsh.baseUrl, { skipPorts: [Number(cfg.consolePort) || 3100] });
+  if (resolvedDshBase && resolvedDshBase !== cfg.dsh.baseUrl) {
+    log(`🔎 自动发现 DSH：${cfg.dsh.baseUrl} 不可用 → ${resolvedDshBase}（已写回 config.json）`);
+    cfg.dsh.baseUrl = resolvedDshBase;
+    persistDshBaseUrl(resolvedDshBase);
+  } else if (!resolvedDshBase) {
+    log(`⚠️ 没有发现运行中的 DSH，继续使用配置值 ${cfg.dsh.baseUrl}；端口变化后请改 config.json 或重启桥接`);
+  }
   const api = new NodeApiClient(cfg.dsh.baseUrl, undefined, {
     token: cfg.dsh.authToken,
     // true=用户在 config.json 里显式填的；false=从日志猜的。猜来的不优先于离线铸造。
