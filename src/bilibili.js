@@ -7,6 +7,7 @@
 // - 所有请求都要带 Referer: https://www.bilibili.com/ 和桌面 UA，否则容易 412。
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36';
 const BASE = 'https://api.bilibili.com';
@@ -126,24 +127,76 @@ export function createBiliClient({ getConfig, stateDir, log = () => {} }) {
     }
   }
 
-  async function fetchSubtitle(bvid, cid) {
+  // ── wbi 签名 ───────────────────────────────────────────────────────────────
+  // 实测：`/x/player/v2`（未签名）对同一视频有时给 8 条字幕、有时给 1 条且 subtitle_url 为空；
+  // 换成带 w_rid 签名的 `/x/player/wbi/v2` 后稳定返回 8 条且 URL 齐全。
+  // 这就是「明明有 AI 字幕却报没字幕」的根因。
+  const MIXIN_TAB = [46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52];
+  let wbiKeys = null;
+  let wbiAt = 0;
+
+  async function getWbiMixin() {
+    if (wbiKeys && Date.now() - wbiAt < 6 * 3600 * 1000) return wbiKeys;
+    const nav = await getJson(`${BASE}/x/web-interface/nav`);
+    const img = nav?.wbi_img?.img_url || '';
+    const sub = nav?.wbi_img?.sub_url || '';
+    const raw = img.split('/').pop().split('.')[0] + sub.split('/').pop().split('.')[0];
+    if (raw.length < 64) throw new Error('拿不到 wbi 密钥（nav 未返回 wbi_img）');
+    wbiKeys = MIXIN_TAB.map((i) => raw[i]).join('').slice(0, 32);
+    wbiAt = Date.now();
+    return wbiKeys;
+  }
+
+  function signQuery(params, mixin) {
+    const wts = Math.floor(Date.now() / 1000);
+    const all = { ...params, wts };
+    const query = Object.keys(all).sort()
+      .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(String(all[k]).replace(/[!'()*]/g, ''))}`)
+      .join('&');
+    const wRid = crypto.createHash('md5').update(query + mixin).digest('hex');
+    return `${query}&w_rid=${wRid}`;
+  }
+
+  async function fetchSubtitle(bvid, cid, aid) {
+    let subs = [];
+    // 优先 wbi 签名端点；失败再退回未签名
     try {
-      const data = await getJson(`${BASE}/x/player/v2?bvid=${bvid}&cid=${cid}`);
-      const subs = data?.subtitle?.subtitles || [];
-      if (!subs.length) return null;
-      const pick = subs.find((s) => /^zh-Hans$/i.test(s.lan)) || subs.find((s) => /^zh-CN$/i.test(s.lan))
-        || subs.find((s) => /^ai-zh$/i.test(s.lan)) || subs.find((s) => String(s.lan).startsWith('zh')) || subs[0];
-      const url = normalizeSubUrl(pick.subtitle_url || pick.subtitleUrl || '');
-      if (!url) return null;
+      const mixin = await getWbiMixin();
+      const qs = signQuery({ bvid, cid, ...(aid ? { aid } : {}) }, mixin);
+      const data = await getJson(`${BASE}/x/player/wbi/v2?${qs}`);
+      subs = data?.subtitle?.subtitles || [];
+    } catch (error) {
+      log(`[bili] wbi 字幕接口失败，退回未签名：${String(error?.message ?? error).slice(0, 100)}`);
+    }
+    if (!subs.length) {
+      try {
+        const data = await getJson(`${BASE}/x/player/v2?bvid=${bvid}&cid=${cid}${aid ? `&aid=${aid}` : ''}`);
+        subs = data?.subtitle?.subtitles || [];
+      } catch (error) {
+        log(`[bili] 未签名字幕接口也失败：${String(error?.message ?? error).slice(0, 100)}`);
+      }
+    }
+    if (!subs.length) return null;
+    // 有些条目 subtitle_url 为空（服务端偶发），跳过它们
+    const usable = subs.filter((s) => String(s.subtitle_url || s.subtitleUrl || '').trim());
+    if (!usable.length) {
+      log(`[bili] 有 ${subs.length} 条字幕记录但 URL 全为空（通常是未登录/被风控）`);
+      return null;
+    }
+    const pick = usable.find((s) => /^zh-Hans$/i.test(s.lan)) || usable.find((s) => /^zh-CN$/i.test(s.lan))
+      || usable.find((s) => /^ai-zh$/i.test(s.lan)) || usable.find((s) => String(s.lan).startsWith('zh')) || usable[0];
+    const url = normalizeSubUrl(pick.subtitle_url || pick.subtitleUrl || '');
+    if (!url) return null;
+    try {
       const res = await fetch(url, { headers: headers(), signal: AbortSignal.timeout(20000) });
-      if (!res.ok) return null;
+      if (!res.ok) { log(`[bili] 字幕文件 HTTP ${res.status}`); return null; }
       const body = await res.json().catch(() => null);
       const items = Array.isArray(body?.body) ? body.body : [];
       if (!items.length) return null;
       const text = items.map((x) => String(x.content || '').trim()).filter(Boolean).join('\n');
       return { lan: pick.lan || 'zh', langName: pick.lan_doc || '', text };
     } catch (error) {
-      log(`[bili] 拿字幕失败（可能没字幕或 cookie 过期）：${String(error?.message ?? error).slice(0, 120)}`);
+      log(`[bili] 字幕文件拉取失败：${String(error?.message ?? error).slice(0, 120)}`);
       return null;
     }
   }
@@ -174,7 +227,7 @@ export function createBiliClient({ getConfig, stateDir, log = () => {} }) {
     const truncated = duration > maxSec;
 
     await spread();
-    const subtitle = await fetchSubtitle(bvid, cid);
+    const subtitle = await fetchSubtitle(bvid, cid, view.aid);
     await spread();
     const comments = await fetchComments(view.aid, 8);
 
