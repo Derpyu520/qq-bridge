@@ -6851,6 +6851,17 @@ async function main() {
           }
           return;
         }
+        // 调试：不真正唤醒，只跑一遍触发判定（验证别名/关键词是否生效）。
+        if (url.pathname === '/api/debug/trigger' && req.method === 'GET') {
+          const key = String(url.searchParams.get('key') ?? '').trim();
+          const text = String(url.searchParams.get('text') ?? '').trim();
+          if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
+          const st = getSocialV2State(key);
+          const kind = key.startsWith('group:') ? 'group' : 'private';
+          const trigger = evaluateWakeTriggerV2(key, st, { message: [], self_id: selfUserId }, kind, text, text, false);
+          sendJson({ ok: true, key, text, trigger: trigger || null, aliases: cfg.socialV2?.wake?.nameAliases || [] });
+          return;
+        }
         // 调试：不真正发送，只按当前配置构建一次唤醒 prompt，返回体积（可选全文）。
         // 用于调 prompt 瘦身/enabled 开关时快速量体积，避免为了看一眼就得真唤醒一次。
         if (url.pathname === '/api/debug/prompt' && req.method === 'GET') {
@@ -10240,6 +10251,16 @@ async function main() {
       const lower = String(plainContent ?? '').toLowerCase();
       if (lower.includes('@' + selfNickname.toLowerCase()) || lower.includes(selfNickname.toLowerCase())) return 'nameMention';
     }
+    // 昵称别名：QQ 昵称是「Xenon」，群里实际喊的是「鲸鲸 / 哦鲸鲸 / 小鲸鱼」。
+    // 只靠 selfNickname 永远匹配不上，所以单独配一份别名表（config.socialV2.wake.nameAliases）。
+    if (tr.nameMention) {
+      const lower = String(plainContent ?? '').toLowerCase();
+      const aliases = Array.isArray(cfg.socialV2?.wake?.nameAliases) ? cfg.socialV2.wake.nameAliases : [];
+      for (const a of aliases) {
+        const s = String(a ?? '').trim().toLowerCase();
+        if (s && lower.includes(s)) return `nameMention:${a}`;
+      }
+    }
     if (Array.isArray(tr.keywords) && tr.keywords.length) {
       const lower = String(plainContent ?? '').toLowerCase();
       for (const kw of tr.keywords) {
@@ -10389,8 +10410,10 @@ async function main() {
     // 静态规则交给 preset 的系统提示，不再逐轮重复。切 full 回退到原来的长版。
     const slimPrompt = String(cfg.socialV2?.prompt?.profile ?? 'slim') !== 'full';
     const roleLine = roleState.role ? `【当前角色】${roleState.role}（完整角色卡请调用 qq_get_prompt 查看）\n\n` : '';
+    const aliasList = Array.isArray(cfg.socialV2?.wake?.nameAliases) ? cfg.socialV2.wake.nameAliases.map(String).filter(Boolean) : [];
+    const aliasText = aliasList.length ? `（群里也喊你「${aliasList.slice(0, 4).join('」「')}」）` : '';
     const identityLine = (slimPrompt && (selfDisplayName || selfUserId))
-      ? `【你的身份】你是「${selfDisplayName || '（昵称未取到）'}」（QQ ${selfUserId || '?'}）：@你、叫你名字、引用你的话，指的都是你。\n\n`
+      ? `【你的身份】你是「${selfDisplayName || '（昵称未取到）'}」（QQ ${selfUserId || '?'}）${aliasText}：@你、叫你名字、引用你的话，指的都是你。\n\n`
       : selfIdentityTextV2();
     const st = getSocialV2State(key);
     const tokenLine = `【会话令牌】${st.agentToken}（调用二代状态工具时请在参数中带上此令牌）\n\n`;

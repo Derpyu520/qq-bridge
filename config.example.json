@@ -187,7 +187,13 @@
       "maxWakePerMinute": 1,
       "maxWakePerHour": 12,
       "noActionLimit": 3,
-      "maxWakeConfigReminders": 2
+      "maxWakeConfigReminders": 2,
+      "nameAliases": [
+        "鲸鲸",
+        "哦鲸鲸",
+        "小鲸鱼",
+        "大肥鱼"
+      ]
     },
     "send": {
       "burstEnabled": true,
