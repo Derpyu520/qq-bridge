@@ -2995,14 +2995,26 @@ async function refreshSessions() {
     const box = document.getElementById('sessionList');
     document.getElementById('metricSessions').textContent = s.sessions.length;
     if (!s.sessions.length) { box.innerHTML = '<div class="empty-state"><strong>还没有会话</strong><p>白名单中的群或好友发来消息后，会话会显示在这里。</p></div>'; return; }
-    let html = '<table><tr><th>QQ 会话</th><th>DSH 会话 ID</th><th>类型</th><th></th></tr>';
+    let html = '<table><tr><th>QQ 会话</th><th>DSH 会话 ID</th><th>类型</th><th>状态</th><th></th></tr>';
     for (const x of s.sessions) {
       const isP = x.key.startsWith('private:');
       const type = isP ? '<span class="pill b">私聊</span>' : '<span class="pill g">群</span>';
       const ownerTag = x.owner ? ' <span class="pill r">管理员</span>' : '';
-      html += `<tr><td>${esc(x.key)}${ownerTag}</td><td><code>${esc(x.sessionId)}</code></td><td>${type}</td><td><button class="small" data-reset-key="${esc(x.key)}">清除上下文</button></td></tr>`;
+      const mode = x.mode || 'normal';
+      const modeTag = mode === 'blocked' ? ' <span class="pill r">屏蔽</span>' : (mode === 'muted' ? ' <span class="pill r">静默</span>' : '');
+      const modeSel = `<select data-mode-key="${esc(x.key)}" style="width:86px">`
+        + `<option value="normal"${mode === 'normal' ? ' selected' : ''}>正常</option>`
+        + `<option value="muted"${mode === 'muted' ? ' selected' : ''}>静默</option>`
+        + `<option value="blocked"${mode === 'blocked' ? ' selected' : ''}>屏蔽</option>`
+        + '</select>';
+      html += `<tr><td>${esc(x.key)}${ownerTag}${modeTag}</td><td><code>${esc(x.sessionId)}</code></td><td>${type}</td><td>${modeSel}</td><td><button class="small" data-reset-key="${esc(x.key)}">清除上下文</button></td></tr>`;
     }
     box.innerHTML = html + '</table>';
+    box.querySelectorAll('[data-mode-key]').forEach(sel => sel.addEventListener('change', async () => {
+      const r = await api('/api/session/mute', 'POST', { key: sel.dataset.modeKey, mode: sel.value });
+      if (!r.ok) alert('❌ ' + (r.error || '失败'));
+      refreshSessions();
+    }));
     box.querySelectorAll('[data-reset-key]').forEach(btn => btn.addEventListener('click', async () => {
       if (!confirm('确定清除该会话的上下文？下次消息将开新会话。')) return;
       const r = await api('/api/session/reset', 'POST', { key: btn.dataset.resetKey });

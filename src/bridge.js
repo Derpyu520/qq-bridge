@@ -1459,6 +1459,46 @@ let stateDirHardened = null;
 // ── 主流程 ──────────────────────────────────────────────────────────────────
 async function main() {
   const cfg = loadConfig();
+  // ── 按会话的三种状态：normal / muted / blocked ─────────────────────────────
+  // muted   —— 消息仍进桥接（记一行活动日志），但不唤醒、不回复、不发。
+  // blocked —— 一到桥接就丢掉：不解析、不记录、不打日志、不排唤醒（poke 也不排）。
+  const SESSION_MODES_FILE = path.join(STATE_DIR, 'session-modes.json');
+  const sessionModes = new Map();
+
+  function loadSessionModes() {
+    try {
+      const raw = JSON.parse(fs.readFileSync(SESSION_MODES_FILE, 'utf8'));
+      for (const [k, v] of Object.entries(raw ?? {})) {
+        if (v === 'muted' || v === 'blocked') sessionModes.set(String(k), v);
+      }
+    } catch {}
+  }
+
+  function saveSessionModes() {
+    try {
+      atomicWriteJson(SESSION_MODES_FILE, Object.fromEntries(sessionModes));
+    } catch (error) {
+      log(`⚠️ 保存会话模式失败：${error?.message ?? error}`);
+    }
+  }
+
+  function sessionMode(key) {
+    return sessionModes.get(canonicalV2Key(key) ?? String(key ?? '')) ?? 'normal';
+  }
+
+  function setSessionMode(key, mode) {
+    const canonical = canonicalV2Key(key);
+    if (!canonical) return null;
+    if (mode === 'muted' || mode === 'blocked') sessionModes.set(canonical, mode);
+    else sessionModes.delete(canonical);
+    saveSessionModes();
+    return canonical;
+  }
+
+  function isMutedKey(key) { return sessionMode(key) === 'muted'; }
+  function isBlockedKey(key) { return sessionMode(key) === 'blocked'; }
+  loadSessionModes();
+
   fs.mkdirSync(STATE_DIR, { recursive: true });
   hardenStateDirAcl();
   acquireLock();
@@ -4181,9 +4221,39 @@ async function main() {
         if (req.method === 'GET' && url.pathname === '/api/sessions') {
           const list = [];
           for (const [key, sessionId] of Object.entries(state.sessions)) {
-            list.push({ key, sessionId, owner: key === `private:${String(cfg.ownerQQ ?? '')}` });
+            list.push({ key, sessionId, owner: key === `private:${String(cfg.ownerQQ ?? '')}`, mode: sessionMode(key) });
           }
           sendJson({ sessions: list });
+          return;
+        }
+        if (req.method === 'POST' && url.pathname === '/api/session/mute') {
+          const body = await readBody();
+          const wanted = ['normal', 'muted', 'blocked'].includes(String(body.mode)) ? String(body.mode) : 'normal';
+          const canonical = setSessionMode(String(body.key ?? ''), wanted);
+          if (!canonical) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
+          // 光挡住新消息不够：之前排好的唤醒定时器/排队回合仍会跑一轮（真花 token），
+          // 所以 muted 与 blocked 都要把待执行的唤醒一并撤掉。
+          if (wanted !== 'normal') {
+            try {
+              const pe = pending.get(canonical);
+              if (pe) {
+                clearTimeout(pe.timer);
+                cancelPendingEntry(pe).catch(() => {});
+              }
+              pending.delete(canonical);
+              queued.delete(canonical);
+              queuedHintAt.delete(canonical);
+              drainPromptQueue(canonical, wanted === 'blocked' ? '会话已屏蔽' : '会话已静默');
+              cancelSocialTimers(canonical);
+              clearSocialV2Timers(canonical);
+              pendingWakeKeys.delete(canonical);
+              wakeConfigUpdatedKeys.delete(canonical);
+            } catch (error) {
+              log(`⚠️ 设置 ${canonical} 为 ${wanted} 时撤销定时任务失败：${error?.message ?? error}`);
+            }
+          }
+          log(`控制台：${canonical} 模式 -> ${wanted}`);
+          sendJson({ ok: true, key: canonical, mode: wanted, muted: wanted === 'muted' });
           return;
         }
         // ── 挂起审批 / 提问 ───────────────────────────────────────────────────
@@ -8314,6 +8384,7 @@ async function main() {
   // 静默模式：除 owner 私聊外，不发送任何在途 AI 回复。
   function shouldBlockSilentReply(key) {
     const roleState = readRoleState();
+    if (isMutedKey(key) || isBlockedKey(key)) return true;
     return roleState.mode === 'silent' && key !== `private:${String(cfg.ownerQQ ?? '')}`;
   }
 
@@ -11064,6 +11135,8 @@ async function main() {
   function scheduleWakeV2(key, reason) {
     if (cfg.socialV2?.enabled === false) return;
     if (socialV2.paused) return;
+    // 完全屏蔽：连唤醒都不排，日志里也不会出现「计划唤醒」。
+    if (isBlockedKey(key)) return;
     if (!isSessionAllowedInCurrentMode(key)) {
       log(`[reserved2] 跳过计划唤醒 ${key}（${reason}）：会话已不在当前模式允许范围内`);
       return;
@@ -11283,6 +11356,8 @@ async function main() {
   // QQ 消息 → DSH prompt
   async function handleIncoming(kind, id, event, cfg) {
     const key = convKey(kind, id);
+    // 完全屏蔽：一到桥接就丢掉 —— 不解析消息段、不记活动、不打日志、不排唤醒。
+    if (isBlockedKey(key)) return;
     if (!modeAllowed(key, kind, id, cfg, currentMode)) {
       log(`忽略未授权会话 ${key}（当前模式 ${currentMode}，来自 ${event.user_id}）`);
       return;
