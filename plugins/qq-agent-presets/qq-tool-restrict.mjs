@@ -209,6 +209,8 @@ export const SAFE_TOOL_NAMES = Object.freeze([
   'mcp__snowluma__qq_set_wake_config',
   'mcp__snowluma__qq_send_voice',
   'mcp__snowluma__qq_list_voices',
+  // QQ 空间说说（公开内容；默认关闭，开启后仍由桥接做审计与限频）
+  'mcp__snowluma__qq_send_qzone_msg',
   // —— mcp-snowluma-host：只读探活 ——
   'mcp__snowluma-host__snowluma_status',
   // —— mcp-web-search-safe：只读联网 ——

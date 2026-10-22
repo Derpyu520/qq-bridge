@@ -329,6 +329,8 @@ const TOOL_CONFIG_FLAGS = {
   qq_slang_submit: 'slangSubmit',
   qq_send_voice: 'sendVoice',
   qq_list_voices: 'sendVoice',
+  // QQ 空间说说：默认关闭（公开内容），开启后 AI 可自主发，但由桥接限频 + 内容审计。
+  qq_send_qzone_msg: 'sendQzone',
   // 下面这些曾经漏登记。漏一个不是"多注册一个工具"那么轻：桥接那边按 `v2ToolEnabled(flag)`
   // 在**调用期**一律 403，而这里不登记就等于"控制台显示已关闭、模型每次请求仍收到它的完整
   // 描述与参数 schema，然后调用它、再拿到 403"——既白烧 token（本文件开头 176 行起就是为省这份
@@ -1369,5 +1371,34 @@ if (cfg.socialV2?.tools?.getForwardMsg !== false) {
     }
   );
 }
+
+// QQ 空间说说（公开发布）。默认关闭，由 `socialV2.tools.sendQzone` 控制是否注册；
+// 真正的限制在桥接端点：agent token + reserved2 + 内容审计 + 限频（见 bridge.js
+// 的 `/api/socialV2/send-qzone`）。
+server.tool(
+  'qq_send_qzone_msg',
+  '发布一条 QQ 空间说说（公开动态，支持纯文字）。这是**对外公开**的内容：只在真的想发、且内容适合所有人看时调用；不要把聊天原文、隐私、本机信息放进去。桥接会限频（默认 24 小时最多 2 条、间隔 ≥30 分钟），超限会返回错误，不要重试。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    content: z.string().describe('说说正文（纯文本，不要 Markdown，建议 1~3 句）'),
+    ugcRight: z.union([z.number(), z.string()]).optional().describe('可见范围：1=公开 4=好友 16=部分好友 64=仅自己 128=部分不可见；省略则用后台默认'),
+  },
+  async ({ key, token, content, ugcRight }) => {
+    try {
+      const body = { key, content };
+      if (ugcRight !== undefined && ugcRight !== null && String(ugcRight).trim() !== '') body.ugcRight = Number(ugcRight);
+      const data = await agentApi('/api/socialV2/send-qzone', {
+        method: 'POST',
+        body: JSON.stringify(body),
+        headers: { 'x-agent-token': token },
+        timeoutMs: 60000,
+      });
+      return { content: [{ type: 'text', text: `已发布说说：${data?.chars ?? content.length} 字（可见范围 ${data?.ugcRight ?? 1}）` }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `发布说说失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
 
 await server.connect(new StdioServerTransport());

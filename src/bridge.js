@@ -521,6 +521,11 @@ function isSilentMarker(text) {
   return /^\s*\[SILENT\]\s*$/i.test(String(text ?? '').trim());
 }
 
+// QQ 空间说说的发布时刻（毫秒时间戳，全局，不分会话）。
+// 只放内存：进程重启就清零——这是「防手滑/防风控」的软限流，不是安全边界，
+// 真要做硬额度应持久化到 state/ 并纳入备份。
+const QZONE_POST_TIMES = [];
+
 // DSH MCP 发送类工具：一旦 AI 在回合里调用过这些工具，说明消息已经由工具发出，
 // 桥接应跳过该回合的自动转发，避免“工具发一条 + 自动转发一条”的重复。
 const SEND_TOOL_RE = /^mcp__snowluma__qq_(send_group_message|send_private_message|reply|send_burst|send_message)$/;
@@ -825,7 +830,9 @@ function loadConfig() {
         setStickerRemark: false,
         stickerNote: true,
         collectSticker: true,
-        getSelfImage: true
+        getSelfImage: true,
+        // QQ 空间说说：默认关闭（公开内容，需显式开启）。
+        sendQzone: false
       },
       wake: {
         defaultMode: 'diving',
@@ -914,6 +921,15 @@ function loadConfig() {
         maxBytes: 8 * 1024 * 1024,
         maxPixels: 64_000_000,
         maxCount: 5
+      },
+      // QQ 空间说说（AI 自主发布）：限频 + 默认可见范围。
+      // 计数在进程内（重启归零），是「防手滑 / 防风控」的软限流，不是安全边界；
+      // 真正的安全边界是 agent token + reserved2 模式 + 内容审计。
+      qzone: {
+        maxPerDay: 2,         // 24 小时内最多 2 条
+        minGapMs: 1800000,    // 两条之间至少 30 分钟
+        ugcRight: 1,          // 1=公开 4=好友 16=部分好友 64=仅自己 128=部分不可见
+        maxChars: 1000
       },
       ...(file.socialV2 ?? {})
     }
@@ -5372,6 +5388,69 @@ async function main() {
             }
             if (st.sendTimes.length > 500) st.sendTimes = st.sendTimes.slice(-500);
             saveSocialV2State();
+            sendJson({ ok: false, error: error?.message ?? String(error) }, 500);
+          }
+          return;
+        }
+        // ── 发 QQ 空间说说（reserved2：AI 可自主发，但限频 + 内容审计） ──────────
+        //
+        // 为什么必须走桥接、而不是让 MCP 直接打 OneBot：
+        //   说说**是公开内容**（ugc_right=1 时所有人可见），必须过敏感信息审计
+        //   （本机路径/凭据/会话令牌）、必须限频，并留下活动记录。
+        // 权限边界与其它发送工具一致：agent token + 会话 key + reserved2 + 工具开关。
+        if (req.method === 'POST' && url.pathname === '/api/socialV2/send-qzone') {
+          const body = await readBody();
+          const key = String(body.key ?? '').trim();
+          const agentToken = String(req.headers['x-agent-token'] ?? '').trim();
+          if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
+          if (currentMode !== 'reserved2') { sendJson({ ok: false, error: '该接口仅 reserved2 模式可用' }, 403); return; }
+          if (!agentToken) { sendJson({ ok: false, error: '必须携带 agent token' }, 403); return; }
+          if (!agentTokenOk(key, agentToken)) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          if (!v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
+          if (!v2ToolEnabled('sendQzone')) { sendJson({ ok: false, error: '工具未启用：qq_send_qzone_msg' }, 403); return; }
+          const qz = cfg.socialV2?.qzone ?? {};
+          const content = String(body.content ?? '').trim();
+          const maxChars = Math.max(1, Number(qz.maxChars) || 1000);
+          if (!content) { sendJson({ ok: false, error: 'content 不能为空' }, 400); return; }
+          if (content.length > maxChars) { sendJson({ ok: false, error: `说说不能超过 ${maxChars} 字` }, 400); return; }
+          // 公开内容按最严格口径审计：路径/凭据/已知会话令牌一律拦截。
+          if (auditOutboundBatch([content], KNOWN_AGENT_TOKENS).sensitive) {
+            appendActivity(`${key} [qzone] AI 说说被拦截（疑似敏感信息）`);
+            sendJson({ ok: false, error: '说说含敏感信息，已阻止发布' }, 403);
+            return;
+          }
+          // 限频是**全局**的（不分群/私聊）：QQ 空间发太快最容易触发风控。
+          const maxPerDay = Math.max(0, Number(qz.maxPerDay) || 0);
+          const minGapMs = Math.max(0, Number(qz.minGapMs) || 0);
+          const now = Date.now();
+          while (QZONE_POST_TIMES.length && now - QZONE_POST_TIMES[0] >= 24 * 3600 * 1000) QZONE_POST_TIMES.shift();
+          if (maxPerDay > 0 && QZONE_POST_TIMES.length >= maxPerDay) {
+            sendJson({ ok: false, error: `24 小时内说说额度已用完（上限 ${maxPerDay} 条）` }, 429);
+            return;
+          }
+          const lastPost = QZONE_POST_TIMES[QZONE_POST_TIMES.length - 1] ?? 0;
+          if (minGapMs > 0 && lastPost && now - lastPost < minGapMs) {
+            const waitMin = Math.ceil((minGapMs - (now - lastPost)) / 60000);
+            sendJson({ ok: false, error: `距离上一条说说太近，约 ${waitMin} 分钟后才能再发` }, 429);
+            return;
+          }
+          const ugcRight = Number(body.ugcRight ?? qz.ugcRight ?? 1);
+          if (![1, 4, 16, 64, 128].includes(ugcRight)) {
+            sendJson({ ok: false, error: 'ugcRight 必须是 1/4/16/64/128' }, 400);
+            return;
+          }
+          QZONE_POST_TIMES.push(now);   // 预占额度，失败回滚
+          try {
+            const response = await withTimeout(bot.request('send_qzone_msg', { content, ugc_right: ugcRight }), 30000, 'send_qzone_msg 发布说说');
+            if (response && response.retcode && response.retcode !== 0) {
+              throw new Error(`发布失败：${response.wording || response.retcode}`);
+            }
+            log(`[reserved2] AI 发布说说成功（${content.length} 字，ugc_right=${ugcRight}）`);
+            appendActivity(`${key} [reserved2] 发布说说：${content.slice(0, 60)}`);
+            sendJson({ ok: true, posted: true, chars: content.length, ugcRight, data: response?.data ?? null });
+          } catch (error) {
+            const idx = QZONE_POST_TIMES.indexOf(now);
+            if (idx >= 0) QZONE_POST_TIMES.splice(idx, 1);
             sendJson({ ok: false, error: error?.message ?? String(error) }, 500);
           }
           return;

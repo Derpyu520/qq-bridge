@@ -140,7 +140,8 @@
       "stickerNote": true,
       "collectSticker": true,
       "getSelfImage": true,
-      "sendVoice": false
+      "sendVoice": false,
+      "sendQzone": false
     },
     "wake": {
       "defaultMode": "diving",
@@ -255,6 +256,12 @@
       "maxBytes": 8388608,
       "maxPixels": 64000000,
       "maxCount": 5
+    },
+    "qzone": {
+      "maxPerDay": 2,
+      "minGapMs": 1800000,
+      "ugcRight": 1,
+      "maxChars": 1000
     }
   },
   "webSearch": {
