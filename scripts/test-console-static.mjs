@@ -40,6 +40,17 @@ ok(/api\('\/api\/voice\/list/.test(html), '面板调用 /api/voice/list（操作
 ok(/api\('\/api\/voice\/send'/.test(html), '面板调用 /api/voice/send');
 ok(/typeof loadVoiceLibrary === 'function'|async function loadVoiceLibrary/.test(html), 'loadVoiceLibrary 已定义');
 
+console.log('## 系统指令屏蔽面板接线');
+for (const id of ['cmdShieldEnabled', 'cmdShieldNotify', 'cmdShieldCooldown', 'cmdShieldExtra', 'cmdShieldSave', 'cmdShieldSlStatus', 'cmdShieldSlDisable']) {
+  const n = (html.match(new RegExp(`id="${id}"`, 'g')) ?? []).length;
+  ok(n === 1, `面板元素 ${id}`, `${n} 处`);
+}
+ok(/getElementById\('cmdShieldSave'\)\.addEventListener/.test(html), '保存按钮已绑定事件');
+ok(/getElementById\('cmdShieldSlDisable'\)\.addEventListener/.test(html), '一键关闭按钮已绑定事件');
+ok(/api\('\/api\/security'/.test(html), '面板调用 /api/security');
+ok(/commandShield: \{/.test(html), '保存时提交 commandShield 字段');
+ok(/disableSnowLumaStatus: true/.test(html), '一键关闭提交 disableSnowLumaStatus');
+
 console.log('## JS 语法');
 const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
 const big = scripts.sort((a, b) => b.length - a.length)[0];
@@ -72,6 +83,7 @@ console.log('## fixture mock 覆盖');
 const fixture = fs.readFileSync(path.join(ROOT, 'scripts', 'console-ui-fixture.mjs'), 'utf8');
 ok(fixture.includes("case '/api/socialV2/voices'"), 'fixture mock 了 /api/socialV2/voices');
 ok(fixture.includes("case '/api/voice/send'"), 'fixture mock 了 /api/voice/send');
+ok(fixture.includes('disableSnowLumaStatus'), 'fixture mock 了控制台的一键关闭 SnowLuma 状态指令');
 
 console.log(bad === 0 ? '\n全部通过' : `\n${bad} 项失败`);
 if (bad > 0) process.exit(1);

@@ -2499,6 +2499,34 @@ button:active:not(:disabled) {
         <div class="meta">排查：打开 SnowLuma 的 <code>logs/snowluma-*.log</code>，搜 <code>[Hook]</code>，看有没有 <code>receive path stale</code> / <code>process enumeration timed out</code> 这类行；顺带考虑<b>升级 SnowLuma</b>（新版运行时对 hook 的兜底更好）。桥接这边不用重启。</div>
       </div>
     </section>
+<section id="section-command-shield" data-page="access" class="card">
+      <h2 data-note="进线即丢，模型看不到">系统指令屏蔽</h2>
+      <div class="row">
+        <label style="flex:1">启用进线屏蔽（#sl / #status / #帮助 …）</label>
+        <input type="checkbox" id="cmdShieldEnabled" style="width:auto">
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label style="flex:1">拦截后私聊通知管理员</label>
+        <input type="checkbox" id="cmdShieldNotify" style="width:auto">
+      </div>
+      <label style="margin-top:8px">通知冷却（分钟，0 = 每次都通知）</label>
+      <input type="number" id="cmdShieldCooldown" min="0" max="1440" step="1" style="max-width:180px">
+      <label>额外规则（每行一个正则，命中即丢弃）</label>
+      <textarea id="cmdShieldExtra" style="min-height:78px" placeholder="例如：/admin"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button id="cmdShieldSave" class="small">保存屏蔽设置</button>
+        <span class="meta" id="cmdShieldMsg"></span>
+      </div>
+      <div class="meta">命中后不进入未读队列 / 上下文 / 黑话学习窗口；管理员发来同样拦截（查状态请用 <code>/status</code> 或本控制台）。</div>
+
+      <h3 style="margin-top:18px">SnowLuma 自带状态指令</h3>
+      <div class="meta" id="cmdShieldSlStatus">检测中…</div>
+      <div class="row" style="margin-top:8px">
+        <button id="cmdShieldSlDisable" class="small">关闭 SnowLuma 状态指令</button>
+        <span class="meta" id="cmdShieldSlMsg"></span>
+      </div>
+      <div class="meta">这条回复由 SnowLuma 自己发（版本 / 平台 / 运行时长），绕过桥接审计；关闭后需<b>重启 SnowLuma</b> 生效。改前自动备份到 <code>state/command-shield-backups/</code>。</div>
+    </section>
 <section id="section-token" data-page="access" class="card">
       <h2>控制台访问令牌</h2>
       <div class="meta">用于打开本控制台 / 调用管理 API 的令牌。可手动输入新令牌保存，或留空生成随机令牌。修改后当前页面会自动使用新令牌。</div>
@@ -4366,9 +4394,54 @@ document.getElementById('slangConfigSave').addEventListener('click', async () =>
   if (r.ok) loadSlangConfig();
 });
 
+// 「系统指令屏蔽」面板：把 SnowLuma 状态指令的检测结果渲染成一行状态。
+// 只读展示，不在此处发请求；一键关闭按钮见下面的 cmdShieldSlDisable。
+function renderCmdShieldSnowluma(st) {
+  const el = document.getElementById('cmdShieldSlStatus');
+  if (!el) return;
+  if (!st || st.configured === false) {
+    el.textContent = '未配置 SnowLuma 目录（config.json 的 snowluma.homeDir），无法检测或关闭。';
+    el.className = 'meta err';
+    return;
+  }
+  if (st.error) {
+    el.textContent = '读取 SnowLuma 配置失败：' + st.error;
+    el.className = 'meta err';
+    return;
+  }
+  const accounts = Array.isArray(st.accounts) ? st.accounts : [];
+  if (!accounts.length) {
+    el.textContent = '未找到 onebot_*.json（SnowLuma 还没登录过账号？）';
+    el.className = 'meta';
+    return;
+  }
+  const errored = accounts.filter(a => a.error);
+  if (errored.length) {
+    el.textContent = '⚠️ 有配置读取失败（无法判断开关）：' + errored.map(a => a.uin).join('；')
+      + '。请检查 SnowLuma 的 config/onebot_*.json 是否为合法 JSON。';
+    el.className = 'meta err';
+    return;
+  }
+  const exposed = accounts.filter(a => a.enabled === true);
+  if (!exposed.length) {
+    el.textContent = '✅ 状态指令已关闭：' + accounts.map(a => a.uin + '（' + (a.trigger || '#sl') + '）').join('；');
+    el.className = 'meta ok';
+  } else {
+    el.textContent = '⚠️ 仍开启：' + exposed.map(a => a.uin + '（' + (a.trigger || '#sl') + '）').join('；')
+      + '。群友输入后 SnowLuma 会直接回复版本 / 平台 / 运行时长。';
+    el.className = 'meta err';
+  }
+}
+
 function loadSecurity() {
   api('/api/security').then(r => {
     document.getElementById('secInterceptNotify').checked = r.security?.interceptNotify !== false;
+    const cs = r.security?.commandShield || {};
+    document.getElementById('cmdShieldEnabled').checked = cs.enabled !== false;
+    document.getElementById('cmdShieldNotify').checked = cs.notifyOwner !== false;
+    document.getElementById('cmdShieldCooldown').value = Math.round((Number(cs.notifyCooldownMs) || 0) / 60000);
+    document.getElementById('cmdShieldExtra').value = Array.isArray(cs.extraPatterns) ? cs.extraPatterns.join('\n') : '';
+    renderCmdShieldSnowluma(r.snowlumaStatus);
     // state/ 的 ACL 是否收紧（Windows 上需要管理员权限，未提权时会失败）。
     // 明确警示 + 给出可复制的命令，而不是让用户以为已经安全。
     const warn = document.getElementById('stateDirWarn');
@@ -4382,6 +4455,48 @@ function loadSecurity() {
     }
   }).catch(() => {});
 }
+document.getElementById('cmdShieldSave').addEventListener('click', async () => {
+  const msg = document.getElementById('cmdShieldMsg');
+  const rawValue = document.getElementById('cmdShieldCooldown').value.trim();
+  const rawMinutes = rawValue === '' ? NaN : Number(rawValue);
+  // 留空按默认 10 分钟处理：空字符串 Number('') === 0，会变成“每次都通知”。
+  const minutes = Number.isFinite(rawMinutes) ? Math.min(1440, Math.max(0, Math.round(rawMinutes))) : 10;
+  const extraPatterns = document.getElementById('cmdShieldExtra').value
+    .split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  msg.textContent = '保存中…';
+  msg.className = 'meta';
+  const r = await api('/api/security', 'POST', {
+    commandShield: {
+      enabled: document.getElementById('cmdShieldEnabled').checked,
+      notifyOwner: document.getElementById('cmdShieldNotify').checked,
+      notifyCooldownMs: minutes * 60000,
+      extraPatterns
+    }
+  });
+  msg.textContent = r.ok ? '✅ 已保存' : ('❌ ' + (r.error || '保存失败'));
+  msg.className = r.ok ? 'meta ok' : 'meta err';
+  if (r.ok) loadSecurity();
+});
+document.getElementById('cmdShieldSlDisable').addEventListener('click', async () => {
+  const msg = document.getElementById('cmdShieldSlMsg');
+  msg.textContent = '处理中…';
+  msg.className = 'meta';
+  const r = await api('/api/security', 'POST', { disableSnowLumaStatus: true });
+  if (r.ok) {
+    if (!(r.accounts || []).length) {
+      msg.textContent = '⚠️ 未找到 onebot_*.json，未做改动';
+      msg.className = 'meta err';
+    } else {
+      msg.textContent = r.changed > 0 ? '✅ 已关闭，重启 SnowLuma 后生效' : '✅ 已处于关闭状态';
+      msg.className = 'meta ok';
+    }
+    loadSecurity();
+  } else {
+    const failed = (r.accounts || []).find(a => a.error);
+    msg.textContent = '❌ ' + (r.error || failed?.error || '关闭失败');
+    msg.className = 'meta err';
+  }
+});
 document.getElementById('secSave').addEventListener('click', async () => {
   const r = await api('/api/security', 'POST', { interceptNotify: document.getElementById('secInterceptNotify').checked });
   const msg = document.getElementById('secMsg');

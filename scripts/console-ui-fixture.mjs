@@ -327,7 +327,19 @@ export function makeFixtureState() {
       { id: 'demo-confirmed', content: '绝绝子', meaning: '很好、很棒', usage: '表达赞美', example: '这个设计绝绝子。', status: 'confirmed', count: 12, source: 'manual', createdAt: timestamp, updatedAt: timestamp },
       { id: 'demo-rejected', content: '测试噪声', meaning: '', risk: '演示排除项', status: 'rejected', count: 1, source: 'auto', createdAt: timestamp, updatedAt: timestamp },
     ],
-    security: { interceptNotify: true },
+    security: {
+      interceptNotify: true,
+      commandShield: { enabled: true, notifyOwner: true, notifyCooldownMs: 600000, extraPatterns: [] },
+    },
+    // SnowLuma 内置状态指令（离线示例）：演示「仍开启」的告警与一键关闭流程。
+    // 这里只有账号/触发词/开关，不含任何真实令牌或路径。
+    snowlumaStatus: {
+      configured: true,
+      homeDir: 'D:\\demo\\SnowLuma',
+      accounts: [{ uin: '123456789', file: 'D:\\demo\\SnowLuma\\config\\onebot_123456789.json', trigger: '#sl', enabled: true, swallow: false }],
+      exposed: 1,
+      error: null,
+    },
     // state/ 的 ACL 是否已收紧。离线演示默认给「未收紧」，这样告警条在预览里可见
     // （真实场景：Windows 上未以管理员身份运行桥接时就是这个状态）。
     hardenStateDir: false,
@@ -496,6 +508,7 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
           case '/api/security': return json({
             ok: true,
             security: state.security,
+            snowlumaStatus: state.snowlumaStatus,
             stateDir: state.hardenStateDir
               ? { hardened: true, path: 'D:\\demo\\qq-bridge\\state', manualCommand: '' }
               : { hardened: false, path: 'D:\\demo\\qq-bridge\\state', manualCommand: manualDirCommand('D:\\demo\\qq-bridge\\state') }
@@ -567,8 +580,26 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
               state.hardenStateDir = true;
               return json({ ok: true, hardened: true, path: 'D:\\demo\\qq-bridge\\state' });
             }
-            state.security = body;
-            return json({ ok: true });
+            if (body.disableSnowLumaStatus === true) {
+              // 离线演示：把所有账号的 statusCommand 标记为已关闭（不写任何真实文件）
+              const accounts = Array.isArray(state.snowlumaStatus.accounts) ? state.snowlumaStatus.accounts : [];
+              const changed = accounts.filter(a => a.enabled).length;
+              for (const account of accounts) { account.enabled = false; account.swallow = true; }
+              state.snowlumaStatus.exposed = 0;
+              return json({
+                ok: true, changed, failed: 0, skipped: accounts.length - changed,
+                requiresSnowLumaRestart: changed > 0, accounts, snowlumaStatus: state.snowlumaStatus
+              });
+            }
+            if (body.commandShield && typeof body.commandShield === 'object') {
+              state.security = {
+                ...state.security,
+                commandShield: { ...(state.security.commandShield || {}), ...body.commandShield }
+              };
+              return json({ ok: true, security: state.security, snowlumaStatus: state.snowlumaStatus });
+            }
+            state.security = { ...state.security, ...body };
+            return json({ ok: true, security: state.security });
           case '/api/console/token': return json({ ok: true, token: body.token || 'offline-demo-token-123456', generated: !body.token });
           case '/api/test-send': return json({ ok: true, message_id: 'mock-message-001' });
           // 语音试发（操作者通道）：离线只回执，不产生任何真实 QQ 消息

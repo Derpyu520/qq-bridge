@@ -19,10 +19,11 @@
 //   1. 需要**重启 SnowLuma** 才生效（配置在实例创建时读取）。
 //   2. 本脚本会写 qq-bridge/state/，而 state/ 的 ACL 被收紧了 —— DSH 沙箱里的会话
 //      写不进去，请在普通终端运行（与 scripts/harden-state-acl.mjs 相同）。
+//      控制台「访问与安全 → 系统指令屏蔽」里有一键按钮，由桥接进程执行，不受沙箱影响。
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readOneBotStatusCommands } from '../src/snowluma-conn.js';
+import { disableSnowLumaStatusCommands } from '../src/snowluma-status-hardening.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const CFG_PATH = path.join(ROOT, 'config.json');
@@ -54,93 +55,37 @@ if (!home) {
   process.exit(1);
 }
 
-const entries = readOneBotStatusCommands(home);
-if (entries.length === 0) {
+const result = disableSnowLumaStatusCommands(home, { backupDir: BACKUP_DIR, dryRun });
+if (result.accounts.length === 0) {
   console.error(`未在 ${path.join(home, 'config')} 找到可读的 onebot_<QQ号>.json。`);
   console.error('请确认路径指向 SnowLuma 安装目录（其下应有 config/ 与 onebot_*.json），且 SnowLuma 已登录过目标账号。');
   process.exit(1);
 }
 
-let changed = 0;
-let failed = 0;
-for (const entry of entries) {
-  const name = path.basename(entry.file);
-  const prev = entry.statusCommand ?? null;
-  if (prev && prev.enabled === false) {
+for (const account of result.accounts) {
+  const name = path.basename(account.file);
+  if (account.skipped) {
     console.log(`✓ ${name}：状态指令已关闭，无需改动`);
-    continue;
-  }
-
-  let raw;
-  try {
-    raw = fs.readFileSync(entry.file, 'utf8');
-  } catch (error) {
-    console.error(`✗ ${name}：读取失败（${error?.message ?? error}）`);
-    failed += 1;
-    continue;
-  }
-  const hasBom = raw.charCodeAt(0) === 0xFEFF;
-  const body = hasBom ? raw.slice(1) : raw;
-  let obj;
-  try {
-    obj = JSON.parse(body);
-  } catch (error) {
-    console.error(`✗ ${name}：不是合法 JSON（${error?.message ?? error}），已跳过（未改动）`);
-    failed += 1;
-    continue;
-  }
-
-  const old = obj.statusCommand && typeof obj.statusCommand === 'object' && !Array.isArray(obj.statusCommand)
-    ? obj.statusCommand
-    : {};
-  const next = {
-    enabled: false,
-    // 即使将来有人把 enabled 改回 true，也不要再把原消息继续投递给 agent。
-    swallow: true,
-    cooldownSeconds: Number.isInteger(old.cooldownSeconds) && old.cooldownSeconds >= 0 ? old.cooldownSeconds : 5,
-    trigger: typeof old.trigger === 'string' && old.trigger.trim() ? old.trigger : '#sl'
-  };
-  const trigger = next.trigger;
-
-  if (dryRun) {
-    console.log(`· ${name}：将关闭状态指令（trigger=${trigger}，原 enabled=${prev ? prev.enabled : '未配置（默认开启）'}）`);
-    changed += 1;
-    continue;
-  }
-
-  try {
-    fs.mkdirSync(BACKUP_DIR, { recursive: true });
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const backup = path.join(BACKUP_DIR, `onebot_${entry.uin}.status-${stamp}.json`);
-    fs.writeFileSync(backup, (hasBom ? '\uFEFF' : '') + body, 'utf8');
-
-    obj.statusCommand = next;
-    const tmp = `${entry.file}.tmp-${process.pid}`;
-    fs.writeFileSync(tmp, (hasBom ? '\uFEFF' : '') + JSON.stringify(obj, null, 2) + '\n', 'utf8');
-    try {
-      fs.renameSync(tmp, entry.file);
-    } catch (error) {
-      // 不留半成品在 SnowLuma 的 config 目录里（那个目录不属于本仓库）。
-      try { fs.unlinkSync(tmp); } catch {}
-      throw error;
+  } else if (account.error) {
+    console.error(`✗ ${name}：写入失败（${account.error}）`);
+    if (/EACCES|EPERM/.test(account.error)) {
+      console.error('  这通常是因为在 DSH 沙箱里运行（state/ 与 SnowLuma 安装目录都受 ACL 约束）。请换普通终端重跑本脚本，或改用控制台的一键按钮。');
     }
-    changed += 1;
-    console.log(`✓ ${name}：已关闭状态指令（trigger=${trigger}），备份在 ${backup}`);
-  } catch (error) {
-    console.error(`✗ ${name}：写入失败（${error?.message ?? error}）`);
-    if (error?.code === 'EACCES' || error?.code === 'EPERM') {
-      console.error('  这通常是因为在 DSH 沙箱里运行（state/ 与 SnowLuma 安装目录都受 ACL 约束）。请换普通终端重跑本脚本。');
+  } else if (account.changed) {
+    if (dryRun) {
+      console.log(`· ${name}：将关闭状态指令（trigger=${account.trigger}）`);
+    } else {
+      console.log(`✓ ${name}：已关闭状态指令（trigger=${account.trigger}），备份在 ${account.backup}`);
     }
-    failed += 1;
   }
 }
 
 if (dryRun) {
-  console.log(`\n[dry-run] 共 ${entries.length} 个账号配置，其中 ${changed} 个需要关闭；未写任何文件。`);
-} else if (changed === 0 && failed === 0) {
+  console.log(`\n[dry-run] 共 ${result.accounts.length} 个账号配置，其中 ${result.changed} 个需要关闭；未写任何文件。`);
+} else if (result.changed === 0 && result.failed === 0) {
   console.log('\n全部账号的状态指令都已关闭，无需改动。');
 } else {
-  console.log(`\n完成：${changed} 个已关闭，${failed} 个失败。`);
-  console.log('⚠️ 需要重启 SnowLuma 才生效；若之后在 SnowLuma 设置页重新保存了 OneBot 配置，可能把它改回开启——再跑一次本脚本即可。');
+  console.log(`\n完成：${result.changed} 个已关闭，${result.failed} 个失败。`);
+  if (result.changed > 0) console.log('⚠️ 需要重启 SnowLuma 才生效；若之后在 SnowLuma 设置页重新保存了 OneBot 配置，可能把它改回开启——再跑一次本脚本即可。');
 }
-process.exitCode = failed ? 1 : 0;
+process.exitCode = result.failed ? 1 : 0;

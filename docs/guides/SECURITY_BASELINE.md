@@ -33,7 +33,7 @@
 | 模式门 | `modeAllowed()` / `isSessionAllowedInCurrentMode()` | 会话 key 必须严格匹配 `^(group\|private):\d+$`；`closed-agent` 只放行 `private:<ownerQQ>` |
 | 配置失败 | `loadConfig()` | `config.json` 缺失/解析失败 → **fail-fast 退出**（不是"用默认值继续跑"） |
 | 管理员识别 | `handleIncoming()` | `String(event.user_id) === String(cfg.ownerQQ ?? '')`；未配置 `ownerQQ` 时启动日志明确告警（审批/管理命令/封闭 agent 全部不可用） |
-| 系统指令屏蔽 | `src/command-shield.js` + `handleIncoming()`；上游 `scripts/harden-snowluma-status.mjs` | 进线侧：`#sl` / `#status` / `#帮助` 等网关指令在**入库与投递之前**丢弃（不进入未读、上下文、黑话窗口），默认私聊通知管理员（10 分钟限频）；上游侧：关闭 SnowLuma 自带状态指令——它由 SnowLuma 自己回版本/平台/运行时长，**绕过桥接出站审计**；启动时发现仍开启会在日志告警 |
+| 系统指令屏蔽 | `src/command-shield.js` + `handleIncoming()`；上游 `src/snowluma-status-hardening.js`（控制台按钮 / `scripts/harden-snowluma-status.mjs`） | 进线侧：`#sl` / `#status` / `#帮助` 等网关指令在**入库与投递之前**丢弃（不进入未读、上下文、黑话窗口），默认私聊通知管理员（10 分钟限频）；控制台 `GET/POST /api/security` 可按**字段白名单**读写 `security.commandShield.*`（布尔/整数毫秒/正则逐项校验，坏正则 400，不原样写配置）；上游侧：关闭 SnowLuma 自带状态指令——它由 SnowLuma 自己回版本/平台/运行时长，**绕过桥接出站审计**；启动时发现仍开启会在日志告警、控制台显示红色状态 |
 
 ### 2. 工具面（agent 能做什么）
 

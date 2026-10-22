@@ -253,6 +253,26 @@ try {
     assert.deepEqual(fixture.requests, expected);
   });
 
+  // 新增面板的写载荷单独断言，不并入「改版前控制台」的 baseline
+  // （与 #stateDirReharden 同一口径：baseline 只记录原版表单写）。
+  if (!original) await test('Command shield panel saves settings and disables SnowLuma status command', async () => {
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await navigate('access');
+    await page.waitForFunction(() => !/检测中/.test(document.getElementById('cmdShieldSlStatus')?.textContent || ''));
+    assert.equal(await (await reveal('#cmdShieldEnabled')).isChecked(), true);
+    assert.match(await page.textContent('#cmdShieldSlStatus'), /仍开启/);
+
+    await fill('cmdShieldCooldown', 15);
+    await fill('cmdShieldExtra', '/admin');
+    assert.deepEqual(await clickWrite('#cmdShieldSave', '/api/security'), {
+      commandShield: { enabled: true, notifyOwner: true, notifyCooldownMs: 900000, extraPatterns: ['/admin'] }
+    });
+
+    assert.deepEqual(await clickWrite('#cmdShieldSlDisable', '/api/security'), { disableSnowLumaStatus: true });
+    await page.waitForFunction(() => /已关闭/.test(document.getElementById('cmdShieldSlStatus')?.textContent || ''));
+    assert.equal(await (await reveal('#cmdShieldEnabled')).isChecked(), true, '关闭上游不应连带关掉进线屏蔽');
+  });
+
   if (!original) await test('Token usage panel renders totals, per-conversation and per-turn cost', async () => {
     await page.setViewportSize({ width: 1440, height: 1000 });
     await navigate('usage');

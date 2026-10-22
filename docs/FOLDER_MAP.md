@@ -56,7 +56,7 @@ DSH/                         ← 工作区根（不是仓库根）
 | `voice-tool-locator.mjs` | 「发语音」独立工具（在仓库上一级 `../voice-tool/`）的位置解析 + 「它不在本仓库」时的统一跳过口径；支持 `QQ_BRIDGE_VOICE_TOOL_DIR` 覆盖 | 保留（被 6 个测试引用） |
 | `audit-bridge-harness.mjs` | 虚拟网关 + 沙箱化的桥接行为审计脚手架（被 `test-audit-bridge.mjs` 使用） | 保留 |
 | `harden-state-acl.mjs` | 收紧 `state/` 目录权限（Windows 上 `mode 0o600` 是空操作，必须动 ACL）。直接试 → 失败提权重试 → 仍失败则打印可复制命令；**任何路径都以 0 退出，绝不阻断启动**。被 `start.bat` 调用 | 保留（`start.bat` 依赖） |
-| `harden-snowluma-status.mjs` | 关闭 SnowLuma 自带的状态指令（默认 `#sl`）：由 SnowLuma 自己回版本/平台/运行时长，**绕过桥接出站审计**。幂等，改前备份到 `state/command-shield-backups/`，需重启 SnowLuma 生效；支持 `--dry-run`。要写 `state/`，**必须在普通终端跑**（DSH 沙箱写不进去） | 保留（`npm run harden:snowluma-status`） |
+| `harden-snowluma-status.mjs` | 关闭 SnowLuma 自带的状态指令（默认 `#sl`）：由 SnowLuma 自己回版本/平台/运行时长，**绕过桥接出站审计**。幂等，改前备份到 `state/command-shield-backups/`，需重启 SnowLuma 生效；支持 `--dry-run`。要写 `state/`，**必须在普通终端跑**（DSH 沙箱写不进去）。控制台「访问与安全 → 系统指令屏蔽」的同一按钮复用 `src/snowluma-status-hardening.js`，由桥接进程执行，不受沙箱限制 | 保留（`npm run harden:snowluma-status`） |
 | `diagnose-acl.mjs` | 只读盘点：列出仓库里所有被**切断 ACL 继承**的路径，分「有意收紧（`state/`、`config.json`）」与「非预期收紧」两类，并对后者打印恢复继承的命令。背景见 [guides/SECURITY_BASELINE.md](guides/SECURITY_BASELINE.md) §2.6：DSH 沙箱的写权限只靠继承下发能力 SID，切断继承 ⇒ 沙箱里写不进去。**必须在无沙箱终端跑**（沙箱禁止以管道 stdio 拉起 icacls） | 保留（`npm run diagnose:acl`） |
 | `dsh-modules.mjs` | 小工具：按路径加载 DSH 安装内的模块 | 保留 |
 | `check-onebot-status.mjs` | 手工排查：查 OneBot 连通性 | 保留（运维常用） |

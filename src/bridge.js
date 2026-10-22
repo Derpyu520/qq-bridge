@@ -19,12 +19,13 @@ import { SnowLumaWebSocketClient, text } from '@snowluma/sdk';
 import { NodeApiClient, unwrap, createTurnCollector, discoverDshBaseUrl, discoverDshLaunchToken } from './dsh-client.js';
 import { mdToPlain, splitForQQ, truncateText, truncateTextTail } from './md-to-plain.js';
 import { SENSITIVE_RE } from './sensitive.js';
-import { COMMAND_SHIELD_DEFAULTS, matchCommandShield, commandTokenPattern } from './command-shield.js';
+import { COMMAND_SHIELD_DEFAULTS, matchCommandShield, commandTokenPattern, validateCommandShieldPatterns } from './command-shield.js';
 import { looksLikeUnfinished } from './v2-wait.js';
 import { compactModelMessage } from './qq-model-view.js';
 import { safeFetchBuffer, looksLikeImageBuffer } from './safe-fetch.js';
 import { AUDIO_EXTS, cleanupTemp, describeAudio, formatBytes, formatDuration, inspectAudio, listAudioFiles, parseTargetKey, processAudioVolume, resolveAudioProcessing, resolveAudioSource, safeJoinLibrary } from './send-voice-lib.js';
 import { discoverSnowLumaConnection, persistSnowLumaEndpoint, persistToken, readOneBotStatusCommands } from './snowluma-conn.js';
+import { disableSnowLumaStatusCommands } from './snowluma-status-hardening.js';
 import { hardenDir, manualDirCommand } from './state-acl.mjs';
 import { extractForwardIds, forwardIdFromData, sanitizeForwardId, formatForwardResponse } from './forward.js';
 import { resolvePriceTable } from './model-prices.js';
@@ -1007,6 +1008,41 @@ function loadConfig() {
   return cfg;
 }
 
+// SnowLuma 状态指令的**实际触发词**派生出的屏蔽规则（不进 config.json）。
+// 与用户可编辑的 security.commandShield.extraPatterns 分开存放：控制台展示/保存
+// 的始终是“用户自己的规则”，派生规则每次启动按 SnowLuma 配置重新算。
+let snowlumaTriggerPatterns = [];
+
+/**
+ * 读取 SnowLuma 各账号的“状态指令”配置（供控制台展示，不写盘）。
+ * 返回结构里不含任何令牌；file 是 SnowLuma config 下的路径（控制台仅本机管理员可见）。
+ */
+function readSnowLumaStatus(cfg) {
+  const homeDir = String(cfg.snowluma?.homeDir ?? '').trim();
+  if (!homeDir) return { configured: false, homeDir: '', accounts: [], exposed: 0, error: null };
+  try {
+    const accounts = readOneBotStatusCommands(homeDir).map((entry) => ({
+      uin: entry.uin,
+      file: entry.file,
+      // 配置文件读不动/坏 JSON 时 enabled=null：控制台会显示“读取失败”，
+      // 不能假装它已经关闭（那会给出错误的安全感）。
+      enabled: entry.error ? null : (entry.statusCommand ? entry.statusCommand.enabled !== false : true),
+      swallow: entry.statusCommand?.swallow === true,
+      trigger: String(entry.statusCommand?.trigger || '#sl'),
+      error: entry.error ? String(entry.error) : null
+    }));
+    return {
+      configured: true,
+      homeDir,
+      accounts,
+      exposed: accounts.filter((a) => a.enabled === true).length,
+      error: null
+    };
+  } catch (error) {
+    return { configured: true, homeDir, accounts: [], exposed: 0, error: String(error?.message ?? error) };
+  }
+}
+
 /**
  * 启动时检查 SnowLuma 自带的“状态指令”是否还开着，并把它的**实际触发词**
  * 纳入进线屏蔽。
@@ -1016,33 +1052,35 @@ function loadConfig() {
  * 真实配置补规则（触发词可被管理员改成 `#查状态` 之类）+ 启动时明确告警。
  */
 function inspectSnowLumaStatusCommands(cfg) {
-  const home = String(cfg.snowluma?.homeDir ?? '').trim();
-  if (!home) return;
-  try {
-    const shield = cfg.security?.commandShield;
-    const entries = readOneBotStatusCommands(home);
-    const extra = Array.isArray(shield?.extraPatterns) ? shield.extraPatterns.slice() : [];
-    const added = [];
-    for (const entry of entries) {
-      const sc = entry.statusCommand;
-      const trigger = String(sc?.trigger || '#sl').trim();
-      if (sc?.enabled !== false) {
-        log(`⚠️ SnowLuma 内置状态指令「${trigger}」仍处于开启状态（${entry.file}）：群友输入会被 SnowLuma 直接回复版本/平台/运行时长，这条回复绕过桥接审计。请运行 npm run harden:snowluma-status 或在 SnowLuma 设置里关闭后重启 SnowLuma。`);
-      }
-      if (shield?.enabled === false || !trigger) continue;
-      // 内置规则（#sl/#status/#帮助…）已覆盖的触发词无需重复注入。
-      if (matchCommandShield(trigger, { extraPatterns: [] })) continue;
-      const pattern = commandTokenPattern(trigger);
-      if (!pattern || extra.includes(pattern)) continue;
-      extra.push(pattern);
-      added.push(trigger);
+  const status = readSnowLumaStatus(cfg);
+  if (!status.configured) return;
+  if (status.error) {
+    log(`⚠️ 检查 SnowLuma 状态指令配置失败（不影响启动）：${status.error}`);
+    return;
+  }
+  const derived = [];
+  const derivedTriggers = [];
+  for (const account of status.accounts) {
+    if (account.error) {
+      log(`⚠️ 无法读取 SnowLuma 状态指令配置（${account.file}）：${account.error}`);
+      continue;
     }
-    if (added.length > 0 && shield) {
-      shield.extraPatterns = extra;
-      log(`已把 SnowLuma 自定义状态触发词纳入进线屏蔽：${added.join('、')}`);
+    const trigger = String(account.trigger || '').trim();
+    if (account.enabled) {
+      log(`⚠️ SnowLuma 内置状态指令「${trigger || '#sl'}」仍处于开启状态（${account.file}）：群友输入会被 SnowLuma 直接回复版本/平台/运行时长，这条回复绕过桥接审计。请在控制台「访问与安全 → 系统指令屏蔽」一键关闭，或运行 npm run harden:snowluma-status 后重启 SnowLuma。`);
     }
-  } catch (error) {
-    log(`⚠️ 检查 SnowLuma 状态指令配置失败（不影响启动）：${error?.message ?? error}`);
+    if (cfg.security?.commandShield?.enabled === false || !trigger) continue;
+    // 内置规则（#sl/#status/#帮助…）已覆盖的触发词无需重复注入。
+    if (matchCommandShield(trigger, { extraPatterns: [] })) continue;
+    const pattern = commandTokenPattern(trigger);
+    if (pattern && !derived.includes(pattern)) {
+      derived.push(pattern);
+      derivedTriggers.push(trigger);
+    }
+  }
+  snowlumaTriggerPatterns = derived;
+  if (derived.length > 0) {
+    log(`已把 SnowLuma 自定义状态触发词纳入进线屏蔽：${[...new Set(derivedTriggers)].join('、')}`);
   }
 }
 
@@ -4198,10 +4236,13 @@ async function main() {
           return;
         }
 
-        // ── 安全拦截通知设置 ─────────────────────────────────────────────────
+        // ── 安全设置（拦截通知 / 系统指令屏蔽 / SnowLuma 状态指令 / state ACL） ──
         if (req.method === 'GET' && url.pathname === '/api/security') {
           sendJson({
             security: cfg.security ?? { interceptNotify: true },
+            // 控制台「系统指令屏蔽」面板据此显示 SnowLuma 内置状态指令是否还开着
+            // （它由 SnowLuma 自己回复，绕过桥接审计；这里只读展示 + 一键关闭）。
+            snowlumaStatus: readSnowLumaStatus(cfg),
             // state/ 的 ACL 收紧结果：Windows 上改 ACL 需要管理员权限，未提权时会失败。
             // 控制台据此显示警告与可复制的命令（而不是让用户以为已经安全）。
             // 命令必须取自 state-acl 的**安全**版本：把 (OI)(CI) 授权和 /T 混在一句里
@@ -4223,6 +4264,77 @@ async function main() {
             stateDirHardened = null;
             hardenStateDirAcl();
             sendJson({ ok: stateDirHardened === true, hardened: stateDirHardened, path: STATE_DIR });
+            return;
+          }
+          // 一键关闭 SnowLuma 自带状态指令（#sl）：它的回复由 SnowLuma 自己发，
+          // 桥接的出站审计看不到，只能在 SnowLuma 配置里关掉。
+          if (body.disableSnowLumaStatus === true) {
+            const homeDir = String(cfg.snowluma?.homeDir ?? '').trim();
+            if (!homeDir) {
+              sendJson({ ok: false, error: 'config.json 未配置 snowluma.homeDir，无法定位 SnowLuma 配置' }, 400);
+              return;
+            }
+            const result = disableSnowLumaStatusCommands(homeDir, { backupDir: path.join(STATE_DIR, 'command-shield-backups') });
+            if (result.changed > 0) log(`控制台：已关闭 SnowLuma 状态指令 ${result.changed} 个账号（重启 SnowLuma 后生效）`);
+            if (result.failed > 0) {
+              const first = result.accounts.find((a) => a.error);
+              log(`控制台：关闭 SnowLuma 状态指令失败 ${result.failed} 个账号：${first?.error ?? '未知错误'}`);
+            }
+            sendJson({
+              ...result,
+              ok: result.failed === 0,
+              requiresSnowLumaRestart: result.changed > 0,
+              snowlumaStatus: readSnowLumaStatus(cfg)
+            });
+            return;
+          }
+          // 系统指令屏蔽设置（security.commandShield.*）。
+          // 这里做白名单字段 + 类型校验：不能把控制台请求体原样写进 config.json。
+          if (body.commandShield !== undefined) {
+            const raw = body.commandShield;
+            if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+              sendJson({ ok: false, error: 'commandShield 必须是对象' }, 400);
+              return;
+            }
+            const configFile = path.join(ROOT, 'config.json');
+            // fail-fast：配置损坏时直接 500，绝不回写（与白名单接口同语义）
+            const file = readConfigObject(configFile);
+            const current = file.security?.commandShield;
+            const nextShield = current && typeof current === 'object' && !Array.isArray(current) ? { ...current } : {};
+            if ('enabled' in raw) {
+              if (typeof raw.enabled !== 'boolean') { sendJson({ ok: false, error: 'commandShield.enabled 必须是布尔值' }, 400); return; }
+              nextShield.enabled = raw.enabled;
+            }
+            if ('notifyOwner' in raw) {
+              if (typeof raw.notifyOwner !== 'boolean') { sendJson({ ok: false, error: 'commandShield.notifyOwner 必须是布尔值' }, 400); return; }
+              nextShield.notifyOwner = raw.notifyOwner;
+            }
+            if ('notifyCooldownMs' in raw) {
+              const n = Number(raw.notifyCooldownMs);
+              if (!Number.isInteger(n) || n < 0 || n > 86_400_000) {
+                sendJson({ ok: false, error: 'commandShield.notifyCooldownMs 必须是 0~86400000 的整数（毫秒）' }, 400);
+                return;
+              }
+              nextShield.notifyCooldownMs = n;
+            }
+            if ('extraPatterns' in raw) {
+              if (!Array.isArray(raw.extraPatterns)) { sendJson({ ok: false, error: 'commandShield.extraPatterns 必须是数组' }, 400); return; }
+              const list = raw.extraPatterns.map((s) => String(s ?? '').trim()).filter(Boolean);
+              if (list.length > 20) { sendJson({ ok: false, error: 'commandShield.extraPatterns 最多 20 条' }, 400); return; }
+              const bad = validateCommandShieldPatterns(list);
+              if (bad.length > 0) { sendJson({ ok: false, error: `无法编译的正则：${bad.join(' / ')}` }, 400); return; }
+              nextShield.extraPatterns = list;
+            }
+            file.security = { ...(file.security ?? {}), commandShield: nextShield };
+            atomicWriteJson(configFile, file);
+            cfg.security = {
+              ...(cfg.security ?? {}),
+              commandShield: { ...COMMAND_SHIELD_DEFAULTS, ...nextShield }
+            };
+            // 触发词派生规则按最新配置重算（关闭屏蔽时 inspect 会自动跳过派生）。
+            inspectSnowLumaStatusCommands(cfg);
+            log(`控制台：系统指令屏蔽已更新（enabled=${cfg.security.commandShield.enabled !== false}，extraPatterns=${Array.isArray(nextShield.extraPatterns) ? nextShield.extraPatterns.length : 0}）`);
+            sendJson({ ok: true, security: cfg.security, snowlumaStatus: readSnowLumaStatus(cfg) });
             return;
           }
           const configFile = path.join(ROOT, 'config.json');
@@ -7208,6 +7320,15 @@ async function main() {
   }
 
   // ── 系统指令屏蔽（#sl 等） ───────────────────────────────────────────────
+  // 生效规则 = 用户在 config.json/控制台配置的 extraPatterns + 按 SnowLuma
+  // 实际触发词派生出的规则（后者不落盘，避免控制台把内部正则回写成用户配置）。
+  function effectiveCommandShieldOptions() {
+    const base = cfg.security?.commandShield;
+    if (snowlumaTriggerPatterns.length === 0) return base;
+    const userPatterns = Array.isArray(base?.extraPatterns) ? base.extraPatterns : [];
+    return { ...base, extraPatterns: [...userPatterns, ...snowlumaTriggerPatterns] };
+  }
+
   // 拦截后私聊通知管理员；默认 10 分钟最多一条，避免被反复触发刷屏。
   // 通知本身走 sendToQQ（仍受当前模式/白名单约束），失败只记日志。
   let commandShieldNotifyAt = 0;
@@ -10680,7 +10801,7 @@ async function main() {
     // 🛡️ 系统指令屏蔽（#sl / #status / #帮助 …，见 src/command-shield.js）。
     // 必须在“待应答、静默、管理命令”之前拦截：命中即丢弃，不进入未读队列、
     // 上下文或黑话窗口——模型看不到这些指令，才不会被顺势诱导复述系统信息。
-    const shieldHit = matchCommandShield(plainContent, cfg.security?.commandShield);
+    const shieldHit = matchCommandShield(plainContent, effectiveCommandShieldOptions());
     if (shieldHit) {
       appendActivity(`${key} 【指令屏蔽】${isOwner ? '管理员' : '群友'} ${event.user_id} 触发 ${shieldHit.id}：${plainContent.slice(0, 40)}`);
       log(`🛡️ 已拦截系统指令 ${key} ${event.user_id} ${shieldHit.command}（${shieldHit.label}）`);

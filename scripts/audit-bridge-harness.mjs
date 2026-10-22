@@ -12,6 +12,7 @@ import * as markdown from '../src/md-to-plain.js';
 import * as sensitive from '../src/sensitive.js';
 import * as commandShield from '../src/command-shield.js';
 import * as snowlumaConn from '../src/snowluma-conn.js';
+import * as snowlumaStatusHardening from '../src/snowluma-status-hardening.js';
 import * as wait from '../src/v2-wait.js';
 import * as safeFetch from '../src/safe-fetch.js';
 import * as forward from '../src/forward.js';
@@ -161,7 +162,7 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     NodeApiClient: class { constructor() { return api; } },
     SnowLumaWebSocketClient: FakeBot, text: (s) => s,
     discoverDshLaunchToken: () => '', unwrap, createTurnCollector,
-    ...markdown, ...sensitive, ...commandShield, ...snowlumaConn, ...wait, ...safeFetch, ...forward, ...slang, ...sticker,
+    ...markdown, ...sensitive, ...commandShield, ...snowlumaConn, ...snowlumaStatusHardening, ...wait, ...safeFetch, ...forward, ...slang, ...sticker,
     ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...presetPrompt,
     // ACL 收紧会 spawn icacls 去改**真实**文件系统；测试不该做这件事（同理见下面的
     // cleanupTemp / processAudioVolume 桩）。桩成成功，让 hardenStateDirAcl 走正常分支。

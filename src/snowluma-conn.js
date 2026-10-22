@@ -87,8 +87,10 @@ export function readOneBotHttpTokens(homeDir) {
  * 不经过桥接，出站审计看不到；桥接只能在进线侧屏蔽 + 启动时告警，
  * 真正的“不回”要在 SnowLuma 侧关闭（scripts/harden-snowluma-status.mjs）。
  *
- * 返回 [{ uin, file, statusCommand: {enabled,swallow,trigger,cooldownSeconds}|null }]。
- * statusCommand 为 null 表示配置文件里没写（SnowLuma 默认=开启）。
+ * 返回 [{ uin, file, statusCommand: {enabled,swallow,trigger,cooldownSeconds}|null, error? }]。
+ * statusCommand 为 null 表示配置文件里没写（SnowLuma 默认=开启）；error 表示该文件
+ * 读不动/不是合法 JSON —— 调用方（关闭脚本/控制台）必须把它当作失败，而不是
+ * “没有账号要处理”。
  */
 export function readOneBotStatusCommands(homeDir) {
   const dir = path.join(homeDir, 'config');
@@ -103,14 +105,15 @@ export function readOneBotStatusCommands(homeDir) {
     if (!e.isFile()) continue;
     const m = /^onebot_(\d+)\.json$/i.exec(e.name);
     if (!m) continue;
+    const file = path.join(dir, e.name);
     try {
-      let text = fs.readFileSync(path.join(dir, e.name), 'utf8');
+      let text = fs.readFileSync(file, 'utf8');
       if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
       const j = JSON.parse(text);
       const sc = j?.statusCommand;
       out.push({
         uin: m[1],
-        file: path.join(dir, e.name),
+        file,
         statusCommand: sc && typeof sc === 'object' && !Array.isArray(sc)
           ? {
               enabled: sc.enabled !== false,
@@ -120,8 +123,10 @@ export function readOneBotStatusCommands(homeDir) {
             }
           : null
       });
-    } catch {
-      // 单个文件坏了不影响其它账号
+    } catch (error) {
+      // 单个文件坏了不影响其它账号，但必须把错误带出去：静默跳过会让关闭脚本
+      // 对着一个坏文件报“全部已关闭”，而它其实还开着。
+      out.push({ uin: m[1], file, statusCommand: null, error: String(error?.message ?? error) });
     }
   }
   return out.sort((a, b) => a.uin.localeCompare(b.uin));

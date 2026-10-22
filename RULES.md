@@ -46,8 +46,9 @@
 8. **静默模式**：`current-role.json` 的 `mode: "silent"` 时，群友消息不再投递给 agent（仅记录日志），只有管理员消息可对话。
 9. **系统指令进线屏蔽**：`#sl`、`#status`、`#帮助`、`#版本`、`#重启` 这类“网关/宿主指令”由 `src/command-shield.js` 在进线入口识别并**直接丢弃**——不进入未读队列、不拼进上下文、不喂黑话学习窗口。模型根本看不到这些指令，也就不会被顺势诱导复述版本/平台/运行时长。管理员发来同样拦截（管理端要查状态请用 QQ 管理命令 `/status` 或控制台）。
    - 命中会写活动日志与滚动日志；默认还会**私聊通知管理员**（`security.commandShield.notifyCooldownMs`，默认 10 分钟最多一条，可用 `notifyOwner: false` 关闭）。
+   - 控制台「访问与安全 → 系统指令屏蔽」可开关屏蔽、改通知与冷却、维护额外规则（`security.commandShield.*`）；保存后立即生效，无需重启桥接。
    - 规则是“少量明确词 + 可扩展正则”（`extraPatterns`），不做“所有 `#` 开头都算命令”：`#话题`、`#slim`、`#statusbar`、`#版本号`、`#命令行` 这类正常文本/话题标签不会被误杀；要整体关闭用 `security.commandShield.enabled: false`。
-   - **上游那层也要做**：SnowLuma 自带的 `#sl` 状态回复是 **SnowLuma 自己发的**，发生在事件交给桥接之前，桥接的出站审计看不到。因此要运行 `npm run harden:snowluma-status`（幂等，改前备份到 `state/command-shield-backups/`，**重启 SnowLuma 后生效**）。桥接启动时若发现它仍开着，会在日志里明确告警。
+   - **上游那层也要做**：SnowLuma 自带的 `#sl` 状态回复是 **SnowLuma 自己发的**，发生在事件交给桥接之前，桥接的出站审计看不到。控制台的「关闭 SnowLuma 状态指令」按钮可一键关闭（改前自动备份到 `state/command-shield-backups/`——备份里含该账号的 OneBot 令牌，所以该目录与 `state/` 一样由 ACL 收紧；**重启 SnowLuma 后生效**）；也可以在普通终端运行 `npm run harden:snowluma-status`（幂等，支持 `--dry-run`）。桥接启动时若发现它仍开着，会在日志里明确告警，并控制台会显示红色状态。
 
 ## 提示词的两层边界（仿真 vs 人格）
 
