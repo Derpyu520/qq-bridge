@@ -31,6 +31,9 @@ const tests = [
   // 二代「会话初始提示词」：只在首次唤醒注入、管理面隔离、损坏文件只读降级、
   // 以及控制台「立即唤醒」不得顶掉首次 bootstrap（否则初始提示词永远发不出去）。
   'test-v2-initial-prompt.mjs',
+  // 系统指令屏蔽（#sl / #status / #帮助 …）：识别与误伤边界 + 端到端不进入未读/不投递。
+  // 背景：SnowLuma 自带状态指令会直接回版本/平台，且默认 swallow=false 还会把原消息送给 agent。
+  'test-command-shield.mjs',
   // 令牌账本 / 价目表 与 体检修复回归（纯函数，无外部依赖）
   'test-token-usage.mjs', 'test-hardening.mjs',
   // 语音发送（纯函数 + 端点存在性；真发语音只在 --live 或 CLI 里做）

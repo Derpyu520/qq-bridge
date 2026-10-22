@@ -52,7 +52,13 @@
     }
   },
   "security": {
-    "interceptNotify": true
+    "interceptNotify": true,
+    "commandShield": {
+      "enabled": true,
+      "notifyOwner": true,
+      "notifyCooldownMs": 600000,
+      "extraPatterns": []
+    }
   },
   "slang": {
     "enabled": true,

@@ -44,6 +44,10 @@
 6. **回复审计（桥接层硬拦截）**：agent 回复文本若包含本机路径（`C:\`、`/home/` 等）或凭据特征（token/password/secret/api key 等）→ **整条拦截不发送**，并告知"被安全策略拦截"。
 7. **人格由桥接注入**：角色设定来自 `state/current-role.json` + `roles/<角色>.md`，桥接注入到消息；群友口头要求改角色无效（桥接直接拦截），agent 也无文件工具自行更改。
 8. **静默模式**：`current-role.json` 的 `mode: "silent"` 时，群友消息不再投递给 agent（仅记录日志），只有管理员消息可对话。
+9. **系统指令进线屏蔽**：`#sl`、`#status`、`#帮助`、`#版本`、`#重启` 这类“网关/宿主指令”由 `src/command-shield.js` 在进线入口识别并**直接丢弃**——不进入未读队列、不拼进上下文、不喂黑话学习窗口。模型根本看不到这些指令，也就不会被顺势诱导复述版本/平台/运行时长。管理员发来同样拦截（管理端要查状态请用 QQ 管理命令 `/status` 或控制台）。
+   - 命中会写活动日志与滚动日志；默认还会**私聊通知管理员**（`security.commandShield.notifyCooldownMs`，默认 10 分钟最多一条，可用 `notifyOwner: false` 关闭）。
+   - 规则是“少量明确词 + 可扩展正则”（`extraPatterns`），不做“所有 `#` 开头都算命令”：`#话题`、`#slim`、`#statusbar`、`#版本号`、`#命令行` 这类正常文本/话题标签不会被误杀；要整体关闭用 `security.commandShield.enabled: false`。
+   - **上游那层也要做**：SnowLuma 自带的 `#sl` 状态回复是 **SnowLuma 自己发的**，发生在事件交给桥接之前，桥接的出站审计看不到。因此要运行 `npm run harden:snowluma-status`（幂等，改前备份到 `state/command-shield-backups/`，**重启 SnowLuma 后生效**）。桥接启动时若发现它仍开着，会在日志里明确告警。
 
 ## 提示词的两层边界（仿真 vs 人格）
 

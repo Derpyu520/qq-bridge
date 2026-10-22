@@ -32,9 +32,8 @@ class FakeWebSocket {
   _emit(type, ev) { for (const fn of this._listeners.get(type) ?? []) fn(ev); }
   simulateOpen() { this.readyState = FakeWebSocket.OPEN; this._emit('open', {}); }
 }
-globalThis.WebSocket = FakeWebSocket;
-
-const { NodeApiClient } = await import(pathToFileURL(path.join(ROOT, 'src/dsh-client.js')).href);
+const { NodeApiClient, setWebSocketImplementation } = await import(pathToFileURL(path.join(ROOT, 'src/dsh-client.js')).href);
+setWebSocketImplementation(FakeWebSocket);
 const client = new NodeApiClient('http://127.0.0.1:3080', undefined, {});
 // 不走真实鉴权：本测试只关心 follow 的重放行为。
 client.ensureAuth = async () => { client.cookie = 'test-cookie'; };

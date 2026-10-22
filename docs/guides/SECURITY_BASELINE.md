@@ -33,6 +33,7 @@
 | 模式门 | `modeAllowed()` / `isSessionAllowedInCurrentMode()` | 会话 key 必须严格匹配 `^(group\|private):\d+$`；`closed-agent` 只放行 `private:<ownerQQ>` |
 | 配置失败 | `loadConfig()` | `config.json` 缺失/解析失败 → **fail-fast 退出**（不是"用默认值继续跑"） |
 | 管理员识别 | `handleIncoming()` | `String(event.user_id) === String(cfg.ownerQQ ?? '')`；未配置 `ownerQQ` 时启动日志明确告警（审批/管理命令/封闭 agent 全部不可用） |
+| 系统指令屏蔽 | `src/command-shield.js` + `handleIncoming()`；上游 `scripts/harden-snowluma-status.mjs` | 进线侧：`#sl` / `#status` / `#帮助` 等网关指令在**入库与投递之前**丢弃（不进入未读、上下文、黑话窗口），默认私聊通知管理员（10 分钟限频）；上游侧：关闭 SnowLuma 自带状态指令——它由 SnowLuma 自己回版本/平台/运行时长，**绕过桥接出站审计**；启动时发现仍开启会在日志告警 |
 
 ### 2. 工具面（agent 能做什么）
 
@@ -148,7 +149,7 @@ DSH 的 Windows 文件沙箱按**能力 SID** 授权：SID 由 `sha256(规范化
 ## 四、发布前必须跑的检查（回归清单）
 
 ```bash
-npm run test:audit          # 30 个离线回归脚本（含安全专项），必须全绿
+npm run test:audit          # 全部离线回归脚本（含安全专项），必须全绿
 npm run verify:adaptation   # DSH 适配一致性（preset/工具守卫/MCP 挂载/活 DSH 实测）
 npm run verify:persona      # 人格配置一致性
 npm run diagnose:acl        # ACL 收紧路径盘点（只读；需在**无沙箱**终端跑，见 §2.6）
@@ -167,6 +168,7 @@ node --check src/bridge.js  # 语法门禁（大文件改动后必跑）
 - [x] agent 令牌只能读自己会话；跨会话读返回 403
 - [x] 语音只能取语音库内的文件（含 `allowAbsolutePath=true` 与相对穿越两种情形）
 - [x] 出站文本命中敏感信息时整条拦截；含已知会话令牌时直接抛错
+- [x] 系统指令（`#sl` / `#status` / `#帮助` …）在进线处被丢弃且不进入未读/上下文；SnowLuma 侧状态指令的关闭脚本与启动告警都在（`test-command-shield.mjs`）
 - [x] SSRF：scheme、URL 凭据、私有 IP、重定向、超时、大小限制（11 项）
 - [x] 桥接 `200 + {ok:false}` 会被 MCP 当作失败上报（不产生静默假成功）
 - [x] 旧只读工具在非 `closed-agent` 模式下 fail-closed

@@ -80,6 +80,53 @@ export function readOneBotHttpTokens(homeDir) {
     .map((a) => ({ token: a.http.token, uin: a.uin, host: a.http.host, port: a.http.port, file: a.file }));
 }
 
+/**
+ * 读取每个账号 OneBot 配置里 SnowLuma **内置状态指令**（默认 `#sl`）的设置。
+ *
+ * 为什么单独读：这条指令的回复由 SnowLuma 自己发（版本/平台/架构/运行时长），
+ * 不经过桥接，出站审计看不到；桥接只能在进线侧屏蔽 + 启动时告警，
+ * 真正的“不回”要在 SnowLuma 侧关闭（scripts/harden-snowluma-status.mjs）。
+ *
+ * 返回 [{ uin, file, statusCommand: {enabled,swallow,trigger,cooldownSeconds}|null }]。
+ * statusCommand 为 null 表示配置文件里没写（SnowLuma 默认=开启）。
+ */
+export function readOneBotStatusCommands(homeDir) {
+  const dir = path.join(homeDir, 'config');
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const e of entries) {
+    if (!e.isFile()) continue;
+    const m = /^onebot_(\d+)\.json$/i.exec(e.name);
+    if (!m) continue;
+    try {
+      let text = fs.readFileSync(path.join(dir, e.name), 'utf8');
+      if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+      const j = JSON.parse(text);
+      const sc = j?.statusCommand;
+      out.push({
+        uin: m[1],
+        file: path.join(dir, e.name),
+        statusCommand: sc && typeof sc === 'object' && !Array.isArray(sc)
+          ? {
+              enabled: sc.enabled !== false,
+              swallow: sc.swallow === true,
+              trigger: String(sc.trigger ?? ''),
+              cooldownSeconds: Number(sc.cooldownSeconds) || 0
+            }
+          : null
+      });
+    } catch {
+      // 单个文件坏了不影响其它账号
+    }
+  }
+  return out.sort((a, b) => a.uin.localeCompare(b.uin));
+}
+
 /** 试一次 get_login_info；成功返回 data，失败返回 null。 */
 async function probe(baseUrl, token, timeoutMs) {
   try {

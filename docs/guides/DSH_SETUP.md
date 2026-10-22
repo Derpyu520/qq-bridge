@@ -96,6 +96,8 @@
 
 ## 常见问题
 
+- **日志反复出现「连接 DSH 事件流…」→「DSH 事件流已结束（本次收到 0 帧）」**：两种原因都已修。① **DSH 桌面版每次启动随机换端口**（实测同一台机器 2601 → 3530，且没有固定端口选项），`config.json` 里写死的 `dsh.baseUrl` 在 DSH 重启后就是死端口。桥接现在探活失败时会用 `netstat` 扫本机回环监听端口、逐个用铸造的 Cookie 调 `settings/describe` 找回 DSH，并把新 `baseUrl` 写回 `config.json`（15 秒节流；日志有「检测到 DSH 换了地址」）。② **事件流 WebSocket 没带 Cookie**：Node 自带的全局 `WebSocket`（undici）不接受 `{ headers }` 选项，连接能升级但服务端不认，于是永远 0 帧。桥接已改用 `ws` 包发送 Cookie（`package.json` 增加 `ws` 依赖，`npm install` 后生效）。修好后重启桥接，日志里只会有切换端口前那一次「0 帧」，随后的「连接 DSH 事件流…」不再跟「已结束」。
+
 - **每次启动日志里都先报一次「连接断开（1006）」再报「已连接」**：**这是正常的，不是故障**。原因：SnowLuma 同一账号的 **HTTP token（默认 3000 端口）与 WS token（默认 3001 端口）是两个不同的值**，而 `config.json` 的 `snowluma.accessToken` 只能存一个（存的是 HTTP 那个）。所以 WS 首次连接会被拒 → 触发 token 自愈（重新发现 WS token）→ 重连成功。真正有问题的是**自愈也失败**：日志里会出现 `token 自愈失败`，QQ 侧完全收不到消息。那时先确认 `config.json` 的 `snowluma.homeDir` 指向真正的 SnowLuma 安装目录（自愈要从它的 `config/onebot_<QQ号>.json` 里读 WS token）。
 - **QQ 上毫无反应，但桥接日志说「SnowLuma 已连接」**：这几乎总是 **SnowLuma 侧的 `[Hook]` 收不到 QQ 数据**，不是桥接的问题。桥接的 WebSocket 连的是 SnowLuma，SnowLuma 再通过原生组件挂进 QQ 客户端进程；中间这层退化时 SnowLuma 进程与它的 WebSocket 都还活着，所以桥接这边看不出异常。
   1. 打开控制台「运行总览」，看 **`SnowLuma 上游`** 卡片：`已连接 · 未接收` 就是这个状态；「访问与安全」页会有对应告警条与处置建议。`GET /api/status` 的 `snowluma` 字段（`degraded` / `good` / `hint`）给的是同一份判断。

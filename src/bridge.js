@@ -16,14 +16,15 @@ import { extractPresetPrefix, presetPromptBlockers, presetPromptWarnings, render
 import { GEN1_ROLE_LINE_RE, parseRoleSections, roleCharStats, roleSectionReport, selectRoleText } from './role-card.js';
 import { fileURLToPath } from 'node:url';
 import { SnowLumaWebSocketClient, text } from '@snowluma/sdk';
-import { NodeApiClient, unwrap, createTurnCollector, discoverDshLaunchToken } from './dsh-client.js';
+import { NodeApiClient, unwrap, createTurnCollector, discoverDshBaseUrl, discoverDshLaunchToken } from './dsh-client.js';
 import { mdToPlain, splitForQQ, truncateText, truncateTextTail } from './md-to-plain.js';
 import { SENSITIVE_RE } from './sensitive.js';
+import { COMMAND_SHIELD_DEFAULTS, matchCommandShield, commandTokenPattern } from './command-shield.js';
 import { looksLikeUnfinished } from './v2-wait.js';
 import { compactModelMessage } from './qq-model-view.js';
 import { safeFetchBuffer, looksLikeImageBuffer } from './safe-fetch.js';
 import { AUDIO_EXTS, cleanupTemp, describeAudio, formatBytes, formatDuration, inspectAudio, listAudioFiles, parseTargetKey, processAudioVolume, resolveAudioProcessing, resolveAudioSource, safeJoinLibrary } from './send-voice-lib.js';
-import { discoverSnowLumaConnection, persistSnowLumaEndpoint, persistToken } from './snowluma-conn.js';
+import { discoverSnowLumaConnection, persistSnowLumaEndpoint, persistToken, readOneBotStatusCommands } from './snowluma-conn.js';
 import { hardenDir, manualDirCommand } from './state-acl.mjs';
 import { extractForwardIds, forwardIdFromData, sanitizeForwardId, formatForwardResponse } from './forward.js';
 import { resolvePriceTable } from './model-prices.js';
@@ -694,7 +695,12 @@ function loadConfig() {
     pricing: file.pricing ?? null,
     security: {
       interceptNotify: true,
-      ...(file.security ?? {})
+      ...(file.security ?? {}),
+      // 系统指令进线屏蔽（#sl 等；见 src/command-shield.js）。
+      // 允许 config.json 里把 commandShield 直接写成 false 来整体关闭。
+      commandShield: file.security?.commandShield === false
+        ? { ...COMMAND_SHIELD_DEFAULTS, enabled: false }
+        : { ...COMMAND_SHIELD_DEFAULTS, ...(file.security?.commandShield ?? {}) }
     },
     slang: {
       enabled: true,
@@ -999,6 +1005,45 @@ function loadConfig() {
   }
 
   return cfg;
+}
+
+/**
+ * 启动时检查 SnowLuma 自带的“状态指令”是否还开着，并把它的**实际触发词**
+ * 纳入进线屏蔽。
+ *
+ * 这条指令由 SnowLuma 自己回复（版本/平台/架构/运行时长），**不经过桥接**，
+ * 因此 commandShield 拦不到那条回复；桥接能做的是：进线消息丢弃 + 按 SnowLuma
+ * 真实配置补规则（触发词可被管理员改成 `#查状态` 之类）+ 启动时明确告警。
+ */
+function inspectSnowLumaStatusCommands(cfg) {
+  const home = String(cfg.snowluma?.homeDir ?? '').trim();
+  if (!home) return;
+  try {
+    const shield = cfg.security?.commandShield;
+    const entries = readOneBotStatusCommands(home);
+    const extra = Array.isArray(shield?.extraPatterns) ? shield.extraPatterns.slice() : [];
+    const added = [];
+    for (const entry of entries) {
+      const sc = entry.statusCommand;
+      const trigger = String(sc?.trigger || '#sl').trim();
+      if (sc?.enabled !== false) {
+        log(`⚠️ SnowLuma 内置状态指令「${trigger}」仍处于开启状态（${entry.file}）：群友输入会被 SnowLuma 直接回复版本/平台/运行时长，这条回复绕过桥接审计。请运行 npm run harden:snowluma-status 或在 SnowLuma 设置里关闭后重启 SnowLuma。`);
+      }
+      if (shield?.enabled === false || !trigger) continue;
+      // 内置规则（#sl/#status/#帮助…）已覆盖的触发词无需重复注入。
+      if (matchCommandShield(trigger, { extraPatterns: [] })) continue;
+      const pattern = commandTokenPattern(trigger);
+      if (!pattern || extra.includes(pattern)) continue;
+      extra.push(pattern);
+      added.push(trigger);
+    }
+    if (added.length > 0 && shield) {
+      shield.extraPatterns = extra;
+      log(`已把 SnowLuma 自定义状态触发词纳入进线屏蔽：${added.join('、')}`);
+    }
+  } catch (error) {
+    log(`⚠️ 检查 SnowLuma 状态指令配置失败（不影响启动）：${error?.message ?? error}`);
+  }
 }
 
 // ── 状态持久化（QQ 会话 ↔ DSH 会话映射） ─────────────────────────────────────
@@ -1381,6 +1426,7 @@ let stateDirHardened = null;
 // ── 主流程 ──────────────────────────────────────────────────────────────────
 async function main() {
   const cfg = loadConfig();
+  inspectSnowLumaStatusCommands(cfg);
   fs.mkdirSync(STATE_DIR, { recursive: true });
   hardenStateDirAcl();
   acquireLock();
@@ -2847,12 +2893,62 @@ async function main() {
       }
     }
   };
+  // DSH 桌面版每次启动都会随机挑一个监听端口（实测 2601 → 3530，且没有固定端口选项），
+  // 所以 config.json 里写死的 dsh.baseUrl 在一次重启后就会指向死端口 —— 桥接这边的表现是
+  // 「事件流连上 0 帧就断开」，但真正的原因是 HTTP 都打不到 DSH。这里在探活失败时到本机
+  // 回环的监听端口里找回 DSH，并把新地址写回 config.json（与 SnowLuma 端点自愈同一个思路）。
+  let lastDshPortProbeAt = 0;
+  let dshPortProbeRunning = false;
+  const tryDiscoverDshPort = async () => {
+    if (dshPortProbeRunning || Date.now() - lastDshPortProbeAt < 15_000) return false;
+    lastDshPortProbeAt = Date.now();
+    dshPortProbeRunning = true;
+    try {
+      const portOf = (value) => { try { return Number(new URL(String(value)).port) || 0; } catch { return 0; } };
+      const found = await discoverDshBaseUrl({
+        // 扫本机监听端口时跳过已知的自家/邻居端口，省得每个都打一次探活。
+        excludePorts: [
+          Number(cfg.consolePort) || 3100,
+          portOf(cfg.snowluma?.httpUrl),
+          portOf(cfg.snowluma?.wsUrl)
+        ].filter(Boolean)
+      });
+      if (!found || found === cfg.dsh.baseUrl) return false;
+      log(`检测到 DSH 换了地址：${cfg.dsh.baseUrl} → ${found}（桌面版每次启动端口随机）`);
+      cfg.dsh.baseUrl = found;
+      api.baseUrl = found;
+      api.invalidateAuth();
+      try {
+        const configFile = path.join(ROOT, 'config.json');
+        const file = readConfigObject(configFile);
+        file.dsh = { ...(file.dsh ?? {}), baseUrl: found };
+        atomicWriteJson(configFile, file);
+        log(`已把 dsh.baseUrl=${found} 写回 config.json（下次启动不用再改）`);
+      } catch (error) {
+        log(`写回 config.json 失败（本次运行仍用新地址）：${error?.message ?? error}`);
+      }
+      return true;
+    } catch (error) {
+      log(`DSH 端口自愈失败：${error?.message ?? error}`);
+      return false;
+    } finally {
+      dshPortProbeRunning = false;
+    }
+  };
+
   const checkDsh = async () => {
     let ok = false;
     try {
       await api.settings.describe({});
       ok = true;
     } catch {}
+    // DSH 还没起来 / 刚换了端口：尝试自动找回（15 秒节流，避免每秒扫端口）。
+    if (!ok && await tryDiscoverDshPort()) {
+      try {
+        await api.settings.describe({});
+        ok = true;
+      } catch {}
+    }
     if (ok) {
       await refreshMode();
       // DSH 起来后拉一次 preset 清单；DSH 重启（dshReady 由 false 变 true）时再拉一次。
@@ -7111,6 +7207,31 @@ async function main() {
     return lastSendFailed.get(key) !== true;
   }
 
+  // ── 系统指令屏蔽（#sl 等） ───────────────────────────────────────────────
+  // 拦截后私聊通知管理员；默认 10 分钟最多一条，避免被反复触发刷屏。
+  // 通知本身走 sendToQQ（仍受当前模式/白名单约束），失败只记日志。
+  let commandShieldNotifyAt = 0;
+  function notifyCommandShieldBlocked(key, hit, event, isOwner) {
+    const cs = cfg.security?.commandShield ?? {};
+    if (cs.notifyOwner === false || !cfg.ownerQQ) return;
+    const cooldown = Math.max(0, Number(cs.notifyCooldownMs ?? 0) || 0);
+    const now = Date.now();
+    if (cooldown > 0 && now - commandShieldNotifyAt < cooldown) return;
+    commandShieldNotifyAt = now;
+    const sender = event?.sender;
+    // 昵称是不可信输入：压掉换行/控制字符并限长，避免把通知正文拆成多条或伪造格式。
+    const nick = String(sender?.card || sender?.nickname || event?.user_id || '未知')
+      .replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, ' ')
+      .slice(0, 40);
+    const who = isOwner ? '管理员本人' : `${nick}（${event?.user_id ?? '?'}）`;
+    const command = String(hit.command ?? '').slice(0, 40);
+    try {
+      void sendToQQ(`private:${cfg.ownerQQ}`, `🛡️ 已拦截系统指令 ${command}（${hit.label}）：${key} 的 ${who}。消息未投递给 AI。`);
+    } catch (error) {
+      log(`系统指令拦截通知发送失败：${error?.message ?? error}`);
+    }
+  }
+
   // ── 真人式分条发送 ──────────────────────────────────────────────────────
   function singleLineForQQ(s) {
     return String(s ?? '')
@@ -10555,6 +10676,17 @@ async function main() {
     if (!plainContent && !quoteTargetIsSelf) return;
     const isOwner = String(event.user_id) === String(cfg.ownerQQ ?? '');
     const roleState = readRoleState();
+
+    // 🛡️ 系统指令屏蔽（#sl / #status / #帮助 …，见 src/command-shield.js）。
+    // 必须在“待应答、静默、管理命令”之前拦截：命中即丢弃，不进入未读队列、
+    // 上下文或黑话窗口——模型看不到这些指令，才不会被顺势诱导复述系统信息。
+    const shieldHit = matchCommandShield(plainContent, cfg.security?.commandShield);
+    if (shieldHit) {
+      appendActivity(`${key} 【指令屏蔽】${isOwner ? '管理员' : '群友'} ${event.user_id} 触发 ${shieldHit.id}：${plainContent.slice(0, 40)}`);
+      log(`🛡️ 已拦截系统指令 ${key} ${event.user_id} ${shieldHit.command}（${shieldHit.label}）`);
+      notifyCommandShieldBlocked(key, shieldHit, event, isOwner);
+      return;
+    }
 
     // 若该会话有挂起的提问/审批，先当作回答处理（用当前消息自己的文字，不含引用原文）。
     // 审批只有管理员消息会被消费；群友消息不能因为“审批挂起”而被吞掉，应继续走正常处理。

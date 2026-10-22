@@ -1,6 +1,6 @@
 // Offline regression tests. No real DSH/QQ endpoints or local credentials are read.
 import assert from 'node:assert/strict';
-import { NodeApiClient } from '../src/dsh-client.js';
+import { NodeApiClient, setWebSocketImplementation } from '../src/dsh-client.js';
 
 const originalFetch = globalThis.fetch;
 const originalWebSocket = globalThis.WebSocket;
@@ -160,7 +160,7 @@ const unavailableProjections = async (method, payload) => (
 );
 
 test('session retirement reads the inbox projection through session/projections (no socket)', async () => {
-  globalThis.WebSocket = FakeWebSocket;
+  setWebSocketImplementation(FakeWebSocket);
   const before = FakeWebSocket.sockets.length;
   const api = client();
   api.cookie = 'fixture=ok';
@@ -186,7 +186,7 @@ test('session retirement reads the inbox projection through session/projections 
 });
 
 test('session retirement falls back to the 0.2.0 control baseline shape and removes only its own items', async () => {
-  globalThis.WebSocket = FakeWebSocket;
+  setWebSocketImplementation(FakeWebSocket);
   const api = client();
   api.cookie = 'fixture=ok';
   const calls = [];
@@ -211,7 +211,7 @@ test('session retirement falls back to the 0.2.0 control baseline shape and remo
 });
 
 test('session retirement closes its control socket on timeout', async () => {
-  globalThis.WebSocket = FakeWebSocket;
+  setWebSocketImplementation(FakeWebSocket);
   const api = client();
   api.cookie = 'fixture=ok';
   // 主路径不可用 ⇒ 走 control 流；control 流始终不发 baseline ⇒ 只能被超时中止。
@@ -225,7 +225,7 @@ test('session retirement closes its control socket on timeout', async () => {
 });
 
 test('session retirement reports control failure while still cancelling active work', async () => {
-  globalThis.WebSocket = FakeWebSocket;
+  setWebSocketImplementation(FakeWebSocket);
   const api = client();
   api.cookie = 'fixture=ok';
   const calls = [];
@@ -243,7 +243,7 @@ test('session retirement reports control failure while still cancelling active w
 });
 
 test('pre-aborted event stream never opens a WebSocket', async () => {
-  globalThis.WebSocket = FakeWebSocket;
+  setWebSocketImplementation(FakeWebSocket);
   globalThis.fetch = async () => new Response('', { headers: { 'set-cookie': 'fixture=ok' } });
   const api = client();
   const abort = new AbortController();
@@ -254,7 +254,7 @@ test('pre-aborted event stream never opens a WebSocket', async () => {
 });
 
 test('failed follow send can be retried and never stays marked followed', async () => {
-  globalThis.WebSocket = FakeWebSocket;
+  setWebSocketImplementation(FakeWebSocket);
   const api = client();
   api.cookie = 'fixture=ok';
   const abort = new AbortController();
@@ -277,7 +277,7 @@ test('failed follow send can be retried and never stays marked followed', async 
 
 for (const type of ['end', 'error']) {
   test(`logical $events ${type} ends the transport so the bridge can reconnect`, async () => {
-    globalThis.WebSocket = FakeWebSocket;
+    setWebSocketImplementation(FakeWebSocket);
     const api = client();
     api.cookie = 'fixture=ok';
     api.events.follow('session-a');
@@ -302,7 +302,7 @@ for (const type of ['end', 'error']) {
 }
 
 test('transient follow errors preserve subscriptions and close transport for retry', async () => {
-  globalThis.WebSocket = FakeWebSocket;
+  setWebSocketImplementation(FakeWebSocket);
   const api = client();
   api.cookie = 'fixture=ok';
   api.events.follow('session-a');
@@ -332,7 +332,7 @@ try {
   }
 } finally {
   globalThis.fetch = originalFetch;
-  globalThis.WebSocket = originalWebSocket;
+  setWebSocketImplementation(originalWebSocket);
   if (originalHome === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = originalHome;
   process.removeListener('unhandledRejection', onUnhandled);
 }

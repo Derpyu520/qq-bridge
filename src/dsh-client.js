@@ -11,14 +11,33 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import YAML from 'js-yaml';
+import WebSocket from 'ws';
 import { AbstractApiClient } from '@deepseek-ai/dsh-host-apiproxy/client';
+
+/**
+ * 可注入的 WebSocket 实现。
+ *
+ * 生产必须用 `ws`：Node 自带的全局 WebSocket（undici）不接受构造参数里的
+ * `{ headers }`，Cookie 根本发不出去 —— 连接能升级，但事件流永远 0 帧。
+ * 测试用 {@link setWebSocketImplementation} 注入假 socket，精确控制 open/close。
+ */
+let WebSocketImpl = WebSocket;
+
+/** 仅供测试：替换 WebSocket 实现（传入 fake 构造器）。 */
+export function setWebSocketImplementation(ctor) {
+  if (typeof ctor !== 'function') throw new TypeError('WebSocket implementation must be a constructor');
+  WebSocketImpl = ctor;
+}
 
 /** DSH home：凭据文件与（历史）启动日志都在这里。 */
 export function resolveDshHome() {
   return process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
 }
+
+
 
 /**
  * 自动发现 DSH 的进程启动 token（新版 DSH 把它打印在 `dsh web` 的 URL 上）。
@@ -141,6 +160,80 @@ export function discoverDshSessionCookie(baseUrl, options) {
   } catch {
     return '';
   }
+}
+
+/**
+ * 从 `netstat -ano -p tcp` 输出里提取「本机回环上处于 LISTENING 的端口」。
+ *
+ * 背景：DSH 桌面版每次启动会随机挑一个监听端口（实测同一台机器上 2601 → 3530，
+ * 且没有可配置的固定端口），于是 config.json 里的 `dsh.baseUrl` 在 DSH 重启后
+ * 必然指向死端口，表现为「首次连接就 0 帧断开」。桥接用这张表 + 逐个探活来
+ * 找回真正在跑的那个 DSH。
+ */
+export function parseListeningLoopbackPorts(netstatText) {
+  const ports = new Set();
+  for (const line of String(netstatText).split(/\r?\n/)) {
+    const match = line.match(/^\s*TCP\s+(?:127\.0\.0\.1|\[::1\]):(\d+)\s+\S+\s+LISTENING\s+\d+\s*$/i);
+    if (match) ports.add(Number(match[1]));
+  }
+  return [...ports].sort((a, b) => a - b);
+}
+
+/**
+ * 在本机回环端口里找到真正在跑的 DSH。
+ *
+ * 判定方式：对每个候选端口用离线铸造的会话 Cookie 调 `settings/describe`，
+ * 返回 `{result:{ok:true,value:{namespaces:[...]}}}` 才算命中（其它本机服务
+ * 要么 401/404，要么形状不同）。这样不需要知道 DSH 的进程 PID，也不依赖
+ * 任何固定端口。
+ *
+ * @returns DSH 基址（如 `http://127.0.0.1:3530`）；找不到返回 null。
+ */
+export async function discoverDshBaseUrl({ excludePorts = [], timeoutMs = 900, concurrency = 6 } = {}) {
+  if (process.platform !== 'win32') return null;
+  let output = '';
+  try {
+    output = execFileSync('netstat', ['-ano', '-p', 'tcp'], {
+      encoding: 'utf8',
+      timeout: 5000,
+      windowsHide: true,
+      maxBuffer: 8 * 1024 * 1024
+    });
+  } catch {
+    return null;
+  }
+  const ports = parseListeningLoopbackPorts(output).filter((port) => !excludePorts.includes(port));
+  const secret = readBrowserSessionSecret();
+  if (!secret || ports.length === 0) return null;
+
+  const probe = async (port) => {
+    const base = `http://127.0.0.1:${port}`;
+    const cookie = mintBrowserSessionCookie(base, secret);
+    const response = await fetch(`${base}/api/settings/describe`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        type: 'client-request',
+        rpcId: 'dsh-port-probe',
+        method: 'settings/describe',
+        payload: { args: {} }
+      }),
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+    if (response.status !== 200) return null;
+    const body = await response.json().catch(() => null);
+    const value = body?.result?.value;
+    return body?.result?.ok === true && Array.isArray(value?.namespaces) ? base : null;
+  };
+
+  // 分批并发：端口多时避免一次性打爆本机（每个探测都只发一个空 RPC）。
+  for (let index = 0; index < ports.length; index += concurrency) {
+    const batch = ports.slice(index, index + concurrency);
+    const results = await Promise.all(batch.map((port) => probe(port).catch(() => null)));
+    const hit = results.find(Boolean);
+    if (hit) return hit;
+  }
+  return null;
 }
 
 /**
@@ -512,7 +605,7 @@ export class NodeApiClient extends AbstractApiClient {
     signal?.throwIfAborted();
     const url = new URL('/api/remote.mux', this.baseUrl);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-    const socket = new WebSocket(url, { headers: { cookie: this.cookie } });
+    const socket = new WebSocketImpl(url, { headers: { cookie: this.cookie } });
     const streamId = randomUUID();
     return new Promise((resolve, reject) => {
       let settled = false;
@@ -524,7 +617,7 @@ export class NodeApiClient extends AbstractApiClient {
         socket.removeEventListener('message', message);
         socket.removeEventListener('error', failed);
         socket.removeEventListener('close', failed);
-        if (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN) socket.close();
+        if (socket.readyState === WebSocketImpl.CONNECTING || socket.readyState === WebSocketImpl.OPEN) socket.close();
         if (error) reject(error); else resolve(items);
       };
       const abort = () => finish(signal.reason);
@@ -689,7 +782,7 @@ export class NodeApiClient extends AbstractApiClient {
     sig.throwIfAborted();
     const url = new URL('/api/remote.mux', this.baseUrl);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-    const socket = new WebSocket(url, { headers: { cookie: this.cookie } });
+    const socket = new WebSocketImpl(url, { headers: { cookie: this.cookie } });
     const inbox = [];
     let wake;
     let socketOpen = false;
@@ -891,7 +984,7 @@ export class NodeApiClient extends AbstractApiClient {
     const handleError = () => endStream();
     const handleAbort = () => {
       endStream();
-      if (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN) socket.close();
+      if (socket.readyState === WebSocketImpl.CONNECTING || socket.readyState === WebSocketImpl.OPEN) socket.close();
     };
     socket.addEventListener('open', handleOpen);
     socket.addEventListener('message', handleMessage);

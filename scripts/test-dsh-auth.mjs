@@ -15,7 +15,8 @@
 // 用法：node scripts/test-dsh-auth.mjs   （需要 DSH 正在运行）
 import {
   NodeApiClient, discoverDshLaunchToken, discoverDshSessionCookie,
-  readBrowserSessionSecret, resolveDshHome, mintBrowserSessionCookie, isLoopbackBase
+  readBrowserSessionSecret, resolveDshHome, mintBrowserSessionCookie, isLoopbackBase,
+  parseListeningLoopbackPorts
 } from '../src/dsh-client.js';
 
 const BASE = process.env.DSH_BASE_URL || 'http://127.0.0.1:3080';
@@ -32,6 +33,19 @@ function check(label, cond, extra = '') {
 // ── 纯函数层（不需要 DSH 在线）────────────────────────────────────────────
 check('isLoopbackBase 认回环', isLoopbackBase('http://127.0.0.1:3080') === true);
 check('isLoopbackBase 拒非回环', isLoopbackBase('http://10.0.0.5:3080') === false);
+
+// DSH 桌面版每次启动随机端口（实测 2601 → 3530），所以桥接会从监听表里找回它。
+// 这里钉住解析规则：只取回环 LISTENING、去重、忽略非监听行。
+const NETSTAT_FIXTURE = [
+  '  TCP    127.0.0.1:3530         0.0.0.0:0              LISTENING       51952',
+  '  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       1024',
+  '  TCP    [::1]:3001             [::]:0                 LISTENING       24276',
+  '  TCP    127.0.0.1:3530         0.0.0.0:0              LISTENING       51952',
+  '  TCP    127.0.0.1:50000        127.0.0.1:3530         ESTABLISHED     51952'
+].join('\r\n');
+check('netstat 解析只取回环 LISTENING 端口（去重、忽略 ESTABLISHED）',
+  JSON.stringify(parseListeningLoopbackPorts(NETSTAT_FIXTURE)) === JSON.stringify([3001, 3530]),
+  JSON.stringify(parseListeningLoopbackPorts(NETSTAT_FIXTURE)));
 
 const secret = readBrowserSessionSecret();
 check('读到 browser-session 签名密钥（32 字节）', secret?.byteLength === 32, secret ? `${secret.byteLength} bytes` : `未读到（${resolveDshHome()}）`);

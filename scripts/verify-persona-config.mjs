@@ -31,12 +31,12 @@ check('新配置 {prefix} 通过（个人前缀）', () => {
   if (v.prefix.length === 0) throw new Error('prefix 为空');
 });
 
-check('新配置 {prefix, suffix} 通过（含 {{cwd}} 模板）', () => {
+check('新配置 {prefix, suffix} 通过（suffix 为纯文本）', () => {
   const v = persona.Config({
     prefix: 'You are a coding agent powered by the {{model}} model.',
-    suffix: 'Your working directory is {{cwd}}.',
+    suffix: 'Be concise.',
   });
-  if (v.suffix !== 'Your working directory is {{cwd}}.') throw new Error('suffix 未保留');
+  if (v.suffix !== 'Be concise.') throw new Error('suffix 未保留');
   if (v.complete !== false) throw new Error('complete 默认值异常');
   if (v.includeRuntimeContext !== true) throw new Error('includeRuntimeContext 默认值异常');
 });
@@ -58,8 +58,10 @@ for (const preset of ['qq-chat', 'qq-chat-v2']) {
   check('保留了 {{model}} 变量', () => {
     if (!/\{\{model\}\}/.test(row.config.prefix)) throw new Error('prefix 缺少 {{model}}');
   });
-  check('保留了 {{cwd}} 变量', () => {
-    if (!/\{\{cwd\}\}/.test(row.config.suffix ?? '')) throw new Error('suffix 缺少 {{cwd}}');
+  check('template 变量都在 DSH 注册表内（provider / model）', () => {
+    const vars = [...`${row.config.prefix}${row.config.suffix ?? ''}`.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]);
+    const unknown = [...new Set(vars)].filter((name) => !['provider', 'model'].includes(name));
+    if (unknown.length) throw new Error(`未注册的提示词变量：${unknown.join(', ')}`);
   });
   check('不再包含已废弃的 text 字段', () => {
     if (Object.hasOwn(row.config, 'text')) throw new Error('仍有 text 字段');

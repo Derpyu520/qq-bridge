@@ -11,10 +11,19 @@ const preset = yaml.load(fs.readFileSync(
 const persona = preset.find((row) => row.id === 'persona');
 const prefix = persona?.config?.prefix ?? '';
 
+// DSH 0.2.0-rc.2 的 deployment:persona-* 段只注册了这两个变量；写别的（例如曾经的
+// {{cwd}}）会让每个回合在装配提示词时直接失败：
+//   unknown prompt variable "{{cwd}}" in section "deployment:persona-suffix"
+const REGISTERED_PROMPT_VARS = new Set(['provider', 'model']);
+
 test('reserved2 YAML resolves to the expected persona and template variables', () => {
   assert.equal(persona?.name, '@deepseek-ai/dsh-persona');
   assert.match(prefix, /\{\{model\}\}/);
-  assert.match(persona.config.suffix, /\{\{cwd\}\}/);
+  const vars = [...`${prefix}${persona.config.suffix ?? ''}`.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]);
+  assert.ok(vars.length > 0, 'persona 应至少保留 {{model}}');
+  for (const name of vars) {
+    assert.ok(REGISTERED_PROMPT_VARS.has(name), `未注册的提示词变量 ${name} 会让 DSH 回合装配报错`);
+  }
   assert.equal(Object.hasOwn(persona.config, 'text'), false);
 });
 
