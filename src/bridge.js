@@ -3292,7 +3292,32 @@ async function main() {
     const agentTokenOk = (key, token) => {
       const canonical = canonicalV2Key(key);
       const st = socialV2.conversations.get(canonical ?? key);
-      return !!st && !!st.agentToken && tokenEq(token, st.agentToken);
+      if (st && st.agentToken && tokenEq(token, st.agentToken)) return true;
+      // 跨会话（socialV2.allowCrossSessionSend，默认开）：
+      //   1) 任何会话都可以给管理员发私聊 —— 群里不方便说的话可以单独找主人；
+      //   2) 管理员私聊发起的调用可以发给任意白名单目标（例如家人，对方可能从没说过话、
+      //      没有自己的会话令牌，严格比对必然失败）。
+      // 两个条件都要求 token 是某个活跃会话的真实 agent 令牌，且目标在白名单内。
+      if (cfg.socialV2?.allowCrossSessionSend !== false && token) {
+        const ownerId = String(cfg.ownerQQ ?? '').trim();
+        if (ownerId) {
+          const parsed = parseTargetKey(String(canonical ?? key));
+          if (parsed
+            && parsed.kind === 'private'
+            && String(parsed.id) === ownerId
+            && isLiveAgentToken(token)) {
+            return true;
+          }
+          const callerKey = agentTokenSessionKey(token);
+          if (callerKey
+            && callerKey === `private:${ownerId}`
+            && parsed
+            && allowed(parsed.kind, Number(parsed.id), cfg)) {
+            return true;
+          }
+        }
+      }
+      return false;
     };
     /**
      * 令牌是否匹配**任意**一个活跃二代会话。
@@ -3308,6 +3333,17 @@ async function main() {
         if (st?.agentToken && tokenEq(token, st.agentToken)) return true;
       }
       return false;
+    };
+    /**
+     * 这个令牌属于哪个会话（返回会话 key）。跨会话发送时用来确认发起方：
+     * 只有管理员私聊（private:<ownerQQ>）的令牌才允许跨到别的白名单目标。
+     */
+    const agentTokenSessionKey = (token) => {
+      if (typeof token !== 'string' || !token) return null;
+      for (const [k, st] of socialV2.conversations.entries()) {
+        if (st?.agentToken && tokenEq(token, st.agentToken)) return k;
+      }
+      return null;
     };
     // 二代会话工具必须仍命中当前模式的白名单/准入；避免白名单移除后旧 agentToken 继续读状态。
     const v2SessionAllowed = isSessionAllowedInCurrentMode;
@@ -4719,7 +4755,8 @@ async function main() {
           if (merged.agentPreset !== undefined) merged.agentPreset = String(merged.agentPreset ?? '');
           file.socialV2 = merged;
           atomicWriteJson(configFile, file);
-          cfg.socialV2 = { ...(cfg.socialV2 ?? {}), ...merged };
+          // 跨会话发送：管理员私聊可发给任意白名单目标；任何会话都可以给管理员发私聊。
+  cfg.socialV2 = { ...(cfg.socialV2 ?? {}), ...merged };
           // 仅当“会影响默认唤醒配置”的字段变化时，才同步到仍使用默认配置的现有会话。
           // 避免只改发送/等待/工具开关时，意外重置正在等待的潜水/唤醒计划。
           const WAKE_DEFAULT_KEYS = [
