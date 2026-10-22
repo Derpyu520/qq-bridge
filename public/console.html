@@ -2050,6 +2050,7 @@ button:active:not(:disabled) {
         <label class="v2-tool-item"><input type="checkbox" data-v2-tool="stickerNote"> <span><b>qq_sticker_note</b><span class="meta">给表情记录本地含义/标签/用法</span></span></label>
         <label class="v2-tool-item"><input type="checkbox" data-v2-tool="setStickerRemark"> <span><b>qq_set_sticker_remark</b><span class="meta">修改 QQ 官方表情备注（默认禁用，慎用）</span></span></label>
         <label class="v2-tool-item"><input type="checkbox" data-v2-tool="sendVoice"> <span><b>qq_send_voice / qq_list_voices</b><span class="meta">发送语音条（只能发语音库里的音频；偶然而为的强表达）</span></span></label>
+        <label class="v2-tool-item"><input type="checkbox" data-v2-tool="synthesizeVoice"> <span><b>qq_synthesize_voice</b><span class="meta">把任意文本用外部 TTS 合成为音色语音再发送（需先配好 socialV2.tts；失败自动回退文字）</span></span></label>
       </div>
       <div class="meta" style="margin-top:6px">二代黑话学习：AI 可用 <code>qq_slang_submit</code> 提交陌生词，也可由桥接自动提取；管理员在「黑话词库」页面筛选确认后，词条会自动写入黑话提示词并注入 <code>qq_get_prompt</code> 与后续唤醒。</div>
 
@@ -2072,6 +2073,25 @@ button:active:not(:disabled) {
         上限：时长 <code>maxSeconds</code>、体积 <code>maxBytes</code>、频率 <code>maxPerMinute</code>/<code>maxPerHour</code>（见下方配置区）。
         命令行等价工具：<code>node scripts/send-voice.mjs list-voice</code>（经桥接）或 <code>node voice-cli.mjs</code>（独立工具，在上级 <code>voice-tool/</code> 里直连 SnowLuma）。
       </div>
+
+      </div></details>
+<details class="settings-group"><summary>TTS 语音合成（调试）</summary><div class="settings-content">
+      <div class="meta" style="margin-bottom:8px">
+        按文本实时合成音色语音（外部 TTS 服务，配置见 <code>socialV2.tts</code>，指南 <code>docs/guides/TTS.md</code>）。
+        与上面的语音库互补：那边发「准备好的音频」，这边发「合成的语音」。试合成不发送；试发走与 AI 通道相同的校验/限流路径。
+      </div>
+      <div class="row" style="flex-wrap:wrap;gap:8px;align-items:center">
+        <input type="text" id="ttsText" placeholder="要合成的文本（默认 ≤200 字）" style="flex:1;min-width:260px">
+      </div>
+      <div class="row" style="flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px">
+        <button id="ttsPreviewBtn" type="button" class="btn-secondary">试合成（本地播放）</button>
+        <label style="flex:0 0 auto">发送目标</label>
+        <input type="text" id="ttsSendTarget" placeholder="group:100005" style="width:190px">
+        <label style="flex:0 0 auto"><input type="checkbox" id="ttsSendDryRun" style="width:auto"> 只校验不发送</label>
+        <button id="ttsSendBtn" type="button">试发合成语音</button>
+        <span id="ttsMsg" class="meta"></span>
+      </div>
+      <audio id="ttsAudio" controls style="display:none;margin-top:8px;width:100%"></audio>
 
       </div></details>
 <details class="settings-group"><summary>唤醒推荐值（仅参考，AI 可不遵守）</summary><div class="settings-content">
@@ -3262,6 +3282,63 @@ async function sendVoiceFromConsole() {
   }
 }
 
+// ── TTS 语音合成（调试面板） ─────────────────────────────────────────────
+// 试合成走 /api/tts/preview（操作者通道，凭控制台令牌）：只合成不发送，
+// 返回的 wav 供本地 <audio> 播放。试发走 AI 通道 /api/socialV2/synthesize-voice
+// 的 dryRun——与 AI 调用完全同一条校验路径（白名单/限流/审计）。
+async function ttsPreviewFromConsole() {
+  const msg = document.getElementById('ttsMsg');
+  const text = document.getElementById('ttsText').value.trim();
+  const audio = document.getElementById('ttsAudio');
+  if (!text) { msg.textContent = '❌ 请输入要合成的文本'; msg.className = 'meta err'; return; }
+  msg.textContent = '合成中…（CPU 服务约 20-30 秒）'; msg.className = 'meta';
+  audio.style.display = 'none';
+  try {
+    // 不走 blob:（会被 CSP default-src 'self' 拦掉 media 源）：直接把 <audio>
+    // 指向同源的 preview 端点（?token= 与控制台鉴权兼容），合成在服务端
+    // 队列完成后才返回，浏览器收到即完整 wav。
+    const r = await api('/api/tts/preview-status', 'POST', { text });
+    if (r.ok) {
+      audio.src = '/api/tts/preview?token=' + encodeURIComponent(localStorage.getItem('consoleToken') || '') + '&key=' + encodeURIComponent(r.key);
+      audio.style.display = 'block';
+      audio.play().catch(() => {});
+      msg.textContent = '✅ 合成完成（' + Math.round((r.bytes || 0) / 1024) + ' KiB），点 ▶ 播放收听'; msg.className = 'meta ok';
+    } else {
+      throw new Error(r.error || '失败');
+    }
+  } catch (error) {
+    msg.textContent = '❌ ' + (error && error.message ? error.message : error); msg.className = 'meta err';
+  }
+}
+
+async function ttsSendFromConsole() {
+  const msg = document.getElementById('ttsMsg');
+  const text = document.getElementById('ttsText').value.trim();
+  const target = document.getElementById('ttsSendTarget').value.trim();
+  const dryRun = document.getElementById('ttsSendDryRun').checked;
+  if (!text) { msg.textContent = '❌ 请输入要合成的文本'; msg.className = 'meta err'; return; }
+  if (!target) { msg.textContent = '❌ 请填发送目标（如 group:100005）'; msg.className = 'meta err'; return; }
+  msg.textContent = dryRun ? '校验中…' : '合成并发送中…'; msg.className = 'meta';
+  try {
+    // 操作者通道（凭控制台令牌）：与语音库试发 /api/voice/send 同一模式——
+    // 白名单/时长体积/限流/审计一个不少，只是由你在控制台触发，不需要会话令牌。
+    const r = await api('/api/tts/send', 'POST', { target, text, dryRun });
+    if (r.ok && r.dryRun) {
+      msg.textContent = '✅ 校验通过（未发送）：' + (r.detail || '') + '，时长约 ' + (r.duration ?? '?') + 's';
+      msg.className = 'meta ok';
+    } else if (r.ok) {
+      msg.textContent = '✅ 已发出 messageId=' + (r.messageId ?? '?')
+        + (r.verified ? '，已回读校验为语音段' : '');
+      msg.className = 'meta ok';
+    } else {
+      msg.textContent = '❌ ' + (r.error || '失败');
+      msg.className = 'meta err';
+    }
+  } catch (error) {
+    msg.textContent = '❌ ' + (error && error.message ? error.message : error); msg.className = 'meta err';
+  }
+}
+
 // ── 二代仿真模式（reserved2）配置 ─────────────────────────────────────────
 async function loadV2Config() {
   try {
@@ -3842,6 +3919,8 @@ document.getElementById('v2ConfigSave').addEventListener('click', saveV2Config);
 document.getElementById('v2ConfigSaveTop').addEventListener('click', saveV2Config);
 document.getElementById('voiceRefreshBtn').addEventListener('click', () => loadVoiceLibrary(true));
 document.getElementById('voiceSendBtn').addEventListener('click', sendVoiceFromConsole);
+document.getElementById('ttsPreviewBtn').addEventListener('click', ttsPreviewFromConsole);
+document.getElementById('ttsSendBtn').addEventListener('click', ttsSendFromConsole);
 async function refreshV2Activity() {
   try {
     const r = await api('/api/socialV2/activity');

@@ -54,6 +54,7 @@ import {
   applyStickerNote,
   markStickerUsed
 } from './sticker-lib.js';
+import { defaultTtsCfg, normalizeTtsCfg, createTtsSynthesizer } from './tts-core.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -908,6 +909,7 @@ function loadConfig() {
     collectSticker: true,
     getSelfImage: true,
     sendVoice: false,
+    synthesizeVoice: false,
     ...(cfg.socialV2.tools ?? {})
   };
 
@@ -933,6 +935,25 @@ function loadConfig() {
     ffmpegPath: '',
     autoReadback: true,
     ...(cfg.socialV2?.voice ?? {})
+  };
+
+  // socialV2.tts：文本 → 语音合成（把 AI 的文字回复用外部 TTS 服务合成为音频，
+  // 再走 voice 的发送链路当语音条发出）。合成服务是**外部 HTTP 服务**——默认指向
+  // 本机 GPT-SoVITS 风格的 /tts 端点，但接口是通用的（POST JSON → 音频字节），
+  // 阿里云/Edge-TTS 等任何本地代理都能接。
+  // 默认**关闭**：与 voice 同口径——合成服务没配好就让 AI 调，只会得到一串错误。
+  cfg.socialV2.tts = {
+    enabled: false,
+    baseUrl: 'http://127.0.0.1:9880',
+    endpoint: '/tts',
+    voice: '',
+    lang: 'zh',
+    timeoutMs: 120000,
+    maxChars: 200,
+    cacheDir: 'state/tts-cache',
+    cacheTtlMs: 24 * 60 * 60 * 1000,
+    cacheMaxEntries: 200,
+    ...(cfg.socialV2?.tts ?? {})
   };
 
   // socialV2.sticker.collect 也需要深度合并，避免旧配置缺失 collect 子项时丢默认值。
@@ -1567,6 +1588,26 @@ async function main() {
       ffmpegPath: process.env.FFMPEG_PATH || v.ffmpegPath || null,
       autoReadback: v.autoReadback !== false
     };
+  }
+
+  // ── TTS（文本 → 语音合成）配置与合成器单例 ──────────────────────────────
+  //
+  // 与 voice 的关系：voice 管「发」（白名单/限流/审计），tts 只管「造」——
+  // 合成产物落盘到 state/tts-cache/ 后，发送仍走 sendVoiceForV2 的既有链路，
+  // 因此所有发送侧的约束（时长/体积/频率）对合成语音天然生效，这里不重复实现。
+  // normalizeTtsCfg 在配置非法时抛错 → 启动期暴露（与 voiceCfg 的兜底风格一致，
+  // 但 tts 的 baseUrl 指向外部服务，写错地址必须当场报，不能静默用默认值）。
+  function ttsCfg() {
+    const raw = { ...defaultTtsCfg(), ...(cfg.socialV2?.tts ?? {}) };
+    return normalizeTtsCfg(raw);
+  }
+
+  let ttsSynthSingleton = null;
+  function ttsSynth() {
+    if (!ttsSynthSingleton) {
+      ttsSynthSingleton = createTtsSynthesizer(ttsCfg(), { stateDir: STATE_DIR });
+    }
+    return ttsSynthSingleton;
   }
 
   function voiceLibrary() {
@@ -5544,6 +5585,119 @@ async function main() {
           }
           return;
         }
+        // ── TTS 试合成（操作者通道：控制台面板试听，只合成不发送） ────────────
+        //
+        // 与 /api/socialV2/synthesize-voice（AI 通道）分开：这里只做「文本 → wav」，
+        // 不碰任何会话/白名单/限流逻辑（没有发送就没有那些约束的适用场景），
+        // 产物同时落缓存——控制台试听过的句子，AI 再说同一句时零等待。
+        // 两段式：POST /api/tts/preview-status 合成并返回元数据（含回放 key）；
+        // GET  /api/tts/preview?key=… 同源回放 wav。两段式是为了绕开 CSP
+        // default-src 'self' 对 blob: media 的拦截——<audio> 直接指向同源端点。
+        if (req.method === 'POST' && url.pathname === '/api/tts/preview-status') {
+          const body = await readBody();
+          let tcfg;
+          try { tcfg = ttsCfg(); } catch (error) { sendJson({ ok: false, error: `TTS 配置无效：${error?.message ?? error}` }, 500); return; }
+          if (!tcfg.enabled) { sendJson({ ok: false, error: 'TTS 合成未启用（config.json socialV2.tts.enabled）' }, 403); return; }
+          const text = String(body.text ?? '').trim();
+          if (!text) { sendJson({ ok: false, error: 'text 不能为空' }, 400); return; }
+          if (text.length > tcfg.maxChars) { sendJson({ ok: false, error: `文本过长（${text.length} 字 > maxChars=${tcfg.maxChars}）` }, 400); return; }
+          let synth;
+          try {
+            synth = await ttsSynth().synthesize(text, { voice: body.voice ? String(body.voice) : undefined });
+          } catch (error) {
+            sendJson({ ok: false, error: `TTS 合成失败：${error?.message ?? error}` }, 502);
+            return;
+          }
+          const st = fs.statSync(synth.wavPath);
+          log(`[tts] (操作者) 试合成 ${text.length} 字${synth.cached ? '（缓存）' : `，${Math.round((synth.elapsedMs ?? 0) / 1000)}s`} -> ${path.basename(synth.wavPath)}`);
+          sendJson({
+            ok: true,
+            key: path.basename(synth.wavPath, '.wav'),
+            bytes: st.size,
+            durationSec: synth.durationSec ?? null,
+            cached: synth.cached
+          });
+          return;
+        }
+        if (req.method === 'GET' && url.pathname === '/api/tts/preview') {
+          const key = String(url.searchParams.get('key') ?? '').trim();
+          if (!key || !/^[a-f0-9]{8,64}$/.test(key)) { sendJson({ ok: false, error: 'key 无效' }, 400); return; }
+          const wavPath = path.join(STATE_DIR, 'tts-cache', `${key}.wav`);
+          if (!fs.existsSync(wavPath)) { sendJson({ ok: false, error: '合成结果不存在或已过期' }, 404); return; }
+          const wav = fs.readFileSync(wavPath);
+          res.writeHead(200, {
+            'content-type': 'audio/wav',
+            'content-length': String(wav.length),
+            'cache-control': 'no-store'
+          });
+          res.end(wav);
+          return;
+        }
+
+        // ── TTS 试发（操作者通道：控制台/CLI，凭 consoleToken） ────────────────
+        //
+        // 与语音库的 /api/voice/send 同一模式（对照抄齐）：目标白名单、dryRun 校验、
+        // 真发走 sendVoiceV2 + 限流 + 审计 + 回读确认。与 AI 通道
+        // /api/socialV2/synthesize-voice 的区别只有发起方——那边要会话令牌，
+        // 这边凭控制台令牌（操作者可能不在任何 QQ 会话里，不该被会话闸门挡住）。
+        if (req.method === 'POST' && url.pathname === '/api/tts/send') {
+          const body = await readBody();
+          let tcfg;
+          try { tcfg = ttsCfg(); } catch (error) { sendJson({ ok: false, error: `TTS 配置无效：${error?.message ?? error}` }, 500); return; }
+          if (!tcfg.enabled) { sendJson({ ok: false, error: 'TTS 合成未启用（config.json socialV2.tts.enabled）' }, 403); return; }
+          const key = String(body.target ?? body.key ?? '').trim();
+          const parsedTarget = parseTargetKey(key);
+          if (!parsedTarget) { sendJson({ ok: false, error: 'target 格式应为 group:群号 或 private:QQ号' }, 400); return; }
+          if (!modeAllowed(key, parsedTarget.kind, Number(parsedTarget.id), cfg, currentMode)) {
+            const a = cfg.allow ?? {};
+            sendJson({ ok: false, error: `目标 ${key} 不在白名单内（config.json allow.groups / allow.private：群 ${(a.groups ?? []).join(', ') || '空'}；私聊 ${(a.private ?? []).join(', ') || '空'}）` }, 403);
+            return;
+          }
+          const text = String(body.text ?? '').trim();
+          if (!text) { sendJson({ ok: false, error: 'text 不能为空' }, 400); return; }
+          if (text.length > tcfg.maxChars) { sendJson({ ok: false, error: `文本过长（${text.length} 字 > maxChars=${tcfg.maxChars}）` }, 400); return; }
+          let synth;
+          try {
+            synth = await ttsSynth().synthesize(text, { voice: body.voice ? String(body.voice) : undefined });
+          } catch (error) {
+            sendJson({ ok: false, error: `TTS 合成失败：${error?.message ?? error}` }, 502);
+            return;
+          }
+          const voice = voiceCfg();
+          const probe = await inspectAudio(synth.wavPath, { maxBytes: voice.maxBytes, maxSeconds: voice.maxSeconds });
+          const preview = {
+            target: key,
+            text: text.slice(0, 100),
+            bytes: probe.ok ? probe.size : synth.bytes,
+            duration: probe.duration ?? synth.durationSec ?? null,
+            detail: probe.ok ? describeAudio(probe) : `probe 失败：${probe.error}`,
+            cached: synth.cached,
+            limits: { maxSeconds: voice.maxSeconds, maxBytes: voice.maxBytes, maxPerMinute: voice.maxPerMinute, maxPerHour: voice.maxPerHour }
+          };
+          if (body.dryRun === true) { sendJson({ ok: true, dryRun: true, ...preview }); return; }
+          const now = Date.now();
+          try {
+            voiceBudgetCheck('operator:cli', voice);
+            const sent = await sendVoiceV2(key, synth.wavPath, { guard: false, audit: true, audio: null });
+            voiceBudgetCommit('operator:cli', now);
+            log(`[tts] (操作者) ${key} 合成并发送语音 (${sent.detail}, 文本 ${text.length} 字)`);
+            appendActivity(`${key} [tts] (操作者) 合成并发送语音 (${sent.detail})`);
+            const verification = body.verify === false ? null : await verifyVoiceMessageSent(sent.messageId);
+            sendJson({
+              ok: true,
+              target: key,
+              messageId: sent.messageId,
+              detail: sent.detail,
+              duration: probe.duration ?? null,
+              cached: synth.cached,
+              verified: verification?.confirmed === true
+            });
+          } catch (error) {
+            sendJson({ ok: false, error: `发送失败：${error?.message ?? error}` }, 500);
+          }
+          return;
+        }
+
         // ── 语音发送（操作者通道：CLI / 控制台，凭 consoleToken） ──────────────
         //
         // 与 /api/send/* 的 agent 通道分开：操作者可能不在任何 QQ 会话里，
@@ -5656,6 +5810,96 @@ async function main() {
             });
           } catch (error) {
             sendJson({ ok: false, error: error?.message ?? String(error) }, 500);
+          }
+          return;
+        }
+
+        // ── 语音合成 + 发送（AI 通道：文本 → 外部 TTS → 语音条） ─────────────
+        //
+        // 与 /api/socialV2/send-voice 的关系：send-voice 发「语音库里现成的音频」，
+        // 这里发「外部 TTS 服务按文本实时合成的音频」。合成后的发送完全复用
+        // sendVoiceForV2（白名单、限流、审计、回读确认一个不少）；区别只有两点：
+        // ① 产物不是库文件而是 state/tts-cache/ 的临时合成文件；
+        // ② TTS 失败/超时必须显式报错，让 AI 降级成文字回复，而不是假装发过。
+        if (req.method === 'POST' && url.pathname === '/api/socialV2/synthesize-voice') {
+          const body = await readBody();
+          const token = String(body.token ?? req.headers['x-agent-token'] ?? '').trim();
+          const key = String(body.key ?? body.target ?? '').trim();
+          const voice = voiceCfg();
+          let tcfg;
+          try { tcfg = ttsCfg(); } catch (error) { sendJson({ ok: false, error: `TTS 配置无效：${error?.message ?? error}` }, 500); return; }
+          if (!tcfg.enabled) { sendJson({ ok: false, error: 'TTS 合成未启用（config.json socialV2.tts.enabled）' }, 403); return; }
+          if (!voice.enabled) { sendJson({ ok: false, error: '语音功能已关闭' }, 403); return; }
+          if (!key) { sendJson({ ok: false, error: 'key 不能为空（格式 group:群号 或 private:QQ号）' }, 400); return; }
+          if (currentMode !== 'reserved2') { sendJson({ ok: false, error: '该接口仅 reserved2 模式可用' }, 403); return; }
+          if (!token) { sendJson({ ok: false, error: 'reserved2 模式发送必须携带 agent token' }, 403); return; }
+          if (!agentTokenOk(key, token)) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          if (!v2ToolEnabled('synthesizeVoice')) { sendJson({ ok: false, error: '工具未启用：qq_synthesize_voice' }, 403); return; }
+          if (!v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
+          if (shouldBlockSilentReply(key)) { sendJson({ ok: false, error: '静默模式已开启，当前不允许发送' }, 403); return; }
+          const keyMatch = /^(group|private):(\d+)$/.exec(key);
+          if (!keyMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
+          const kind = keyMatch[1];
+          const id = Number(keyMatch[2]);
+          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, currentMode)) {
+            sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403);
+            return;
+          }
+          const text = String(body.text ?? '').trim();
+          if (!text) { sendJson({ ok: false, error: 'text 不能为空' }, 400); return; }
+          if (text.length > tcfg.maxChars) {
+            sendJson({ ok: false, error: `文本过长（${text.length} 字 > maxChars=${tcfg.maxChars}），请改用文字回复` }, 400);
+            return;
+          }
+          let synth;
+          try {
+            synth = await ttsSynth().synthesize(text, { voice: body.voice ? String(body.voice) : undefined });
+          } catch (error) {
+            sendJson({ ok: false, error: `TTS 合成失败（请改用文字回复）：${error?.message ?? error}` }, 502);
+            return;
+          }
+          // dry-run：只合成不发。产物路径一并发回（操作者可本地试听后手动复用）。
+          if (body.dryRun === true) {
+            const probe = await inspectAudio(synth.wavPath, { maxBytes: voice.maxBytes, maxSeconds: voice.maxSeconds });
+            sendJson({
+              ok: true,
+              dryRun: true,
+              key,
+              text: text.slice(0, 100),
+              file: synth.wavPath,
+              bytes: synth.bytes,
+              duration: probe.duration ?? synth.durationSec ?? null,
+              cached: synth.cached,
+              elapsedMs: synth.elapsedMs ?? 0,
+              detail: probe.ok ? describeAudio(probe) : `probe 失败：${probe.error}`
+            });
+            return;
+          }
+          try {
+            voiceBudgetCheck(key, voice);
+            const sent = await sendVoiceV2(key, synth.wavPath, {
+              guard: true,
+              audit: true,
+              audio: null
+            });
+            const now = Date.now();
+            voiceBudgetCommit(key, now);
+            recordVoiceSentV2(key, sent, body.label ? String(body.label).slice(0, 100) : `[语音·合成] ${text.slice(0, 60)}`);
+            log(`[tts] ${key} 合成并发送语音 (${sent.detail}, 文本 ${text.length} 字${synth.cached ? '，命中缓存' : `, 合成 ${Math.round((synth.elapsedMs ?? 0) / 1000)}s`})`);
+            appendActivity(`${key} [tts] 合成并发送语音 (${sent.detail})`);
+            const verification = body.verify === false ? null : await verifyVoiceMessageSent(sent.messageId);
+            sendJson({
+              ok: true,
+              key,
+              messageId: sent.messageId,
+              detail: sent.detail,
+              text: text.slice(0, 100),
+              cached: synth.cached,
+              verified: verification?.confirmed === true,
+              warnings: sent.warnings
+            });
+          } catch (error) {
+            sendJson({ ok: false, error: `合成语音发送失败：${error?.message ?? error}` }, 500);
           }
           return;
         }

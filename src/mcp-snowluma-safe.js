@@ -330,6 +330,7 @@ const TOOL_CONFIG_FLAGS = {
   qq_slang_submit: 'slangSubmit',
   qq_send_voice: 'sendVoice',
   qq_list_voices: 'sendVoice',
+  qq_synthesize_voice: 'synthesizeVoice',
   // 下面这些曾经漏登记。漏一个不是"多注册一个工具"那么轻：桥接那边按 `v2ToolEnabled(flag)`
   // 在**调用期**一律 403，而这里不登记就等于"控制台显示已关闭、模型每次请求仍收到它的完整
   // 描述与参数 schema，然后调用它、再拿到 403"——既白烧 token（本文件开头 176 行起就是为省这份
@@ -1244,6 +1245,44 @@ if (cfg.socialV2?.voice?.enabled !== false && cfg.socialV2?.tools?.sendVoice !==
         return { content: [{ type: 'text', text: serializeModelData(data) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `获取语音库失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+}
+
+// TTS 合成语音：与 qq_send_voice（发库里的现成音频）互补——这里按文本实时合成。
+// 注册条件同时看 voice.enabled 与 tts.enabled：发送走 voice 链路（前者管），
+// 合成走外部 TTS 服务（后者管），两个开关缺一不可。
+if (cfg.socialV2?.voice?.enabled !== false && cfg.socialV2?.tts?.enabled === true && cfg.socialV2?.tools?.synthesizeVoice !== false) {
+  server.tool(
+    'qq_synthesize_voice',
+    '把一段文字合成为自己的音色语音并发到指定会话（TTS 音色克隆）。text 是要说的内容，应当是自然口语。注意：① 文本别太长（默认上限 200 字，超了会拒绝，长内容请直接用文字回复）；② 合成需要时间（几秒到几十秒），失败或超时会返回错误——此时必须改用普通文字回复，不能假装已经说过；③ 与 qq_send_voice 一样受频率上限约束，语音是「开口说话」的强表达，只在确实适合用声音表达时用（晚安、关心、祝贺、强调语气等），闲聊日常仍以文字为主；④ 返回 verified=true 才表示语音真的发出去了；⑤ label 可写一句说明（如「用语音说了晚安」）。',
+    {
+      key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+      token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+      text: z.string().describe('要合成为语音的文本（自然口语，默认 ≤200 字）'),
+      voice: z.string().optional().describe('可选：TTS 服务的音色/参考名（默认用配置里的 socialV2.tts.voice）'),
+      label: z.string().optional().describe('可选：写进会话记录里的说明，如「用语音说了句晚安」'),
+      verify: z.boolean().optional().describe('是否回读校验语音已落地（默认 true）')
+    },
+    async ({ key, token, text, voice, label, verify }) => {
+      try {
+        const data = await agentApi('/api/socialV2/synthesize-voice', {
+          method: 'POST',
+          body: JSON.stringify({
+            key,
+            text: String(text),
+            voice: voice || undefined,
+            label: label || '',
+            verify: verify !== false,
+            token
+          }),
+          headers: { 'x-agent-token': token },
+          timeoutMs: 300000
+        });
+        return { content: [{ type: 'text', text: serializeModelData(data) }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `合成语音失败（请改用文字回复）：${error?.message ?? error}` }], isError: true };
       }
     }
   );

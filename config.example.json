@@ -140,7 +140,8 @@
       "stickerNote": true,
       "collectSticker": true,
       "getSelfImage": true,
-      "sendVoice": false
+      "sendVoice": false,
+      "synthesizeVoice": false
     },
     "wake": {
       "defaultMode": "diving",
@@ -263,6 +264,18 @@
       "gifFrames": 6,
       "gifTile": 240,
       "normalizeTimeoutMs": 25000
+    },
+    "tts": {
+      "enabled": false,
+      "baseUrl": "http://127.0.0.1:9880",
+      "endpoint": "/tts",
+      "voice": "",
+      "lang": "zh",
+      "timeoutMs": 120000,
+      "maxChars": 200,
+      "cacheDir": "state/tts-cache",
+      "cacheTtlMs": 86400000,
+      "cacheMaxEntries": 200
     }
   },
   "webSearch": {
