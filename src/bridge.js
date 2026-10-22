@@ -3004,8 +3004,10 @@ async function main() {
       }
     }
   };
-  const checkDsh = async () => {
-    let ok = false;
+  // DSH 端口自动发现的节流状态：DSH 挂掉时每 ~30 秒探一次，避免 5 秒轮询每次都扫端口。
+  let lastDshDiscoverAt = 0;
+  let dshDiscovering = false;
+  const checkDsh = async () => {    let ok = false;
     try {
       await api.settings.describe({});
       ok = true;
@@ -3053,9 +3055,31 @@ async function main() {
         log(`桥接模式已切换为: ${currentMode}`);
         lastMode = currentMode;
       }
-    } else if (dshReady) {
-      dshReady = false;
-      log('⚠️ DSH 不可用（重启中？），QQ 消息将入队等待');
+    } else {
+      if (dshReady) {
+        dshReady = false;
+        log('⚠️ DSH 不可用（重启中？），QQ 消息将入队等待');
+      }
+      // DSH 重启后端口会变（实测一天变 6 次）：每 ~30 秒尝试一次自动发现，
+      // 命中新端口就把客户端切过去，下一轮检查即可恢复，不需要人工重启桥接。
+      if (!dshDiscovering && Date.now() - lastDshDiscoverAt > 30000) {
+        lastDshDiscoverAt = Date.now();
+        dshDiscovering = true;
+        try {
+          const found = await discoverDshBase(api.baseUrl, { rounds: 1, skipPorts: [Number(cfg.consolePort) || 3100] });
+          if (found && found !== api.baseUrl) {
+            log(`🔎 DSH 端口已变化：${api.baseUrl} → ${found}（自动切换，已写回 config.json）`);
+            api.baseUrl = found;
+            api.invalidateAuth();
+            cfg.dsh.baseUrl = found;
+            persistDshBaseUrl(found);
+          }
+        } catch (error) {
+          log('自动发现 DSH 失败:', error?.message ?? error);
+        } finally {
+          dshDiscovering = false;
+        }
+      }
     }
   };
   function startDshWatch() {
