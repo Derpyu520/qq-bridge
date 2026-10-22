@@ -31,15 +31,19 @@ check('新配置 {prefix} 通过（个人前缀）', () => {
   if (v.prefix.length === 0) throw new Error('prefix 为空');
 });
 
-check('新配置 {prefix, suffix} 通过（suffix 为纯文本）', () => {
+check('新配置 {prefix, suffix} 通过（schema 仍接受 suffix）', () => {
   const v = persona.Config({
     prefix: 'You are a coding agent powered by the {{model}} model.',
-    suffix: 'Be concise.',
+    suffix: 'Your working directory is shown in the runtime context.',
   });
-  if (v.suffix !== 'Be concise.') throw new Error('suffix 未保留');
+  if (!v.suffix.includes('runtime context')) throw new Error('suffix 未保留');
   if (v.complete !== false) throw new Error('complete 默认值异常');
   if (v.includeRuntimeContext !== true) throw new Error('includeRuntimeContext 默认值异常');
 });
+
+// DSH 0.2.1 起 agent loop 只注册 provider / model 两个提示词变量（0.2.0 还有 cwd）。
+// 未知变量是 fail loud：system prompt 装配直接抛错，回合在 turn/start 后立刻 error。
+const DSH_PROMPT_VARIABLES = new Set(['provider', 'model']);
 
 // 校验仓库里两个 preset 的 persona 配置块
 const YAML = await import(pathToFileURL(path.join(DSH_MODULES, 'js-yaml/index.js')).href);
@@ -58,10 +62,11 @@ for (const preset of ['qq-chat', 'qq-chat-v2']) {
   check('保留了 {{model}} 变量', () => {
     if (!/\{\{model\}\}/.test(row.config.prefix)) throw new Error('prefix 缺少 {{model}}');
   });
-  check('template 变量都在 DSH 注册表内（provider / model）', () => {
-    const vars = [...`${row.config.prefix}${row.config.suffix ?? ''}`.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]);
-    const unknown = [...new Set(vars)].filter((name) => !['provider', 'model'].includes(name));
-    if (unknown.length) throw new Error(`未注册的提示词变量：${unknown.join(', ')}`);
+  check('只引用 DSH 已注册的提示词变量（{{cwd}} 在 0.2.1 已不存在）', () => {
+    const used = [...new Set([...JSON.stringify(row.config).matchAll(/\{\{([a-z][a-z0-9_]*)\}\}/g)].map((m) => m[1]))];
+    const unknown = used.filter((v) => !DSH_PROMPT_VARIABLES.has(v));
+    if (unknown.length > 0) throw new Error(`未知变量会让回合直接 error：${unknown.join(', ')}`);
+    if (!used.includes('model')) throw new Error('prefix 缺少 {{model}}');
   });
   check('不再包含已废弃的 text 字段', () => {
     if (Object.hasOwn(row.config, 'text')) throw new Error('仍有 text 字段');

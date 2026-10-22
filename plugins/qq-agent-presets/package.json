@@ -1,6 +1,6 @@
 {
   "name": "qq-agent-presets",
-  "version": "0.2.0-r4",
+  "version": "0.2.1-r1",
   "description": "qq-bridge 的 DSH agent preset bundle：把 qq-chat / qq-chat-v2 作为 @deepseek-ai/dsh-agent-preset 行插入（DSH 0.1.7+ 的 preset 机制），并携带两个 preset 共用的 qq-tool-restrict 安全守卫",
   "type": "module",
   "license": "MIT",

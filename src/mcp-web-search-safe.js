@@ -49,7 +49,7 @@ function sanitizeQuery(query) {
     .slice(0, 120);
 }
 
-const server = new McpServer({ name: 'web-search-safe', version: '0.2.0-r4' });
+const server = new McpServer({ name: 'web-search-safe', version: '0.2.1-r1' });
 
 server.tool(
   'web_search',

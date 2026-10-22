@@ -355,7 +355,7 @@ HTTP transport 下起作用，而三个 MCP server 全是 stdio。清掉是为�
 
 ## 10. 下次 DSH 升级的操作清单（可复用）
 
-1. `node scripts/verify-dsh-020-adaptation.mjs`（先看红在哪；活 DSH 段是主要信号）。
+1. `node scripts/verify-dsh-021-adaptation.mjs`（先看红在哪；活 DSH 段是主要信号）。
 2. `npm run scan:tool-names` —— **每次升级必跑**。守住两类漂移：假名静默失效、新能力漏隐藏。
 3. `node scripts/probe-020-protocol.mjs` —— 采样 `session/control` / `session/follow` / `$events` /
    `session/cancel` 的**原始帧结构**，与本文 §2.3 §8 对账。
@@ -490,9 +490,10 @@ SnowLuma 同一账号的 **HTTP token（3000）与 WS token（3001）不同**，
 | `v0.2.0` | r1 —— DSH 0.2.0-rc.2 适配 |
 | ~~`v0.2.1`~~ | r2 —— 采用本方案**之前**的一次性发布：标签与 Release **已撤回**（提交 `9bb7b98` 仍在历史里）。本节全部内容都包含在 r3 中，撤回无功能影响。撤回理由：它不符合「主版本与 DSH 同步」的方案，且发布仅约 26 分钟、无二进制资产、无下游依赖，改写代价为零；留着则每次看标签列表都要额外解释一次 |
 | `v0.2.0-r3` | r3 —— 上游健康 + 客户端库升级 + clone 可移植性 + 1.14.20 实测 |
-| `v0.2.0-r4` | r4 —— **本版**：表情包/动图链路、DSH 同源联网搜索、issue 修复、整体体检（见附录 J） |
+| `v0.2.0-r4` | r4 —— 表情包/动图链路、DSH 同源联网搜索、issue 修复、整体体检（见附录 J） |
+| `v0.2.1-r1` | r1（0.2.1 线）—— **当前版本**：DSH 0.2.1-rc.2 适配，P0 `{{cwd}}` 提示词变量修复 + 工具面守卫补齐（见 [DSH_021_ADAPTATION.md](DSH_021_ADAPTATION.md)）。用 `-r1` 而不是裸 `v0.2.1`：那个标签已被上表撤回的 r2 占用过 |
 
-`package.json` 是 `"private": true`（不发布到 npm），所以 `0.2.0-r4` 这种 prerelease 写法
+`package.json` 是 `"private": true`（不发布到 npm），所以 `0.2.1-r1` 这种 prerelease 写法
 不产生 npm 语义影响；版本号与标签保持一致，便于 `verify:adaptation` 对账。
 
 ### I. r3 时**未**修、r4 已修的问题

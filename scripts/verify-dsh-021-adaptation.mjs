@@ -1,8 +1,16 @@
-// DSH 适配总验证（0.2.0 版）。
+// DSH 适配总验证（0.2.1 版）。
 //
-// 沿革：0.1.5 建立（verify-dsh-015-adaptation.mjs），0.1.7 迁移时沿用了文件名；
-// 0.2.0 这次一并改名到本文件名 —— 一个自称 015 却在验 0.2.0 的脚本只会误导人。
+// 沿革：0.1.5 建立（verify-dsh-015-adaptation.mjs）→ 0.2.0 改名
+// （verify-dsh-020-adaptation.mjs）→ 0.2.1 改名到本文件名。文件名里的版本号
+// 是**它验的 DSH 版本**，不是仓库版本；一个自称 015 却在验 0.2.0 的脚本只会误导人。
 // `npm run verify:adaptation` 的入口名保持不变，所以既有调用不受影响。
+//
+// 0.2.1 实测结论（2026-10-22）：§5 的活 DSH 契约**逐项未漂移**——铸造 Cookie 鉴权、
+// settings/describe + settings/update、agentPresets/list、session/create+selectModel、
+// session/projections、control baseline 的 projections 形状、stopSessionWork、
+// $events ready 帧、session/modelCatalog、斜杠式 endpoint 全部照旧。
+// 唯一漂移在**工具面**：0.2.1 新增 `working_directory`（dsh-base 默认挂载，全局层继承）
+// 以及 terminal / session-query / plugin_market 一族，守卫名单已同轮补齐。
 //
 // 覆盖：
 //   §1 仓库侧 preset persona schema
@@ -60,15 +68,22 @@ let oldRejected = false;
 try { persona.Config({ text: 'x' }); } catch { oldRejected = true; }
 check('dsh-persona 仍拒绝旧字段 text（故障前提成立）', oldRejected);
 
+/** DSH 0.2.1 的 agent loop 只注册这两个提示词变量（0.2.0 还有 `cwd`）。 */
+const DSH_PROMPT_VARIABLES = new Set(['provider', 'model']);
+
 for (const p of ['qq-chat', 'qq-chat-v2']) {
   const f = path.join(ROOT, 'dsh/agent-presets', p, 'agent.cordis.yml');
   const row = yaml.load(fs.readFileSync(f, 'utf8')).find((r) => r.id === 'persona');
   let schemaOk = false;
   try { persona.Config(row.config); schemaOk = true; } catch {}
   check(`preset ${p}: persona.config 通过 DSH schema`, schemaOk);
-  check(`preset ${p}: 保留 {{model}} 且不含未注册变量`, /\{\{model\}\}/.test(row.config.prefix)
-    && [...`${row.config.prefix}${row.config.suffix ?? ''}`.matchAll(/\{\{(\w+)\}\}/g)]
-      .every((m) => ['provider', 'model'].includes(m[1])));
+  // 未知变量不是"渲染成空"而是 fail loud：回合直接 error、模型一次都不跑。
+  // 所以这里必须钉住「只用 DSH 真注册过的变量」，而不只是「有 {{model}}」。
+  const usedVars = [...new Set([...JSON.stringify(row.config).matchAll(/\{\{([a-z][a-z0-9_]*)\}\}/g)].map((m) => m[1]))];
+  const unknownVars = usedVars.filter((v) => !DSH_PROMPT_VARIABLES.has(v));
+  check(`preset ${p}: 只引用 DSH 已注册的提示词变量`,
+    unknownVars.length === 0 && /\{\{model\}\}/.test(row.config.prefix),
+    unknownVars.length ? `未知变量: ${unknownVars.join(', ')}` : usedVars.join(', '));
 }
 
 // ── 2. 部署侧：DSH 0.1.7 的 preset 机制 ──────────────────────────────────────
@@ -124,10 +139,24 @@ const GUARD_020_NAMES = [
   'plugin_manager',
   'schedule_create', 'schedule_list', 'schedule_update', 'schedule_delete',
 ];
+/** 0.2.1 对账新增的名字（见守卫长注释里 2026-10-22 那段）。 */
+const GUARD_021_NAMES = [
+  // dsh-base 0.2.1 默认挂载 ⇒ 全局层继承
+  'working_directory',
+  // dsh-tool-terminal：终端 = shell
+  'terminal_open', 'terminal_send', 'terminal_read', 'terminal_signal', 'terminal_close', 'terminal_list',
+  // dsh-tool-session-query：跨会话读事件正文
+  'session_search', 'session_trace', 'session_event_read', 'session_event_search', 'session_event_trace',
+  // 装载权 / 写盘起进程 / team 家族
+  'plugin_market', 'create_worktree', 'wait_agent',
+];
 const guardMod = await import(pathToFileURL(canonicalGuardPath).href);
 const guardNames = new Set(guardMod.RESTRICTED_TOOL_NAMES ?? []);
+const optionalNames = new Set(guardMod.OPTIONAL_BUNDLE_TOOL_NAMES ?? []);
 const missingFromGuard = GUARD_020_NAMES.filter((n) => !guardNames.has(n));
 check('守卫已覆盖 0.2.0 新增的危险工具名', missingFromGuard.length === 0, missingFromGuard.join(', ') || `${guardNames.size} 个名字`);
+const missingFromGuard021 = GUARD_021_NAMES.filter((n) => !guardNames.has(n));
+check('守卫已覆盖 0.2.1 新增的危险工具名', missingFromGuard021.length === 0, missingFromGuard021.join(', ') || `${GUARD_021_NAMES.length} 个名字`);
 
 // 守卫名单里的每个名字都必须是 DSH 真实注册的工具：`tools.restrict()` 对未知名字会抛错，
 // 而守卫逐个 try/catch 只打日志 ⇒ 拼错的名字 = 静默 no-op。
@@ -138,7 +167,8 @@ const scanned = collectDshToolNames();
 if (scanned.names.size === 0) {
   skip('守卫名单与 DSH 真实工具名对账', '未扫到任何 DSH 包（DSH 未安装？）');
 } else {
-  const fabricated = [...guardNames].filter((n) => !n.startsWith('dev_') && !scanned.names.has(n));
+  const fabricated = [...guardNames]
+    .filter((n) => !n.startsWith('dev_') && !optionalNames.has(n) && !scanned.names.has(n));
   check('守卫名单无拼错的假名（restrict 不会静默失效）', fabricated.length === 0, fabricated.join(', ') || `扫过 ${scanned.packages.length} 个包`);
 }
 
@@ -353,6 +383,51 @@ try {
   const catalog = await api.callUnary('session/modelCatalog', {});
   check('session/modelCatalog 可用且给出模型分组', catalog.result?.ok === true && Array.isArray(catalog.result?.value?.groups),
     catalog.result?.ok ? `${catalog.result.value.groups.length} 组` : `${catalog.result?.error?.code}`);
+
+  // ── 5g. preset 真跑一个回合：提示词变量可解析（0.2.1 断裂点回归网）──────────
+  // 0.2.1 把 `cwd` 从 agent loop 的提示词变量表里删掉了（只剩 provider / model）。
+  // system prompt 对未知变量是 fail loud ⇒ 回合在 turn/start 后立刻 error，
+  // 模型一次都不跑，QQ 上表现为「完全不回」。静态断言只能看出"写了什么变量"，
+  // 只有真跑一回合才能证明它**可解析**。
+  let turnSessionId = null;
+  try {
+    const turnSession = unwrap(await api.sessions.create({ cwd: probeDir, agentPreset: 'qq-chat-v2' }), 'session.create(turn)');
+    turnSessionId = turnSession.sessionId;
+    await api.sessions.selectModel({ sessionId: turnSessionId, provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'max' });
+    const turn = await new Promise((resolve) => {
+      const socket = new WebSocket(url, { headers: { cookie: api.cookie } });
+      const streamId = randomUUID();
+      let text = '';
+      const timer = setTimeout(() => { try { socket.close(); } catch {} resolve({ reason: null, text, timeout: true }); }, 90_000);
+      const finish = (value) => { clearTimeout(timer); try { socket.close(); } catch {} resolve(value); };
+      socket.addEventListener('open', () => {
+        socket.send(JSON.stringify({ type: 'open', streamId, endpoint: 'session/follow', payload: { args: { request: { address: { kind: 'session', sessionId: turnSessionId } } } } }));
+        setTimeout(() => {
+          api.sessions.prompt({ sessionId: turnSessionId, mode: 'queue', content: [{ type: 'text', text: '只回复两个字：收到' }] }).catch(() => {});
+        }, 800);
+      });
+      socket.addEventListener('message', (ev) => {
+        let m; try { m = JSON.parse(ev.data); } catch { return; }
+        if (m.streamId !== streamId || m.type !== 'item') return;
+        const e = m.value?.type === 'event' ? m.value.event : null;
+        if (!e) return;
+        if (e.type === 'assistant/message') {
+          for (const block of e.data?.message?.content ?? []) if (block?.type === 'text') text += block.text;
+        }
+        if (e.type === 'turn/end') finish({ reason: e.data?.reason, text });
+      });
+      socket.addEventListener('error', () => finish({ reason: null, text, error: true }));
+    });
+    const kind = typeof turn.reason === 'string' ? turn.reason : turn.reason?.kind;
+    const why = turn.reason?.error?.message;
+    check('preset 真跑一回合：提示词变量可解析且正常结束',
+      kind === 'completed' && turn.text.length > 0,
+      kind === 'completed' ? `text=${JSON.stringify(turn.text.slice(0, 24))}` : `${kind ?? 'no turn/end'}${why ? `: ${why}` : ''}`);
+  } catch (error) {
+    check('preset 真跑一回合：提示词变量可解析且正常结束', false, error?.message ?? String(error));
+  } finally {
+    if (turnSessionId) { try { await api.callUnary('workspace/archiveSession', { sessionId: turnSessionId }); } catch {} }
+  }
 } catch (error) {
   check('DSH 实测段无未捕获异常', false, error?.message ?? String(error));
 } finally {

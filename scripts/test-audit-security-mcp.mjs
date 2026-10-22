@@ -75,7 +75,7 @@ test('empty searches are rejected without calling the transport', async () => {
  * 用假 transport 加载 mcp-snowluma-safe.js，拿到它的工具回调。
  * 只需要把 fetch（桥接 API / OneBot HTTP）、http（长轮询）、McpServer、zod、两个本地纯模块塞进上下文。
  */
-function loadSnowlumaTools(fetchImpl, fixtureConfig = null, httpImpl = null) {
+function loadSnowlumaTools(fetchImpl, fixtureConfig = null, httpImpl = null, fixtureMode = 'closed-agent') {
   const tools = new Map();
   // vm 里没有 ESM 的 import.meta，把模块顶部的 __dirname 推导整段替换成固定值。
   const source = fs.readFileSync(new URL('../src/mcp-snowluma-safe.js', import.meta.url), 'utf8')
@@ -95,6 +95,16 @@ function loadSnowlumaTools(fetchImpl, fixtureConfig = null, httpImpl = null) {
       return fs.readFileSync(file, ...args);
     },
   };
+  // 旧只读工具在**注册期**就按桥接模式收敛（见 mcp-snowluma-safe.js 顶部的说明）。
+  // 注册发生在模块加载期，所以这里必须把 state/mode.json 也桩掉 —— 否则测试会跟着
+  // 开发者本机当前模式漂移（本机常驻 reserved2，会把整批旧工具断言变成"没注册"）。
+  const modeAwareFs = {
+    ...fixtureFs,
+    readFileSync(file, ...args) {
+      if (path.basename(String(file)) === 'mode.json') return JSON.stringify({ mode: fixtureMode });
+      return fixtureFs.readFileSync(file, ...args);
+    },
+  };
   vm.runInNewContext(source, {
     McpServer,
     StdioServerTransport: class {},
@@ -110,15 +120,18 @@ function loadSnowlumaTools(fetchImpl, fixtureConfig = null, httpImpl = null) {
     console,
     Buffer,
     path,
-    fs: fixtureFs,
+    fs: modeAwareFs,
     SENSITIVE_RE: { test: () => false },
     serializeModelData: (value) => JSON.stringify(value),
   });
-  return async (name, arguments_ = {}) => {
+  const callTool = async (name, arguments_ = {}) => {
     const tool = tools.get(name);
     assert.ok(tool, `tool ${name} should be registered`);
     return tool.callback(z.object(tool.schema).parse(arguments_));
   };
+  /** 该模式下某工具是否真的注册进了 schema（注册期收敛的断言入口）。 */
+  callTool.has = (name) => tools.has(name);
+  return callTool;
 }
 
 // 回归（issue #24）：`qq_wait_for_messages` 以前走全局 fetch（undici 自带 300s headersTimeout），
@@ -195,11 +208,12 @@ test('a bridge 200 with ok:false is reported to the model as a failure', async (
 // 于是「看到 reserved2 才拒绝」的黑名单写法会判定为假 ⇒ 在二代仿真模式下放行，
 // 把白名单群名、群成员名单注入模型上下文。
 test('legacy read tools fail closed unless the bridge reports closed-agent', async () => {
+  // 注册期模式 = closed-agent（工具确实存在），运行期模式被换掉 → 必须 fail closed。
   for (const status of [
     { mode: 'reserved2' }, { mode: 'chat' }, { mode: 'reserved' },
     {},                       // 无 mode 字段（桥接对 agent 流量返回的最小状态）
   ]) {
-    const callTool = loadSnowlumaTools(async () => Response.json(status));
+    const callTool = loadSnowlumaTools(async () => Response.json(status), null, null, 'closed-agent');
     const result = await callTool('qq_list_groups', {});
     assert.equal(result.isError, true, `mode=${status.mode ?? '(缺失)'} 时旧只读工具必须拒绝`);
   }
@@ -207,25 +221,55 @@ test('legacy read tools fail closed unless the bridge reports closed-agent', asy
   const callTool = loadSnowlumaTools(async (url) => {
     if (String(url).includes('/api/status')) return Response.json({ mode: 'closed-agent' });
     return Response.json({ status: 'ok', retcode: 0, data: [{ group_id: 456, group_name: 'fixture' }] });
-  });
+  }, null, null, 'closed-agent');
   const result = await callTool('qq_list_groups', {});
   assert.notEqual(result.isError, true, 'closed-agent 下应放行');
 });
 
-test('denied legacy group reads never reveal the group allowlist', async () => {
+// 新增：旧只读工具必须在**注册期**就按桥接模式收敛（只影响 schema 成本，不影响安全边界）。
+// 背景：实测一份 reserved2 会话的请求头有 58 个工具 / 45.5 KB schema，其中 3 个旧只读工具
+// 必然 403 却照样占位，还诱导模型误调（turn10 踩过一次）。
+test('legacy read tools are not registered at all outside closed-agent', async () => {
+  for (const mode of ['reserved2', 'chat', 'reserved']) {
+    const callTool = loadSnowlumaTools(async () => Response.json({ mode }), null, null, mode);
+    assert.equal(callTool.has('qq_list_groups'), false, `${mode} 下不该注册 qq_list_groups`);
+    assert.equal(callTool.has('qq_get_group_history'), false, `${mode} 下不该注册 qq_get_group_history`);
+    // 带令牌的 v2 读工具在任何模式下都该在
+    assert.equal(callTool.has('qq_get_group_members'), true, `${mode} 下 v2 群成员工具必须可用`);
+    assert.equal(callTool.has('qq_get_active_members'), true);
+  }
+  const closed = loadSnowlumaTools(async () => Response.json({ mode: 'closed-agent' }), null, null, 'closed-agent');
+  assert.equal(closed.has('qq_list_groups'), true, 'closed-agent 下旧只读工具必须存在');
+});
+
+// 拒绝时绝不能把 config.json 的群白名单回吐给模型。
+// 覆盖两条路：v2 群成员工具（桥接 403）与旧只读历史工具（closed-agent 下才注册）。
+test('denied group reads never reveal the group allowlist', async () => {
   const fixtureConfig = { allow: { groups: ['111111', '222222'] } };
   for (const mode of ['reserved2', 'closed-agent']) {
     const calls = [];
     const callTool = loadSnowlumaTools(async (url) => {
       calls.push(String(url));
       if (String(url).includes('/api/status')) return Response.json({ mode });
+      // v2 群成员端点：越权时只回一句通用拒绝，不带白名单
+      if (String(url).includes('/api/socialV2/group-members')) {
+        return Response.json({ ok: false, error: '目标不在当前模式允许范围内' }, { status: 403 });
+      }
       assert.fail('denied group read must not call OneBot');
-    }, fixtureConfig);
-    for (const name of ['qq_get_group_members', 'qq_get_group_history']) {
-      const result = await callTool(name, { groupId: '999999' });
-      assert.equal(result.isError, true, `${name} in ${mode} must fail`);
-      assert.doesNotMatch(result.content[0].text, /111111|222222/);
+    }, fixtureConfig, null, mode);
+
+    const v2 = await callTool('qq_get_group_members', { key: 'group:999999', token: 'fixture-agent-token' });
+    assert.equal(v2.isError, true, `v2 群成员工具在 ${mode} 下必须失败`);
+    assert.doesNotMatch(v2.content[0].text, /111111|222222/);
+
+    if (mode === 'closed-agent') {
+      const legacy = await callTool('qq_get_group_history', { groupId: '999999' });
+      assert.equal(legacy.isError, true, 'closed-agent 下非白名单群必须拒绝');
+      assert.doesNotMatch(legacy.content[0].text, /111111|222222/);
+    } else {
+      // reserved2 下旧只读工具根本没注册：连"被拒绝"的机会都不给
+      assert.equal(callTool.has('qq_get_group_history'), false);
     }
-    assert.equal(calls.length, 2, 'only the two authorization checks should reach the bridge');
+    assert.ok(calls.length >= 1, '应当只经过桥接的鉴权/拒绝路径');
   }
 });

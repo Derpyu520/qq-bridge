@@ -535,7 +535,7 @@ try {
     await navigate('persona');
     await page.waitForFunction(() => document.querySelectorAll('#roleList .persona-item').length > 0);
     const before = await page.locator('#roleInjectMax').inputValue();
-    assert.equal(Number(before), 6000, '默认上限应为 6000');
+    assert.equal(Number(before), 8000, '默认上限应为 8000');
     await page.locator('#roleInjectMax').fill('8000');
     const [saved] = await Promise.all([
       page.waitForResponse(r => new URL(r.url()).pathname === '/api/roles/limit' && r.request().method() === 'POST'),

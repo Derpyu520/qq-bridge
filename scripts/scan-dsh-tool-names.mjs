@@ -28,6 +28,9 @@ const { names, packages } = collectDshToolNames();
 const guardPath = path.join(ROOT, 'plugins', 'qq-agent-presets', 'qq-tool-restrict.mjs');
 const guard = await import(pathToFileURL(guardPath).href);
 const guarded = new Set(guard.RESTRICTED_TOOL_NAMES);
+// 0.2.1 起 Codex / Claude Code 改为按需安装的可选插件：这组名字默认扫不到，
+// 不能算「拼错假名」（装上组合包后它们就回来了）。
+const optional = new Set(guard.OPTIONAL_BUNDLE_TOOL_NAMES ?? []);
 
 const sorted = [...names.keys()].sort();
 const onlyFlag = process.argv.includes('--missing');
@@ -37,9 +40,12 @@ console.log(`扫描包数：${packages.length}；抽到工具名候选：${sorte
 
 /** ① 守卫名单里的名字必须真实存在，否则 restrict 抛错被吞、限制静默失效。 */
 const fabricated = [...guarded]
-  .filter((n) => TOOL_NAME_RE.test(n) && !n.startsWith('dev_') && !names.has(n));
+  .filter((n) => TOOL_NAME_RE.test(n) && !n.startsWith('dev_') && !optional.has(n) && !names.has(n));
 console.log('=== ① 守卫名单里、但安装包中找不到的名字（restrict 会抛错并静默失效） ===');
 console.log(fabricated.length ? fabricated.map((n) => `  ${n}`).join('\n') : '  (无)');
+if (optional.size) {
+  console.log(`  （另：${[...optional].join(', ')} 属于按需安装的可选组合包，默认扫不到但仍在名单里）`);
+}
 
 /** ② 安装包里有、守卫没覆盖的危险语义名字（可能是新版本新增的能力）。 */
 const missing = sorted.filter((n) => DANGER_TOOL_RE.test(n) && !guarded.has(n) && !SAFE_MODEL_TOOLS.has(n));

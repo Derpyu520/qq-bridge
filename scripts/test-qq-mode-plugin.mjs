@@ -13,7 +13,7 @@
 // 能防止有人照着旧注释把那条死路加回来（一旦加回，日志就会开始说谎）。
 //
 // 不接触真实 DSH 进程；真实契约（describe 能列出 qq-mode、update 能写成功）
-// 由 scripts/verify-dsh-020-adaptation.mjs 在活 DSH 上实测。
+// 由 scripts/verify-dsh-021-adaptation.mjs 在活 DSH 上实测。
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs';

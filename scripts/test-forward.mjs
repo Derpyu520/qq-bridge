@@ -102,7 +102,19 @@ if (fs.existsSync(consoleTokenFile) && fs.existsSync(socialV2File)) {
   try {
     const config = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
     const social = JSON.parse(fs.readFileSync(socialV2File, 'utf8'));
-    const conv = social?.conversations ? Object.entries(social.conversations)[0] : null;
+    // 只挑**当前白名单内**的会话来探活：以前盲取 conversations[0]，群被移出白名单后
+    // 端点会先撞「当前模式不允许读取该会话」(403)，永远到不了「未见过的 forward id」(404) 那条断言，
+    // 于是这个测试会因为操作者改配置而红，与实际安全行为无关。
+    const allowGroups = new Set((config.allow?.groups ?? []).map(String));
+    const allowPrivate = new Set((config.allow?.private ?? []).map(String));
+    const isAllowedKey = (k) => {
+      const m = /^(group|private):(\d+)$/.exec(String(k));
+      if (!m) return false;
+      return (m[1] === 'group' ? allowGroups : allowPrivate).has(m[2]);
+    };
+    const conv = social?.conversations
+      ? (Object.entries(social.conversations).find(([k]) => isAllowedKey(k)) ?? null)
+      : null;
     const consoleToken = fs.readFileSync(consoleTokenFile, 'utf8').trim();
     if (conv) {
       const [key, st] = conv;

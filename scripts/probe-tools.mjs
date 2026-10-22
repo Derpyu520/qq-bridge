@@ -4,6 +4,7 @@
 //  3. 观测 turn 事件里的 tool/call 与 tool/result，确认 MCP 工具真的可调用
 //  4. 同时确认本地危险工具（pwsh/bash 等）不在工具面里
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
 import { probeCookie, probeRpc, probeMuxSocket, probeWorkspaceDir } from './probe-auth.mjs';
 
 // 鉴权与 RPC 引导统一走 probe-auth.mjs（旧的「读 guard 日志抓 launch token」在
@@ -79,5 +80,10 @@ console.log(`  未调用本地危险工具      : ${calledLocal ? '❌ 出现了
 
 try { socket.close(); } catch {}
 await rpc('workspace/archiveSession', { request: { sessionId } });
-console.log('[cleanup] archived');
+// 探针工作区也一并删掉：`workspace/create` 建的条目会一直留在 DSH 侧栏里，
+// 每跑一次探针就多一个（`qq-bridge-probe-tools` 这类名字就是这么来的）。
+try { await rpc('workspace/delete', { request: { workspaceId: wsId } }); } catch {}
+// 工作区删完目录还在临时区里（空目录 + 会话已归档），一并清掉，别让探针留垃圾。
+try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+console.log('[cleanup] session archived, probe workspace deleted');
 process.exit(calledMcp && !calledLocal ? 0 : 1);
