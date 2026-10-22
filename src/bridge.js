@@ -6830,7 +6830,13 @@ async function main() {
               negative: body.negative,
               width: body.width,
               height: body.height,
-              steps: body.steps
+              steps: body.steps,
+              characters: body.characters,
+              scale: body.scale,
+              cfgRescale: body.cfgRescale,
+              uncondScale: body.uncondScale,
+              sampler: body.sampler,
+              seed: body.seed
             });
             await onebotSendImage(kind, sid, result.buffer);
             appendActivity(`${key} [draw] 生成并发出一张图（${result.model} ${result.width}x${result.height}）`);

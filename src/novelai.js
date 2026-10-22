@@ -76,15 +76,14 @@ export function createNovelAIClient({ getConfig, stateDir, log = () => {} }) {
   }
 
   function composePrompt(userPrompt, extraNegative, c) {
-    const parts = [];
-    const base = String(c.basePrompt || '').trim();
-    if (base) parts.push(base);
-    const user = String(userPrompt || '').trim();
-    if (user) parts.push(user);
-    const prompt = parts.join(', ').slice(0, 1800);
+    // 分段截断：basePrompt 是手工维护的画质/画风词，不能被用户描述挤掉；
+    // 反过来用户描述也不能因为 basePrompt 太长被整段切掉。
+    const base = String(c.basePrompt || '').trim().slice(0, 2000);
+    const user = String(userPrompt || '').trim().slice(0, Math.max(200, 3000 - base.length));
+    const prompt = [base, user].filter(Boolean).join(', ').slice(0, 3000);
     if (!prompt) throw new Error('prompt 不能为空');
-    const neg = [String(c.negativePrompt || '').trim(), String(extraNegative || '').trim()]
-      .filter(Boolean).join(', ').slice(0, 1800);
+    const neg = [String(c.negativePrompt || '').trim().slice(0, 2000), String(extraNegative || '').trim().slice(0, 1200)]
+      .filter(Boolean).join(', ').slice(0, 2400);
     return { prompt, negative: neg };
   }
 
@@ -120,10 +119,11 @@ export function createNovelAIClient({ getConfig, stateDir, log = () => {} }) {
   }
 
   /**
-   * 生成一张图。返回 { buffer, prompt, negative, model }。
+   * 生成一张图。返回 { buffer, prompt, negative, model, characters }。
+   * 支持 NovelAI 的结构化 prompt：整图 base_caption + 逐角色 char_captions（可带中心点）。
    * 同一时刻只允许一张：上一张没完成时直接拒绝（不排队），两次之间仍至少间隔 minIntervalMs。
    */
-  function generate({ prompt, negative, width, height, steps, sampler, guidance, model, seed } = {}) {
+  function generate({ prompt, negative, width, height, steps, sampler, guidance, model, seed, characters, scale, cfgRescale, uncondScale, noiseSchedule } = {}) {
     if (busy) return Promise.reject(new Error('上一张图还在生成，等它出来再要（同一时间只允许一张）'));
     busy = true;
     return (async () => {
@@ -135,10 +135,33 @@ export function createNovelAIClient({ getConfig, stateDir, log = () => {} }) {
       const composed = composePrompt(prompt, negative, c);
       const w = Math.max(64, Math.min(2048, Number(width) || Number(c.width) || 1024));
       const h = Math.max(64, Math.min(2048, Number(height) || Number(c.height) || 1024));
+
+      // 逐角色 caption：NovelAI v4/v5 用 char_captions + centers 控制「每个角色负责画面哪一部分」。
+      // 之前全塞进 base_caption，多人场景容易互相污染（换色、串衣服）。
+      const chars = (Array.isArray(characters) ? characters : [])
+        .map((x) => {
+          if (!x) return null;
+          const caption = String(typeof x === 'string' ? x : (x.caption ?? x.prompt ?? '')).trim();
+          if (!caption) return null;
+          const cx = Number(x.center?.x ?? x.x);
+          const cy = Number(x.center?.y ?? x.y);
+          const hasCenter = Number.isFinite(cx) && Number.isFinite(cy);
+          return {
+            caption: caption.slice(0, 1500),
+            negative: String(x.negative ?? '').trim().slice(0, 1200),
+            center: hasCenter ? { x: Math.min(1, Math.max(0, cx)), y: Math.min(1, Math.max(0, cy)) } : null
+          };
+        })
+        .filter(Boolean)
+        .slice(0, 6);
+      const useCoords = chars.some((x) => x.center);
+
       const params = {
         width: w,
         height: h,
-        scale: Number(guidance) || Number(c.guidance) || 7,
+        scale: Number(scale ?? guidance) || Number(c.guidance) || 7,
+        uncond_scale: Number(uncondScale ?? c.uncondScale ?? 0) || 0,
+        cfg_rescale: Number(cfgRescale ?? c.cfgRescale ?? 0) || 0,
         sampler: String(sampler || c.sampler || 'k_euler_ancestral'),
         steps: Math.max(1, Math.min(50, Number(steps) || Number(c.steps) || 25)),
         n_samples: 1,
@@ -148,13 +171,38 @@ export function createNovelAIClient({ getConfig, stateDir, log = () => {} }) {
         sm_dyn: false,
         dynamic_thresholding: false,
         negative_prompt: composed.negative,
-        // v4.5 / v5 走结构化 caption；旧版会忽略这两个字段
-        v4_prompt: { caption: { base_caption: composed.prompt, char_captions: [] }, use_coords: false, use_order: true },
-        v4_negative_prompt: { caption: { base_caption: composed.negative, char_captions: [] } }
+        // v4.5 / v5 走结构化 caption；旧版会忽略这些字段
+        v4_prompt: {
+          caption: {
+            base_caption: composed.prompt,
+            char_captions: chars.map((x) => (x.center
+              ? { char_caption: x.caption, centers: [{ x: x.center.x, y: x.center.y }] }
+              : { char_caption: x.caption }))
+          },
+          use_coords: useCoords,
+          use_order: true,
+          legacy_uc: false
+        },
+        v4_negative_prompt: {
+          caption: {
+            base_caption: composed.negative,
+            char_captions: chars.map((x) => (x.center
+              ? { char_caption: x.negative || '', centers: [{ x: x.center.x, y: x.center.y }] }
+              : { char_caption: x.negative || '' }))
+          },
+          use_coords: useCoords,
+          use_order: false,
+          legacy_uc: false
+        }
       };
+      if (noiseSchedule || c.noiseSchedule) params.noise_schedule = String(noiseSchedule || c.noiseSchedule);
       if (Number.isFinite(Number(seed)) && Number(seed) > 0) params.seed = Number(seed);
+      // 兼容老客户端：input 里也带角色描述，避免某些后端只读 input
+      const legacyInput = chars.length
+        ? `${composed.prompt}, ${chars.map((x) => x.caption).join(', ')}`
+        : composed.prompt;
       const body = {
-        input: composed.prompt,
+        input: legacyInput,
         model: String(model || c.model || DEFAULTS.model),
         action: 'generate',
         parameters: params
@@ -207,8 +255,12 @@ export function createNovelAIClient({ getConfig, stateDir, log = () => {} }) {
           steps: params.steps,
           sampler: params.sampler,
           guidance: params.scale,
+          cfgRescale: params.cfg_rescale,
+          uncondScale: params.uncond_scale,
+          noiseSchedule: params.noise_schedule ?? null,
           prompt: composed.prompt,
-          negative: composed.negative
+          negative: composed.negative,
+          characters: chars.map((x) => ({ caption: x.caption, negative: x.negative, center: x.center }))
         }, null, 2)}\n`, 'utf8');
       } catch (error) {
         log(`[novelai] 元数据写盘失败：${error?.message ?? error}`);
@@ -218,8 +270,8 @@ export function createNovelAIClient({ getConfig, stateDir, log = () => {} }) {
         const files = fs.readdirSync(dir).filter((f) => f.endsWith('.png')).sort();
         for (const f of files.slice(0, Math.max(0, files.length - 300))) fs.rmSync(path.join(dir, f), { force: true });
       } catch {}
-        log(`[novelai] 生成完成 ${path.basename(file)} ${(png.length / 1024).toFixed(0)}KB model=${body.model} ${w}x${h} steps=${params.steps}`);
-        return { buffer: png, file, prompt: composed.prompt, negative: composed.negative, model: body.model, width: w, height: h };
+        log(`[novelai] 生成完成 ${path.basename(file)} ${(png.length / 1024).toFixed(0)}KB model=${body.model} ${w}x${h} steps=${params.steps} chars=${chars.length}`);
+        return { buffer: png, file, prompt: composed.prompt, negative: composed.negative, model: body.model, width: w, height: h, characters: chars };
       } finally {
         busy = false;
       }

@@ -1335,21 +1335,39 @@ server.tool(
 // ── 画图（NovelAI）────────────────────────────────────────────────────────────
 server.tool(
   'qq_draw',
-  '用 NovelAI 画一张图，并直接发到当前会话。适合「画个自拍」「画一下你刚才说的场景」。同一时间只允许一张：上一张还没画完时再要会被拒绝，等它出来再要。生成大约 20~40 秒；每天有额度，别连续要图。默认只允许管理员私聊使用。',
+  '用 NovelAI 画一张图，并直接发到当前会话。支持结构化 prompt：整图描述放 prompt，多角色场景把每个角色的外观/动作/位置放进 characters（可给中心点），这样角色之间不会串色串衣服。同一时间只允许一张，上一张没画完时再要会被拒绝。生成约 20~40 秒；每天有额度，别连续要图。',
   {
     key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
     token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
-    prompt: z.string().describe('画面描述（英文 danbooru 标签效果最好，中文也能用）。不用写画风，固定正向提示词会自动加上'),
-    negative: z.string().optional().describe('额外负面提示词（固定负面词会自动加上）'),
+    prompt: z.string().describe('整图描述：场景、构图、光线、氛围（英文 danbooru 标签或自然语言都行）。不用写画风，固定正向词会自动加上'),
+    negative: z.string().optional().describe('整图负面词（固定负面词会自动加上）'),
+    characters: z.array(z.object({
+      caption: z.string().describe('这个角色的外观/服装/动作/表情（danbooru 标签）'),
+      negative: z.string().optional().describe('这个角色单独的负面词（可选）'),
+      x: z.number().optional().describe('角色中心点横向位置 0~1（0 左 1 右），给了 x/y 才会启用位置控制'),
+      y: z.number().optional().describe('角色中心点纵向位置 0~1（0 上 1 下）')
+    })).optional().describe('多角色场景时分别为每个角色写 caption；单人图可以不传，把外观写进 prompt 即可'),
     width: z.number().optional().describe('宽度，默认 1024'),
     height: z.number().optional().describe('高度，默认 1024'),
-    steps: z.number().optional().describe('步数，默认 25')
+    steps: z.number().optional().describe('步数，默认 25'),
+    scale: z.number().optional().describe('Prompt Guidance（CFG），默认 7'),
+    seed: z.number().optional().describe('固定种子，便于复现；不填随机')
   },
-  async ({ key, token, prompt, negative, width, height, steps }) => {
+  async ({ key, token, prompt, negative, characters, width, height, steps, scale, seed }) => {
     try {
       const data = await agentApi('/api/socialV2/draw', {
         method: 'POST',
-        body: JSON.stringify({ key, prompt, negative: negative || '', width, height, steps }),
+        body: JSON.stringify({
+          key,
+          prompt,
+          negative: negative || '',
+          characters: characters || [],
+          width,
+          height,
+          steps,
+          scale,
+          seed
+        }),
         headers: { 'x-agent-token': token },
         timeoutMs: 180000
       });

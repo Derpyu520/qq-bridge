@@ -309,6 +309,9 @@
     "timeoutMs": 35000
   },
   "imageGen": {
+    "uncondScale": 0,
+    "cfgRescale": 0,
+    "noiseSchedule": "",
     "enabled": true,
     "model": "nai-diffusion-5-curated",
     "width": 1024,
