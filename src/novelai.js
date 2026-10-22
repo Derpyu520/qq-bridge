@@ -207,6 +207,8 @@ export function createNovelAIClient({ getConfig, stateDir, log = () => {} }) {
         action: 'generate',
         parameters: params
       };
+      // 请求形态摘要：事后能确认「这次到底有没有走结构化 prompt / 用了哪些高级参数」。
+      log(`[novelai] request model=${body.model} ${w}x${h} steps=${params.steps} sampler=${params.sampler} scale=${params.scale} cfg_rescale=${params.cfg_rescale} uncond=${params.uncond_scale} ns=${params.noise_schedule ?? '-'} chars=${chars.length} coords=${useCoords}`);
       const gap = Math.max(0, Number(c.minIntervalMs) || 5000) - (Date.now() - lastAt);
       if (gap > 0) await new Promise((r) => setTimeout(r, gap));
       lastAt = Date.now();
@@ -260,7 +262,15 @@ export function createNovelAIClient({ getConfig, stateDir, log = () => {} }) {
           noiseSchedule: params.noise_schedule ?? null,
           prompt: composed.prompt,
           negative: composed.negative,
-          characters: chars.map((x) => ({ caption: x.caption, negative: x.negative, center: x.center }))
+          characters: chars.map((x) => ({ caption: x.caption, negative: x.negative, center: x.center })),
+          request: {
+            model: body.model,
+            use_coords: useCoords,
+            char_captions: chars.length,
+            cfg_rescale: params.cfg_rescale,
+            uncond_scale: params.uncond_scale,
+            noise_schedule: params.noise_schedule ?? null
+          }
         }, null, 2)}\n`, 'utf8');
       } catch (error) {
         log(`[novelai] 元数据写盘失败：${error?.message ?? error}`);
