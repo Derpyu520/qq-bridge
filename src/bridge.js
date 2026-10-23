@@ -526,6 +526,12 @@ function isSilentMarker(text) {
 // 真要做硬额度应持久化到 state/ 并纳入备份。
 const QZONE_POST_TIMES = [];
 
+// 可自动重试的「瞬时错误」：模型把工具参数 JSON 写坏、事件流中断、网络抖动。
+// 这些都发生在工具真正执行之前（或没产生副作用），重试一次是安全的；
+// 计数器按会话记，成功一轮就清零，避免无限重试。
+const TURN_TRANSIENT_RE = /tool input is invalid JSON|DeepSeek Messages stream|ECONNRESET|socket hang up|fetch failed|request timeout/i;
+const turnRetryCount = new Map();
+
 // DSH MCP 发送类工具：一旦 AI 在回合里调用过这些工具，说明消息已经由工具发出，
 // 桥接应跳过该回合的自动转发，避免“工具发一条 + 自动转发一条”的重复。
 const SEND_TOOL_RE = /^mcp__snowluma__qq_(send_group_message|send_private_message|reply|send_burst|send_message)$/;
@@ -11633,6 +11639,8 @@ async function main() {
               // 繁忙期间被暂存的唤醒原因：当前 turn 结束后补一次（定时器类与消息类语义不同，
               // 详见 replayPendingWakeReasonsV2 的注释）。
               replayPendingWakeReasonsV2(key);
+              // 本轮正常结束（无论有没有文本）就清掉「瞬时错误重试」计数。
+              turnRetryCount.delete(key);
               if (ended.reason.kind === 'completed' && ended.text.trim()) {
                 const plain = mdToPlain(ended.text);
                 // 纯 Markdown/空白输出按“无文本”处理，避免后续 planSocialTimeline 拿空串崩溃。
@@ -11763,7 +11771,21 @@ async function main() {
                 // 以前这里只发 QQ、不写日志：出问题时 bridge.log 里什么都没有，排查只能靠猜（PR #24）。
                 log(`⚠️ agent 处理出错 (${key})：${safeMsg}`);
                 appendActivity(`${key} agent 处理出错：${safeMsg.slice(0, 80)}`);
-                await sendToQQ(key, `⚠️ agent 处理出错：${safeMsg}`);
+                // 瞬时错误（模型把工具参数 JSON 写坏、流中断等）自动重试一次：
+                // 报错发生在**工具执行之前**（JSON 解析阶段），重试不会重复发消息。
+                // 重试用既有的唤醒调度（replyCheck），不把原始报错刷到 QQ 上。
+                const transient = TURN_TRANSIENT_RE.test(String(msg));
+                const tries = turnRetryCount.get(key) ?? 0;
+                if (transient && tries < 1) {
+                  turnRetryCount.set(key, tries + 1);
+                  log(`↻ 瞬时错误，3 秒后自动重试一次 (${key})`);
+                  appendActivity(`${key} 瞬时错误，自动重试一次`);
+                  setTimeout(() => {
+                    try { scheduleWakeV2(key, 'replyCheck'); } catch (error) { log('自动重试唤醒失败:', error?.message ?? error); }
+                  }, 3000);
+                } else {
+                  await sendToQQ(key, `⚠️ agent 处理出错：${safeMsg}`);
+                }
                 if (isFarewell) {
                   const st = socialState(key);
                   if (st.phase === 'exiting') {

@@ -181,7 +181,7 @@
       "maxWakePerMinute": 1,
       "maxWakePerHour": 12,
       "noActionLimit": 3,
-      "maxWakeConfigReminders": 2
+      "maxWakeConfigReminders": 0
     },
     "send": {
       "burstEnabled": true,
