@@ -9844,12 +9844,37 @@ async function main() {
   function roleUpdateHint() {
     const mtime = roleFileMtime();
     if (!mtime) return '';
-    if (!lastRoleMtimeMs) { lastRoleMtimeMs = mtime; return ''; }
+    if (!lastRoleMtimeMs) { lastRoleMtimeMs = mtime; snapshotRoleFile(); return ''; }
     if (mtime > lastRoleMtimeMs) {
       lastRoleMtimeMs = mtime;
+      snapshotRoleFile();
       return '【角色卡已更新】你的角色设定刚被改过，先调用 qq_get_prompt 重新读一遍再开口。\n\n';
     }
     return '';
+  }
+
+  // 角色卡快照：曾经有过「编辑器把旧缓冲写回去、四节内容直接消失」的事故，
+  // 这里每次检测到文件变化就留一份，最多 20 份，随时能翻回去对比。
+  let lastRoleSnapshotMtimeMs = 0;
+  function snapshotRoleFile() {
+    try {
+      const rs = readRoleState();
+      const safe = rs.role ? sanitizeRoleName(rs.role) : '';
+      if (!safe || safe.includes('..')) return;
+      const src = path.join(ROLES_DIR, `${safe}.md`);
+      const mtime = fs.statSync(src).mtimeMs;
+      if (mtime === lastRoleSnapshotMtimeMs) return;
+      lastRoleSnapshotMtimeMs = mtime;
+      const dir = path.join(STATE_DIR, 'role-backups');
+      fs.mkdirSync(dir, { recursive: true });
+      const stamp = new Date(mtime).toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const target = path.join(dir, `${safe}-${stamp}.md`);
+      if (!fs.existsSync(target)) fs.copyFileSync(src, target);
+      const files = fs.readdirSync(dir).filter((f) => f.startsWith(`${safe}-`) && f.endsWith('.md')).sort();
+      for (const old of files.slice(0, Math.max(0, files.length - 20))) fs.rmSync(path.join(dir, old), { force: true });
+    } catch (error) {
+      log(`[role] 快照失败：${error?.message ?? error}`);
+    }
   }
 
   function currentRoleHintV2() {
