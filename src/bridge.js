@@ -17,6 +17,7 @@ import { GEN1_ROLE_LINE_RE, parseRoleSections, roleCharStats, roleSectionReport,
 import { fileURLToPath } from 'node:url';
 import { SnowLumaWebSocketClient, text } from '@snowluma/sdk';
 import { NodeApiClient, unwrap, createTurnCollector, discoverDshLaunchToken } from './dsh-client.js';
+import { discoverDshBaseUrl } from './dsh-endpoint.js';
 import { mdToPlain, splitForQQ, truncateText, truncateTextTail } from './md-to-plain.js';
 import { SENSITIVE_RE } from './sensitive.js';
 import { looksLikeUnfinished } from './v2-wait.js';
@@ -2887,12 +2888,42 @@ async function main() {
       }
     }
   };
+  // DSH 端点自愈：桌面版（Electron）用 `--port 0` 启动 Web 宿主，**每次启动端口都变**
+  // （实测 65292 / 55279 / 61981 / 50996），而 config.json 的 dsh.baseUrl 是固定值。
+  // 不修这一条的话：用户重启一次 DSH，桥接就永远停在「⚠️ DSH 不可用（重启中？）」，
+  // QQ 侧表现为完全不回消息，日志里也不会出现任何 401（地址是死的，请求根本没到 DSH）。
+  // 只在探活**失败**时触发：成功路径一个额外请求都不发。见 src/dsh-endpoint.js。
+  const DSH_REDISCOVER_COOLDOWN_MS = 30 * 1000;
+  let dshRediscoverAfter = 0;
+  const rediscoverDshBase = async () => {
+    if (Date.now() < dshRediscoverAfter) return false;
+    dshRediscoverAfter = Date.now() + DSH_REDISCOVER_COOLDOWN_MS;
+    const previous = api.resolveBase();
+    let found = null;
+    try {
+      found = await discoverDshBaseUrl({ current: previous, log });
+    } catch (error) {
+      log('DSH 端点自愈异常:', error?.message ?? error);
+      return false;
+    }
+    if (!found || found === previous) return false;
+    api.rebind(found);
+    log(`DSH 端点已自愈：${previous} → ${found}（桌面版每次启动端口随机）`);
+    return true;
+  };
   const checkDsh = async () => {
     let ok = false;
     try {
       await api.settings.describe({});
       ok = true;
     } catch {}
+    // 配置里的地址探不通时，先试着找出「真正在跑的那个 DSH」，再下不可用的结论。
+    if (!ok && await rediscoverDshBase()) {
+      try {
+        await api.settings.describe({});
+        ok = true;
+      } catch {}
+    }
     if (ok) {
       await refreshMode();
       // DSH 起来后拉一次 preset 清单；DSH 重启（dshReady 由 false 变 true）时再拉一次。
@@ -8079,16 +8110,33 @@ async function main() {
     const model = String(cfg.dsh?.model || 'deepseek-flash');
     const effort = String(cfg.dsh?.reasoningEffort || REASONING_EFFORT_DEFAULT);
     let lastError = null;
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
-      try {
-        const result = unwrap(await api.sessions.selectModel({ sessionId, provider, model, reasoningEffort: effort }), 'session.selectModel');
-        modelAppliedSessions.set(sessionId, modelSelectionEpoch);
-        log(`已设置会话模型 ${sessionId} -> ${result.selected.provider}/${result.selected.model} (${result.selected.reasoningEffort ?? '默认'})`);
-        return 'applied';
-      } catch (error) {
-        lastError = error;
-        log(`设置会话模型失败 ${sessionId}（第 ${attempt}/2 次）: ${error?.message ?? error}`);
-        if (attempt < 2) await sleep(1000);
+    // 两段式降级（P1，repo-auditor 提的「effort 不对就 100% 哑掉」）：
+    //   第 1 段按配置带 reasoningEffort；
+    //   第 2 段去掉 reasoningEffort。
+    // 为什么需要：模型目录里不同 provider 的模型不一定有 effort 维度（本机 dashscope
+    // 的 deepseek-v4.1-flash-1017 / qwen3.8-* 就 efforts=[]），带 effort 的 selectModel 会被拒，
+    // 而失败只留一行日志、消息仍靠 DSH 会话默认模型兜着——默认模型也不可用时，QQ 侧就变成
+    // 「日志说失败、人看是 bot 死了」。去掉 effort 是安全降级：不指定思考强度不等于失去能力。
+    const attemptPlans = effort
+      ? [{ effort, label: `reasoningEffort=${effort}` }, { effort: '', label: '不带 reasoningEffort' }]
+      : [{ effort: '', label: '不带 reasoningEffort' }];
+    modelPlans:
+    for (const plan of attemptPlans) {
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        try {
+          const payload = { sessionId, provider, model };
+          if (plan.effort) payload.reasoningEffort = plan.effort;
+          const result = unwrap(await api.sessions.selectModel(payload), 'session.selectModel');
+          modelAppliedSessions.set(sessionId, modelSelectionEpoch);
+          log(`已设置会话模型 ${sessionId} -> ${result.selected.provider}/${result.selected.model} (${result.selected.reasoningEffort ?? '默认'})`);
+          return 'applied';
+        } catch (error) {
+          lastError = error;
+          log(`设置会话模型失败 ${sessionId}（${plan.label}，第 ${attempt}/2 次）: ${error?.message ?? error}`);
+          // 会话在 DSH 侧已经不存在：换 effort 重试也没意义，交给外层退役重建。
+          if (/not[- ]?found/i.test(String(error?.message ?? error))) break modelPlans;
+          if (attempt < 2) await sleep(1000);
+        }
       }
     }
     const message = String(lastError?.message ?? lastError ?? '');
