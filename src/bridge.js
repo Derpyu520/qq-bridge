@@ -58,6 +58,7 @@ import { createNovelAIClient } from './novelai.js';
 import { createWebStickerStore } from './sticker-web.js';
 import { buildStyleHint } from './style-sample.js';
 import { createBiliClient } from './bilibili.js';
+import { createSelfEvolve } from './self-evolve.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -1401,6 +1402,23 @@ async function main() {
   const imageClient = createNovelAIClient({ getConfig: () => cfg, stateDir: STATE_DIR, log });
   const webStickers = createWebStickerStore({ stateDir: STATE_DIR, log });
   const biliClient = createBiliClient({ getConfig: () => cfg, stateDir: STATE_DIR, log });
+  // 自我调整：风格备忘由她自己写、下轮唤醒能看到；人设建议必须人工批准才写进角色卡。
+  const selfEvolve = createSelfEvolve({
+    stateDir: STATE_DIR,
+    log,
+    applyToRole: (text) => {
+      const rs = readRoleState();
+      const safe = sanitizeRoleName(rs.role);
+      if (!safe || safe.includes('..')) throw new Error('没有可写的角色卡');
+      const file = path.join(ROLES_DIR, `${safe}.md`);
+      let content = fs.readFileSync(file, 'utf8');
+      const heading = '## 附：AI 自荐补充（人工批准）';
+      if (!content.includes(heading)) content = `${content.replace(/\s+$/, '')}\n\n${heading}\n`;
+      content = `${content.replace(/\s+$/, '')}\n- [${new Date().toISOString().slice(0, 10)}] ${String(text).replace(/\s+/g, ' ').trim()}\n`;
+      fs.writeFileSync(file, content, 'utf8');
+      log(`[self] 人设建议已写入角色卡：${String(text).slice(0, 40)}`);
+    }
+  });
 
   // config.json 热加载：手动改完保存后大多数字段立即生效（改端口/控制台令牌/人格卡上限
   // 这类启动期才用的值仍需重启）。用 fs.watch + 800ms 去抖，避免编辑器「先清空再写入」
@@ -6900,6 +6918,67 @@ async function main() {
           }
           return;
         }
+        // 自我调整：风格备忘（她自己写/看/删）
+        if (url.pathname === '/api/socialV2/style-note' && req.method === 'POST') {
+          const body = await readBody();
+          const key = String(body.key ?? '').trim();
+          if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
+          if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2ToolEnabled('selfEvolve')) { sendJson({ ok: false, error: '工具未启用：qq_style_note' }, 403); return; }
+          const action = String(body.action ?? 'add');
+          try {
+            if (action === 'list') {
+              sendJson({ ok: true, key, notes: selfEvolve.listStyleNotes({ limit: 20 }) });
+            } else if (action === 'delete') {
+              const removed = selfEvolve.removeStyleNote(String(body.id ?? ''));
+              sendJson({ ok: true, key, removed });
+            } else {
+              const cfgSelf = cfg.socialV2?.selfEvolve ?? {};
+              const r = selfEvolve.addStyleNote(body.text, { max: Number(cfgSelf.maxStyleNotes) || 20 });
+              if (!r.ok) { sendJson({ ok: false, error: r.error }, 400); return; }
+              sendJson({ ok: true, key, note: r.note, duplicate: Boolean(r.duplicate), count: selfEvolve.listStyleNotes({ limit: 100 }).length, noteHint: '记下了，下次唤醒会看到。只记「下次具体怎么做」，别记情绪。' });
+            }
+          } catch (error) {
+            sendJson({ ok: false, error: String(error?.message ?? error).slice(0, 200) }, 500);
+          }
+          return;
+        }
+        // 自我调整：人设提议（写进待批队列，人工批准才生效）
+        if (url.pathname === '/api/socialV2/role-proposal' && req.method === 'POST') {
+          const body = await readBody();
+          const key = String(body.key ?? '').trim();
+          if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
+          if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2ToolEnabled('selfEvolve')) { sendJson({ ok: false, error: '工具未启用：qq_role_proposal' }, 403); return; }
+          const action = String(body.action ?? 'add');
+          try {
+            if (action === 'list') {
+              sendJson({ ok: true, key, proposals: selfEvolve.listProposals('pending') });
+            } else {
+              const cfgSelf = cfg.socialV2?.selfEvolve ?? {};
+              const r = selfEvolve.addProposal(body.text, body.rationale, { minIntervalDays: Number(cfgSelf.proposalMinIntervalDays) || 7 });
+              if (!r.ok) { sendJson({ ok: false, error: r.error }, 429); return; }
+              sendJson({ ok: true, key, proposal: r.proposal, noteHint: '建议已进待批队列，等人批准后才写进角色卡。别在聊天里当成已经生效。' });
+            }
+          } catch (error) {
+            sendJson({ ok: false, error: String(error?.message ?? error).slice(0, 200) }, 500);
+          }
+          return;
+        }
+        // 控制台：人设建议列表 / 批准或驳回
+        if (url.pathname === '/api/self/proposals' && req.method === 'GET') {
+          const status = String(url.searchParams.get('status') ?? 'all');
+          sendJson({ ok: true, proposals: selfEvolve.listProposals(status), notes: selfEvolve.listStyleNotes({ limit: 20 }) });
+          return;
+        }
+        if (url.pathname === '/api/self/proposals/decide' && req.method === 'POST') {
+          const body = await readBody();
+          const r = selfEvolve.decideProposal(String(body.id ?? ''), String(body.action ?? ''));
+          sendJson(r.ok ? { ok: true, proposal: r.proposal } : { ok: false, error: r.error }, r.ok ? 200 : 400);
+          return;
+        }
         // 网上表情包（PigHub 猪猪）：搜索 / 取图并发送。
         // 本地收藏（大肥鱼）优先，猪猪作为补充——这个优先级写在人设卡与工具描述里。
         if (url.pathname === '/api/socialV2/pigstickers' && req.method === 'GET') {
@@ -7649,7 +7728,15 @@ async function main() {
   }
 
 
+  // 内部复盘（夜间整理）期间禁止往 QQ 发消息：整理不是任务，别在凌晨突然说话。
+  const suppressSendsUntil = new Map();
+  function sendsSuppressed(kind, id) {
+    const until = suppressSendsUntil.get(`${kind}:${id}`) || 0;
+    return until > Date.now();
+  }
+
   async function onebotSend(kind, id, message, replyToMessageId, atUserId = null) {
+    if (sendsSuppressed(kind, id)) throw new Error('这轮是内部整理/复盘，不要发消息给任何人；只做记录类操作，然后安静收尾');
     const segments = [];
     if (replyToMessageId !== undefined && replyToMessageId !== null && String(replyToMessageId).trim() !== '') {
       const rid = String(replyToMessageId).trim();
@@ -7691,6 +7778,7 @@ async function main() {
 
   // 发图：和 onebotSend 同一套鉴权与限流，只是消息段换成 image。
   async function onebotSendImage(kind, id, imageBuffer, replyToMessageId) {
+    if (sendsSuppressed(kind, id)) throw new Error('这轮是内部整理/复盘，不要发图片；只做记录类操作，然后安静收尾');
     if (!imageBuffer || !imageBuffer.length) throw new Error('图片为空');
     const action = kind === 'private' ? 'send_private_msg' : 'send_group_msg';
     const b64 = Buffer.from(imageBuffer).toString('base64');
@@ -10419,6 +10507,12 @@ async function main() {
     // 瘦身开关：slim（默认）只保留「现在/状态/待办/语感」这些每轮真正变化的东西，
     // 静态规则交给 preset 的系统提示，不再逐轮重复。切 full 回退到原来的长版。
     const slimPrompt = String(cfg.socialV2?.prompt?.profile ?? 'slim') !== 'full';
+    // 自我调整：风格备忘（她自己写的）+ 人设建议的权限边界。
+    const selfNotes = selfEvolve.listStyleNotes({ limit: 5 });
+    const selfLine = selfNotes.length
+      ? `【你给自己记的说话备忘】\n${selfNotes.map((n) => `- ${n.text}`).join('\n')}\n（觉得这轮说得不对，用 qq_style_note 记一条；最多 20 条，旧的自动淘汰。）\n\n`
+      : '';
+    const selfGuide = '【自我调整】人设卡不是你直接能改的：觉得该补/该改一条，用 qq_role_proposal 提建议（一周最多一条，人工批准后才生效），别在聊天里宣布「我改了人设」。\n\n';
     const roleLine = roleState.role ? `【当前角色】${roleState.role}（完整角色卡请调用 qq_get_prompt 查看）\n\n` : '';
     const aliasList = Array.isArray(cfg.socialV2?.wake?.nameAliases) ? cfg.socialV2.wake.nameAliases.map(String).filter(Boolean) : [];
     const aliasText = aliasList.length ? `（群里也喊你「${aliasList.slice(0, 4).join('」「')}」）` : '';
@@ -10520,7 +10614,7 @@ async function main() {
     const slot = nowDate.getHours() < 5 ? '凌晨' : nowDate.getHours() < 9 ? '早上' : nowDate.getHours() < 12 ? '上午'
       : nowDate.getHours() < 14 ? '中午' : nowDate.getHours() < 18 ? '下午' : nowDate.getHours() < 23 ? '晚上' : '深夜';
     const nowLine = `【现在】${nowDate.getFullYear()}年${nowDate.getMonth() + 1}月${nowDate.getDate()}日 ${weekNames[nowDate.getDay()]} ${hh}:${mi}（${slot}）\n\n`;
-    const base = nowLine + roleUpdateHint() + roleLine + identityLine + tokenLine + initialPromptLine + antiAiLine + styleLine + proactiveLine + stickerLine + replyLine + statusLine + innerGuide + innerLine + wakeLine + memoryLine + participationLine + preSleepLine;
+    const base = nowLine + roleUpdateHint() + roleLine + identityLine + tokenLine + initialPromptLine + antiAiLine + styleLine + selfLine + selfGuide + proactiveLine + stickerLine + replyLine + statusLine + innerGuide + innerLine + wakeLine + memoryLine + participationLine + preSleepLine;
     if (reason === 'bootstrap') {
       return `${base}【引导唤醒】你已接入 QQ 会话 ${key}。\n当前是二代仿真模式：你的文本输出不会自动发送到 QQ，所有发言必须通过工具完成。\n请先调用 qq_get_prompt 查看角色、推荐值、可用工具和状态；有待回应的消息先按首回复节奏处理，最后才用 qq_set_wake_config 设置你希望如何被唤醒。`;
     }
@@ -10546,7 +10640,7 @@ async function main() {
       return `${base}【想找他】${key}\n原因：已经有一段时间没聊了，而你现在的心情和好感度让你有点想找他说说话。\n这不是任务，是念头：想到什么就自然开口（今天发生的事、突然想起来的话、上次没聊完的），不想说也可以安静收尾。别用「在吗」式空话开场。`;
     }
     if (reason === 'nightlyReview') {
-      return `${base}【夜间整理】${key}\n原因：凌晨了，把今天过一遍。\n① 先看上面的日程：要模糊化的用 qq_schedule_fuzz（「上午上高数」→「上午有课」），要彻底忘的用 qq_schedule_drop，反复出现、确认过、值得长期记住的用 qq_schedule_promote 升级进画像。\n② 再看今天有没有值得写进日记的事（qq_diary_write，分清楚普通/重要/非常重要）。\n③ 情绪有变化就 qq_heart_update 一次。\n没有值得处理的就什么都别做——整理不是任务，别为了整理而整理。`;
+      return `${base}【夜间整理】${key}\n原因：凌晨了，把今天过一遍。**这轮是内部事务，不要给任何人发消息**（发送会被拦下）。\n① 先看上面的日程：要模糊化的用 qq_schedule_fuzz（「上午上高数」→「上午有课」），要彻底忘的用 qq_schedule_drop，反复出现、确认过、值得长期记住的用 qq_schedule_promote 升级进画像。\n② 再看今天有没有值得写进日记的事（qq_diary_write，分清楚普通/重要/非常重要）。\n③ 情绪有变化就 qq_heart_update 一次。\n④ 最后回顾一下自己今天怎么说话的：是不是太长、口头禅用滥了、表情老是那几张、有没有该怼没怼/该收没收。有想法的用 qq_style_note 记 1 条（最多 2 条，写具体的「下次怎么做」，别写空话）。\n⑤ 如果觉得人设卡缺一条重要的东西，用 qq_role_proposal 提一条建议（一周最多一条，等人批）。\n没有值得处理的就什么都别做——整理不是任务，别为了整理而整理。`;
     }
     if (reason === 'diaryReview') {
       return `${base}【日记时间】${key}\n原因：凌晨了，到了整理今天的时间。\n先回想今天这段聊天：有没有值得留下的、值得记住的事？有的话用 qq_diary_write 记下来（普通/重要/非常重要），并写下当时的心情、以及不好意思当面说的话。今天如果没什么值得记的，就什么都不写，不要为了写而写。顺便看一眼情绪：如果今天有让你心情变化的事，用 qq_heart_update 更新一次。`;
@@ -10649,6 +10743,8 @@ async function main() {
     st.lastWakeReason = reason;
     saveSocialV2State();
     const promptText = buildWakePromptV2(key, reason);
+    // 夜间整理是内部事务：这 20 分钟内任何发送都会被 onebotSend 拦掉。
+    if (reason === 'nightlyReview') suppressSendsUntil.set(key, Date.now() + 20 * 60 * 1000);
     log(`[reserved2] 唤醒 ${key}（${reason}）`);
     // prompt 体积观测：瘦身前后用同一条日志对比（中文约 2.2 字符/token）。
     log(`[prompt] ${key} ${reason} ${promptText.length} 字符 ≈ ${Math.round(promptText.length / 2.2)} token`);
@@ -11017,6 +11113,8 @@ async function main() {
       log(`[inner] 日记遗忘完成：删除 ${swept.removed} 条，剩余 ${swept.remaining} 条`);
       const ps = innerLife.profileSweep();
       if (ps.changed) log(`[inner] 画像过期标记更新 ${ps.changed} 条`);
+      const se = selfEvolve.sweep();
+      if (se.removedNotes || se.expiredProposals) log(`[self] 淘汰过期备忘 ${se.removedNotes} 条，过期建议 ${se.expiredProposals} 条`);
       if (cfg.socialV2?.innerLife?.diaryReviewEnabled === false) return;
       for (const key of socialV2.conversations.keys()) {
         if (!isSessionAllowedInCurrentMode(key)) continue;

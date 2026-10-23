@@ -344,6 +344,9 @@ const TOOL_CONFIG_FLAGS = {
   qq_pig_sticker_search: 'webSticker',
   qq_pig_sticker_send: 'webSticker',
   qq_bili: 'bili',
+  qq_style_note: 'selfEvolve',
+  qq_style_notes: 'selfEvolve',
+  qq_role_proposal: 'selfEvolve',
   qq_slang_query: 'slangQuery',
   qq_slang_submit: 'slangSubmit',
   qq_send_voice: 'sendVoice',
@@ -1374,6 +1377,76 @@ server.tool(
       return { content: [{ type: 'text', text: serializeModelData(data) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `画图失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+// ── 自我调整：风格备忘 + 人设建议 ───────────────────────────────────────────
+server.tool(
+  'qq_style_note',
+  '给自己记一条说话方式的备忘（「下次别写那么长」「口头禅用腻了」）。下次唤醒会看到；最多 20 条，旧的自动淘汰。只记「下次具体怎么做」，别记情绪。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    action: z.enum(['add', 'list', 'delete']).optional().describe('默认 add'),
+    text: z.string().optional().describe('备忘内容（add 时必填，一句话，最多 120 字）'),
+    id: z.string().optional().describe('delete 时要删的备忘 id')
+  },
+  async ({ key, token, action, text, id }) => {
+    try {
+      const data = await agentApi('/api/socialV2/style-note', {
+        method: 'POST',
+        body: JSON.stringify({ key, action: action || 'add', text: text || '', id: id || '' }),
+        headers: { 'x-agent-token': token }
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `记录风格备忘失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_style_notes',
+  '查看自己记过的说话方式备忘（最多 20 条）。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）')
+  },
+  async ({ key, token }) => {
+    try {
+      const data = await agentApi('/api/socialV2/style-note', {
+        method: 'POST',
+        body: JSON.stringify({ key, action: 'list' }),
+        headers: { 'x-agent-token': token }
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `查看风格备忘失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_role_proposal',
+  '觉得人设卡该补/该改一条时，提一条建议进待批队列（一周最多一条）。人工批准后才会写进角色卡；不要当成已经生效。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    text: z.string().optional().describe('建议内容（一句话，像人设卡里的一条规则）'),
+    rationale: z.string().optional().describe('为什么需要这条（可选）'),
+    action: z.enum(['add', 'list']).optional().describe('默认 add；list 查看待批建议')
+  },
+  async ({ key, token, text, rationale, action }) => {
+    try {
+      const data = await agentApi('/api/socialV2/role-proposal', {
+        method: 'POST',
+        body: JSON.stringify({ key, action: action || 'add', text: text || '', rationale: rationale || '' }),
+        headers: { 'x-agent-token': token }
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `提交人设建议失败：${error?.message ?? error}` }], isError: true };
     }
   }
 );

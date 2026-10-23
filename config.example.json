@@ -148,7 +148,8 @@
       "profile": true,
       "imageGen": true,
       "webSticker": true,
-      "bili": true
+      "bili": true,
+      "selfEvolve": true
     },
     "wake": {
       "defaultMode": "diving",
@@ -296,6 +297,11 @@
     },
     "prompt": {
       "profile": "slim"
+    },
+    "selfEvolve": {
+      "enabled": true,
+      "maxStyleNotes": 20,
+      "proposalMinIntervalDays": 7
     }
   },
   "webSearch": {
