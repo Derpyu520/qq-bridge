@@ -30,6 +30,20 @@ if errorlevel 1 (
     echo [2/3] SnowLuma 已在运行
 )
 
+rem SnowLuma 就绪 ≠ OneBot 可用：OneBot 要等 QQ 登录后挂上进程才会监听 3000/3001。
+call :check_port 3000
+if errorlevel 1 (
+    echo       OneBot 还没起来，等 QQ 登录后自动注入（最多再等 60 秒）...
+    call :wait_port 3000 30
+    call :check_port 3000
+    if errorlevel 1 (
+        echo       ⚠️ OneBot 3000 仍未监听：QQ 可能没登录。
+        echo          请在 QQ 里登录机器人账号，或到「设置 → 登录」开启自动登录。
+    ) else (
+        echo       OneBot 就绪
+    )
+)
+
 rem ── 3) qq-bridge ─────────────────────────────────────────────
 call :check_port 3100
 if errorlevel 1 (
