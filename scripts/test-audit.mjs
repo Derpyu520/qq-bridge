@@ -47,6 +47,7 @@ const tests = [
   'test-voice-system.mjs',
   // SnowLuma 账号/token 自发现（换 QQ 账号后 token 会变，写死的工具会 401）
   'test-snowluma-conn.mjs',
+  'test-onebot-client.mjs',
   // 启动器与编码（乱码根因：.cmd 里的非 ASCII 会被 cmd 按 ANSI 解码）
   'test-encoding.mjs',
   // 控制台乱码机制（UTF-8 字节被按 GBK 解码）+ chcp 修复

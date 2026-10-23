@@ -7,7 +7,7 @@
 //
 // 本探针：只连接、只读取、打印后立刻退出；**不发送任何消息、不创建任何会话**。
 // 用法：node scripts/probe-snowluma-heartbeat.mjs [超时秒数]
-import { SnowLumaWebSocketClient } from '@snowluma/sdk';
+import { OneBotWebSocketClient as SnowLumaWebSocketClient } from '../src/onebot-client.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

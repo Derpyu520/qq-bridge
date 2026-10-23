@@ -87,6 +87,51 @@ console.log('## per-account token 解析（用临时目录造多账号场景）'
   }
 }
 
+console.log('## NapCat 配置解析（macOS）');
+{
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'napcat-home-'));
+  fs.mkdirSync(path.join(home, 'config'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'config', 'onebot11_333.json'), JSON.stringify({
+    network: {
+      httpServers: [{ enable: true, host: '0.0.0.0', port: 3000, token: 'http-napcat' }],
+      websocketServers: [{ enable: true, host: '::', port: 3001, token: 'ws-napcat' }]
+    }
+  }), 'utf8');
+  fs.writeFileSync(path.join(home, 'config', 'onebot11.json'), JSON.stringify({
+    network: {
+      httpServers: [{ enable: false, host: '127.0.0.1', port: 4000, token: 'off' }, { enable: true, host: '127.0.0.1', port: 4001, token: 'http-default' }],
+      websocketServers: [{ host: '127.0.0.1', port: 4002, token: 'ws-default' }]
+    }
+  }), 'utf8');
+
+  const toks = readOneBotTokens(home);
+  ok(toks.length === 2, '解析 onebot11_<uin>.json 与 onebot11.json', `得到 ${toks.length} 个`);
+  const uin = toks.find((t) => t.uin === '333');
+  ok(uin?.http?.token === 'http-napcat', 'NapCat HTTP token 取自 httpServers[].token');
+  ok(uin?.ws?.token === 'ws-napcat', 'NapCat WS token 取自 websocketServers[].token');
+  ok(uin?.http?.host === '127.0.0.1' && uin?.ws?.host === '127.0.0.1', '0.0.0.0 / :: 归一化到 127.0.0.1');
+  const def = toks.find((t) => t.uin === '');
+  ok(def?.http?.token === 'http-default', '默认配置跳过 enable=false 的服务器');
+  ok(def?.http?.port === 4001 && def?.ws?.port === 4002, '默认配置读取自定义端口');
+
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const tk = String(init?.headers?.authorization ?? '').replace('Bearer ', '');
+    if (tk === 'http-napcat') {
+      return { ok: true, status: 200, json: async () => ({ status: 'ok', retcode: 0, data: { user_id: 333, nickname: 'NapCat' } }) };
+    }
+    return { ok: false, status: 401, json: async () => ({ status: 'failed', retcode: 1401 }) };
+  };
+  try {
+    const r = await discoverSnowLumaConnection({ cfg: {}, baseUrl: 'http://127.0.0.1:3000', homeDirs: [home], timeoutMs: 500 });
+    ok(r.ok === true && r.self?.user_id === 333, 'NapCat 账号自动发现成功');
+    ok(r.wsToken === 'ws-napcat' && r.wsUrl === 'ws://127.0.0.1:3001', '带回同账号的 NapCat WS token/URL', `${r.wsToken} ${r.wsUrl}`);
+  } finally {
+    globalThis.fetch = realFetch;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
 console.log('## token 写回 config.json');
 {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sl-cfg-'));
@@ -99,6 +144,18 @@ console.log('## token 写回 config.json');
   ok(after.allow.groups[0] === 1, '其它配置字段未被破坏');
   const r2 = persistToken(cfgPath, 'new-token');
   ok(r2.updated === false, 'token 未变时不重复写（幂等）');
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+console.log('## onebot 配置段兼容');
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'onebot-cfg-'));
+  const cfgPath = path.join(dir, 'config.json');
+  fs.writeFileSync(cfgPath, JSON.stringify({ onebot: { httpUrl: 'http://127.0.0.1:6000', accessToken: 'old' }, snowluma: { accessToken: 'stale' } }, null, 2), 'utf8');
+  const r = persistToken(cfgPath, 'new');
+  const after = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+  ok(r.updated === true && after.onebot.accessToken === 'new', '存在 onebot 段时写回 onebot');
+  ok(after.snowluma.accessToken === 'stale', '不误改 snowluma 段');
   fs.rmSync(dir, { recursive: true, force: true });
 }
 

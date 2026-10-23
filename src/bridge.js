@@ -15,7 +15,7 @@ import yaml from 'js-yaml';
 import { extractPresetPrefix, presetPromptBlockers, presetPromptWarnings, renderPresetPromptYaml } from './preset-prompt.js';
 import { GEN1_ROLE_LINE_RE, parseRoleSections, roleCharStats, roleSectionReport, selectRoleText } from './role-card.js';
 import { fileURLToPath } from 'node:url';
-import { SnowLumaWebSocketClient, text } from '@snowluma/sdk';
+import { OneBotWebSocketClient as SnowLumaWebSocketClient, text } from './onebot-client.js';
 import { NodeApiClient, unwrap, createTurnCollector, discoverDshLaunchToken } from './dsh-client.js';
 import { mdToPlain, splitForQQ, truncateText, truncateTextTail } from './md-to-plain.js';
 import { SENSITIVE_RE } from './sensitive.js';
@@ -672,7 +672,12 @@ function loadConfig() {
       allowRemote: false,
       ...(file.dsh ?? {})
     },
-    snowluma: { wsUrl: 'ws://127.0.0.1:3001', accessToken: '', ...(file.snowluma ?? {}) },
+    snowluma: {
+      wsUrl: 'ws://127.0.0.1:3001',
+      accessToken: '',
+      ...(file.snowluma ?? {}),
+      ...(file.onebot ?? {})
+    },
     // 空 => 每个会话在 state/agents/<key> 下建独立工作目录
     sessionCwd: file.sessionCwd ?? '',
     agentPreset: file.agentPreset ?? 'qq-chat',

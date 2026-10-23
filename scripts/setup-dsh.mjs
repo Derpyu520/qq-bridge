@@ -165,7 +165,21 @@ function prepareCordisPatch() {
   }
   let doc;
   try { doc = yaml.load(lines.join('\n')) ?? []; }
-  catch (error) { fatal(`failed to parse ${patchFile}; file unchanged: ${error.message}`); }
+  catch (error) {
+    // DSH 的 patch 层允许 `!!js` 表达式，js-yaml 默认不认识这个标签。
+    // 这种情况下不要重排整个文件（会丢注释、改格式），只按标记替换 MCP 区块。
+    if (/unknown tag|unacceptable kind|!!js/.test(String(error?.message ?? error))
+        && /!!js\b/.test(original)) {
+      const begin = '# === qq-bridge MCP BEGIN ===';
+      const end = '# === qq-bridge MCP END ===';
+      const block = new RegExp(`${begin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${end.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n?`);
+      const removed = block.test(original) ? 1 : 0;
+      const text = `${original.replace(block, '').replace(/\s*$/, '')}\n\n${mcpEntries()}`;
+      log('cordis.patch.yml 含 !!js 标签，使用文本模式同步 MCP 区块（保留原注释与格式）');
+      return { patchFile, original, text, removed };
+    }
+    fatal(`failed to parse ${patchFile}; file unchanged: ${error.message}`);
+  }
   if (!Array.isArray(doc)) fatal(`${patchFile} must contain a YAML array; file unchanged`);
   let removed = 0;
   const kept = [];

@@ -27,11 +27,17 @@ import path from 'node:path';
 export function snowLumaHomeCandidates({ cfg = null } = {}) {
   const out = [];
   const push = (p) => { if (p && !out.includes(p)) out.push(p); };
-  const sl = cfg?.snowluma ?? cfg ?? {};
+  const sl = cfg && (cfg.snowluma || cfg.onebot)
+    ? { ...(cfg.snowluma ?? {}), ...(cfg.onebot ?? {}) }
+    : (cfg ?? {});
   if (sl.homeDir) push(String(sl.homeDir));
   if (sl.launcherPath) push(path.dirname(String(sl.launcherPath)));
   if (process.env.SNOWLUMA_HOME) push(process.env.SNOWLUMA_HOME);
-  return out;
+  if (process.env.NAPCAT_HOME) push(process.env.NAPCAT_HOME);
+  if (process.platform === 'darwin') {
+    push(path.join(process.env.HOME || '', 'Library/Containers/com.tencent.qq/Data/Documents/napcat'));
+  }
+  return out.filter((p) => p && !p.includes('\0'));
 }
 
 /**
@@ -51,20 +57,39 @@ export function readOneBotTokens(homeDir) {
     return [];
   }
   const out = [];
+  const pickServer = (list) => {
+    if (!Array.isArray(list)) return null;
+    return list.find((server) => server && server.enable !== false) ?? list[0] ?? null;
+  };
+  const localHost = (host) => {
+    const h = String(host ?? '').trim();
+    if (!h || h === '0.0.0.0' || h === '::' || h === '[::]') return '127.0.0.1';
+    if (h === 'localhost') return '127.0.0.1';
+    return h;
+  };
   for (const e of entries) {
     if (!e.isFile()) continue;
-    const m = /^onebot_(\d+)\.json$/i.exec(e.name);
-    if (!m) continue;
+    const m = /^onebot(?:11)?_(\d+)\.json$/i.exec(e.name);
+    const isDefault = !m && /^onebot11\.json$/i.test(e.name);
+    if (!m && !isDefault) continue;
     try {
       const j = JSON.parse(fs.readFileSync(path.join(dir, e.name), 'utf8'));
-      const nets = j?.networks ?? {};
-      const http = Array.isArray(nets.httpServers) ? nets.httpServers[0] : null;
-      const ws = Array.isArray(nets.wsServers) ? nets.wsServers[0] : null;
+      const nets = j?.networks ?? j?.network ?? {};
+      const http = pickServer(nets.httpServers);
+      const ws = pickServer(nets.wsServers ?? nets.websocketServers);
       out.push({
-        uin: m[1],
+        uin: m ? m[1] : '',
         file: path.join(dir, e.name),
-        http: http ? { token: String(http.accessToken ?? ''), host: http.host || '127.0.0.1', port: Number(http.port) || 3000 } : null,
-        ws: ws ? { token: String(ws.accessToken ?? ''), host: ws.host || '127.0.0.1', port: Number(ws.port) || 3001 } : null
+        http: http ? {
+          token: String(http.token ?? http.accessToken ?? ''),
+          host: localHost(http.host),
+          port: Number(http.port) || 3000
+        } : null,
+        ws: ws ? {
+          token: String(ws.token ?? ws.accessToken ?? ''),
+          host: localHost(ws.host),
+          port: Number(ws.port) || 3001
+        } : null
       });
     } catch {
       // 单个文件坏了不影响其它账号
@@ -114,7 +139,9 @@ export async function discoverSnowLumaConnection({
   homeDirs = null,
   timeoutMs = 6000
 } = {}) {
-  const sl = cfg?.snowluma ?? cfg ?? {};
+  const sl = cfg && (cfg.snowluma || cfg.onebot)
+    ? { ...(cfg.snowluma ?? {}), ...(cfg.onebot ?? {}) }
+    : (cfg ?? {});
   const base = String(baseUrl || process.env.SNOWLUMA_HTTP_URL || sl.httpUrl || 'http://127.0.0.1:3000').replace(/\/+$/, '');
   const homes = homeDirs ?? snowLumaHomeCandidates({ cfg });
   const explicit = token || process.env.SNOWLUMA_TOKEN || sl.accessToken || '';
@@ -147,8 +174,8 @@ export async function discoverSnowLumaConnection({
     if (r.ok) {
       // 找到有效 HTTP token 后，把**同一个账号**的 WS 信息也带回去：
       // 桥接走 WebSocket，用另一个 token、另一个端口 —— 只修 HTTP 的话桥接仍然 1006 重连。
-      const uin = /onebot_(\d+)\.json/.exec(c.source)?.[1] ?? String(r.data?.user_id ?? '');
-      const w = wsInfo.get(uin) ?? null;
+      const uin = /onebot(?:11)?_(\d+)\.json/.exec(c.source)?.[1] ?? String(r.data?.user_id ?? '');
+      const w = wsInfo.get(uin) ?? wsInfo.get('') ?? null;
       return {
         ok: true,
         token: c.token,
@@ -184,7 +211,8 @@ export async function discoverSnowLumaConnection({
 export function persistToken(cfgPath, newToken) {
   let text = fs.readFileSync(cfgPath, 'utf8');
   if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
-  const old = String(JSON.parse(text).snowluma?.accessToken ?? '');
+  const parsed = JSON.parse(text);
+  const old = String(parsed.onebot?.accessToken ?? parsed.snowluma?.accessToken ?? '');
   const r = persistSnowLumaEndpoint(cfgPath, { accessToken: newToken });
   return { updated: r.updated, from: old, to: newToken };
 }
@@ -200,7 +228,10 @@ export function persistSnowLumaEndpoint(cfgPath, { accessToken, wsUrl, httpUrl }
   const hadBom = text.charCodeAt(0) === 0xFEFF;
   if (hadBom) text = text.slice(1);
   const cfg = JSON.parse(text);
-  const cur = cfg.snowluma ?? {};
+  const section = cfg.onebot && typeof cfg.onebot === 'object' && !Array.isArray(cfg.onebot)
+    ? 'onebot'
+    : 'snowluma';
+  const cur = cfg[section] ?? {};
   const next = { ...cur };
   const changed = {};
   const consider = (key, value) => {
@@ -213,7 +244,7 @@ export function persistSnowLumaEndpoint(cfgPath, { accessToken, wsUrl, httpUrl }
   consider('wsUrl', wsUrl);
   consider('httpUrl', httpUrl);
   if (Object.keys(changed).length === 0) return { updated: false, changed: {} };
-  cfg.snowluma = next;
+  cfg[section] = next;
   // 原来 hadBom 只用于读、没用回写：用户文件带 UTF-8 BOM 时，我们改一个 token 就把 BOM 吞掉了
   // —— 那是对用户文件的**字节级**静默改动（Windows 编辑器/工具常写 BOM），会让文件在 git 里
   // 显示成整文件重写，也可能影响按字节读它的其它程序。只改该改的字段，编码原样保留。

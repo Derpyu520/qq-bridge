@@ -46,7 +46,7 @@
 > 默认分支 `main` **就是**本版本，`git clone` 直接拿到，无需切换分支。
 
 ```
-QQ 消息 ──► SnowLuma（OneBot v11 WS）──► 本桥接进程 ──► DSH Web API (127.0.0.1:3080/api)
+QQ 消息 ──► OneBot 11 网关（SnowLuma / NapCat）──► 本桥接进程 ──► DSH Web API (127.0.0.1:3080/api)
                                                 ▲                      │
                                                 └── agent 回复/提问/审批 ┘
 ```
@@ -59,7 +59,7 @@ QQ 消息 ──► SnowLuma（OneBot v11 WS）──► 本桥接进程 ──�
 
 ## 架构
 
-- **QQ 侧**：`@snowluma/sdk` 的 `SnowLumaWebSocketClient`（OneBot v11 WebSocket 客户端，自动重连）
+- **QQ 侧**：内置 `src/onebot-client.js`（OneBot 11 WebSocket 客户端，自动重连；不再依赖 `@snowluma/sdk`，因此可在 macOS + NapCat 上运行）
 - **DSH 侧**：适配 DSH 0.1.2 起引入、**0.2.1-rc.2 上逐项复核**的协议——用本机持久化签名密钥铸造会话 Cookie 鉴权、`/api/<namespace>/<method>` 斜杠 RPC、`/api/remote.mux` + `session/follow` 事件流（`session/control` 的队列读 `value.projections[<id>].values.inbox`，另有一元 `session/projections` 主路径）；复用 `AbstractApiClient` 传输层但不再依赖旧版 zod value schema。会话模型由桥接按 `config.json` 的 `dsh.model` 逐会话 `session.selectModel` 固定（默认 `deepseek-flash` = DeepSeek-V41-Flash，多模态）
 - **agent 自主收发 QQ**：DSH 的 MCP 客户端（`~/.dsh/profiles/web/cordis.patch.yml` 配置）接入三个 MCP server：
   - `snowluma`（桥接自带 `src/mcp-snowluma-safe.js`）：QQ 动作**安全子集**（查状态/查群/查消息/发消息，发送强制白名单；发送工具支持可选 `replyToMessageId` 引用回复）
@@ -99,13 +99,13 @@ QQ 消息 ──► SnowLuma（OneBot v11 WS）──► 本桥接进程 ──�
 ## 前置条件
 
 1. 运行中的 DeepSeek Harness Web（默认 `http://127.0.0.1:3080`）
-2. 运行中的 SnowLuma，且配置好 OneBot WebSocket 与 HTTP API（默认 `ws://127.0.0.1:3001` / `http://127.0.0.1:3000`，`accessToken` 视配置填写）
+2. 运行中的 OneBot 11 网关（SnowLuma 或 NapCat），且配置好 WebSocket 与 HTTP API（默认 `ws://127.0.0.1:3001` / `http://127.0.0.1:3000`，`accessToken` 视配置填写）
 3. Node.js ≥ 22.13
 
 ## 安装与配置
 
 ```bash
-npm install        # 安装依赖（postinstall 会自动修补 @snowluma/sdk 的 ESM 打包 bug）
+npm install        # 安装依赖（已内置 OneBot 客户端，不再需要 postinstall 补丁）
 ```
 
 复制 `config.example.json` 为 `config.json` 后编辑：
@@ -120,6 +120,7 @@ npm install        # 安装依赖（postinstall 会自动修补 @snowluma/sdk �
 | `dsh.provider` / `dsh.model` / `dsh.reasoningEffort` | DSH 会话使用的模型/推理强度；若你的 DSH 没有示例中的模型，改成 DSH 设置页里可用的模型即可（选择失败只打日志，不阻塞启动） |
 | `dsh.authToken` | DSH launch token（进程启动凭据）。**通常应留空**：留空时桥接用 `~/.dsh/.credentials.yaml` 里持久化的签名密钥**离线铸造**会话 Cookie，不依赖任何进程期状态（DSH 0.1.7 起启动 token 只存在于内存、日志里那条是上一个进程的陈旧值，换 Cookie 只会 401）。只有显式填了才会优先走 token 交换 |
 | `dsh.authHeader` / `dsh.authPrefix` | 保留字段，当前新版 DSH 链路使用 Cookie 交换，不再直接发送该鉴权头 |
+| `onebot.wsUrl` / `httpUrl` / `accessToken` | OneBot 11 网关（NapCat 或 SnowLuma）地址与 token；与下面的 `snowluma.*` 等价，二选一即可 |
 | `snowluma.wsUrl` | SnowLuma OneBot **WebSocket** 地址（如 `ws://127.0.0.1:3001`） |
 | `snowluma.httpUrl` | OneBot **HTTP API** 地址（如 `http://127.0.0.1:3000`）；不要填 WebSocket 端口，否则会报 HTTP 426 |
 | `snowluma.accessToken` | OneBot accessToken，未配置留空 |
@@ -142,6 +143,26 @@ npm install        # 安装依赖（postinstall 会自动修补 @snowluma/sdk �
 | `consoleToken` | 控制台访问令牌；留空时启动自动生成并保存到 `state/console-token` |
 
 > ⚠️ `allowAllWhenEmpty: true` 表示「白名单没填就全部放行」——把 agent 接入 QQ 等于把账号控制权交给了模型，建议先填白名单。
+
+### macOS（NapCat）
+
+macOS 上不需要 Windows 原生注入。桥接已内置 OneBot 11 客户端，直接用 NapCat 作为网关：
+
+```bash
+npm install
+cp config.example.json config.json
+./scripts/install-napcat-macos.sh
+open -a QQ --args --no-sandbox
+```
+
+在 NapCat WebUI 启用 HTTP `3000` / WebSocket `3001`，把地址和 token 填进 `config.json` 的 `onebot` 段（旧的 `snowluma` 段仍兼容），然后：
+
+```bash
+npm run doctor:macos
+./start-macos.command
+```
+
+完整步骤、自动发现与排错见 **[docs/guides/MACOS_NAPCAT.md](docs/guides/MACOS_NAPCAT.md)**。
 
 ### DSH 端安装（必做：装 preset + 挂 MCP）
 
@@ -276,8 +297,7 @@ qq-bridge/
     dsh-client.js       # Node 版 DSH API 客户端（WS 下行）
     md-to-plain.js      # Markdown → QQ 纯文本
     self-test.js        # DSH 侧自测
-  scripts/              # 测试/运维脚本（含 postinstall 的 patch-snowluma-sdk.mjs）
-    patch-snowluma-sdk.mjs  # 修补 SDK 的 ESM 打包 bug（postinstall 自动执行）
+  scripts/              # 测试/运维脚本（含 macOS 安装/诊断脚本）
   state/                # 运行时数据（不入库）
 ```
 
@@ -327,7 +347,7 @@ WARN [Hook] process enumeration timed out after 4000ms (worker abandoned)
 | 组件 | 要求 | 说明 |
 | --- | --- | --- |
 | SnowLuma **运行时**（QQ 网关本体） | **1.14.20 已实测**（1.14.9 亦兼容） | **实测记录（2026-10-03，SnowLuma 1.14.20 + QQ 在线）**：包 SHA256 与官方发布摘要一致；心跳 `status.good=true`／`interval=30000`；桥接走完「首次 1006 → 自愈 WS token → 已连接」；收到群消息（`lastPacketKind: message/group`）；完整往返成功（唤醒 → DSH 建会话挂 `qq-chat-v2` → 工具发送 1/1 条 → 实际发出两条回复）。 ⚠️ **升级运行时不会更换注入用的原生组件**：实测 `native/snowluma-win32-x64.{dll,node}` 与 `websocket-win32-x64.node` 在 **1.14.9 与 1.14.20 之间逐字节完全相同**（三方对比：官方 1.14.9 包 == 本机安装 == 官方 1.14.20 包），变的只有 `index.mjs`（+414 KB）等 JS 层。所以**升级能带来 OneBot 事件流水线、收发与新区块链路上的修复（`bot_status`、markdown 带 text、事件种类订阅更全），但不会修「原生 hook 挂不上 QQ」这类问题** —— 那种要走 SnowLuma 自己的排查。**升级 SnowLuma 是使用者自己的事**：本桥接只探测、不部署（见 [LICENSE](LICENSE) 与 [RULES.md](RULES.md)） |
-| `@snowluma/sdk` / `@snowluma/mcp`（本仓库依赖） | 已钉 `^1.14.20` | 客户端库；OneBot v11 是稳定契约，新库可连旧运行时（本项目实测：库 1.14.20 + 运行时 1.14.9 可正常收发） |
+| `@snowluma/sdk` / `@snowluma/mcp` | **已移除**（2026-10-23） | 改为内置 `src/onebot-client.js`；OneBot v11 是稳定契约，能连 SnowLuma 1.14.9 / 1.14.20 与 NapCat |
 | `bot_status`（账号上下线） | **1.14.20 有；1.14.9 没有** | 逐一核对的只有这两个版本：`bot_status` 在 1.14.9 的 `index.mjs` 里出现 **0** 次、1.14.20 里 **3** 次（带 `sub_type`/`user_id`）。**具体从哪个版本引入未逐版核对**。桥接对老运行时**优雅降级**：订阅不到就只靠心跳 `good` 与 `get_status` |
 
 ### 已知行为：HTTP token 与 WS token 是**两个不同的值**
@@ -361,7 +381,7 @@ SnowLuma 同一个账号的 **HTTP token（默认 3000 端口）与 WebSocket to
 - **发**语音是支持的（独立工具的图形界面 / 命令行 / AI 工具，见 `docs/README.md` 的文档索引）；但**收**到的语音目前只显示占位文本，不做语音转写入上下文
 - **AI 发语音默认关闭**（`socialV2.voice.enabled` 与 `tools.sendVoice` 默认 `false`）：先把音频放进 `audio/`，再到控制台打开开关；你自己发语音不受这个开关影响
 - agent 的 Markdown 回复会转成纯文本（链接保留 `文字 (url)` 形式）
-- `@snowluma/sdk` 的 npm 发布版存在 ESM 扩展名 bug，本仓库通过 postinstall 补丁修复（见 `scripts/patch-snowluma-sdk.mjs`）
+- 本仓库已改为内置 OneBot 11 客户端（`src/onebot-client.js`），不再依赖 `@snowluma/sdk` / `@snowluma/mcp`，也不再需要 postinstall 补丁；SnowLuma 仍可作为 OneBot 网关使用，macOS 用户可改用 NapCat
 
 ## 合规提醒
 

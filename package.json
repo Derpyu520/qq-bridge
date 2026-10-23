@@ -3,13 +3,14 @@
   "version": "0.2.1-r1",
   "private": true,
   "license": "MIT",
-  "description": "Bridge between SnowLuma (OneBot v11 / QQ) and DeepSeek Harness Web API: QQ messages become DSH agent prompts, agent replies go back to QQ. Targets the DSH Cookie-auth / slash-RPC / remote.mux protocol generation, so it deliberately names no DSH version here.",
+  "description": "Bridge between an OneBot v11 gateway (QQ) and DeepSeek Harness Web API: QQ messages become DSH agent prompts, agent replies go back to QQ. Targets the DSH Cookie-auth / slash-RPC / remote.mux protocol generation, so it deliberately names no DSH version here.",
   "type": "module",
   "engines": {
     "node": ">=22.13.0"
   },
   "scripts": {
     "start": "node src/bridge.js",
+    "doctor:macos": "node scripts/macos-doctor.mjs",
     "test:audit": "node scripts/test-audit.mjs",
     "test:token": "node scripts/test-token-economy.mjs && node scripts/test-reply-wait.mjs && node scripts/test-qq-model-view.mjs && node scripts/test-qq-preset-contract.mjs",
     "test:tokens": "node scripts/test-token-usage.mjs",
@@ -55,7 +56,6 @@
     "probe:settings": "node scripts/probe-020-settings.mjs",
     "probe:heartbeat": "node scripts/probe-snowluma-heartbeat.mjs",
     "scan:tool-names": "node scripts/scan-dsh-tool-names.mjs",
-    "postinstall": "node scripts/patch-snowluma-sdk.mjs",
     "privacy-scan": "node scripts/privacy-scan.mjs",
     "diagnose:acl": "node scripts/diagnose-acl.mjs",
     "harden-acl": "node scripts/harden-state-acl.mjs"
@@ -64,8 +64,6 @@
     "@deepseek-ai/dsh-host-apiproxy": "0.1.1-rc.2",
     "@deepseek-ai/schemastery": "^3.18.1",
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@snowluma/mcp": "^1.14.20",
-    "@snowluma/sdk": "^1.14.20",
     "js-yaml": "^4.3.2",
     "zod": "^4.4.3"
   }

@@ -37,61 +37,18 @@ const codeOf = (src) => src
   .replace(/\/\*[\s\S]*?\*\//g, '');
 const bridgeCode = codeOf(bridge);
 
-test('SnowLuma 客户端库不低于 bot_status 出现的版本（1.14.17）', () => {
-  // 低于这个版本订阅不到 bot_status：账号掉线/被顶号将没有任何信号。
-  // 只比较 minor.patch 数值，够用且不引入语义化版本库依赖。
-  const num = (v) => {
-    const m = /^[\^~]?(\d+)\.(\d+)\.(\d+)/.exec(String(v ?? ''));
-    return m ? Number(m[1]) * 1e6 + Number(m[2]) * 1e3 + Number(m[3]) : null;
-  };
-  const min = num('1.14.17');
-  for (const name of ['@snowluma/sdk', '@snowluma/mcp']) {
-    const declared = num(pkg.dependencies?.[name]);
-    assert.ok(declared !== null, `${name} 必须在 dependencies 里声明`);
-    assert.ok(
-      declared >= min,
-      `${name} 声明为 ${pkg.dependencies[name]}，低于 1.14.17 —— 那样订阅不到 bot_status（账号上下线事件），`
-      + '上游健康会少一个信号。',
-    );
-  }
+test('本地 OneBot 客户端不再依赖 @snowluma/*', () => {
+  assert.equal(pkg.dependencies?.['@snowluma/sdk'], undefined, '@snowluma/sdk 不应再出现在 dependencies');
+  assert.equal(pkg.dependencies?.['@snowluma/mcp'], undefined, '@snowluma/mcp 不应再出现在 dependencies');
+  assert.equal(pkg.scripts?.postinstall, undefined, '不再需要 patch-snowluma-sdk 的 postinstall');
+  assert.ok(fs.existsSync(path.join(ROOT, 'src', 'onebot-client.js')), '本地 OneBot 客户端文件应存在');
+  assert.match(bridgeCode, /from '\.\/onebot-client\.js'/, 'bridge 应接入本地 OneBot 客户端');
 });
 
-test('客户端库确实可被纯 Node ESM 解析（postinstall 补丁的成果）', async () => {
-  // 上游打包 bug：dist 内相对导入缺 .js 扩展名，纯 Node ESM 解析不了。补丁是让它可 import 的
-  // **唯一**东西，所以「能 import」本身就是补丁生效的证据（与安装顺序无关）。
-  const sdk = await import('@snowluma/sdk');
-  assert.equal(typeof sdk.SnowLumaWebSocketClient, 'function', 'SnowLumaWebSocketClient 应可导入');
-  assert.match(String(pkg.scripts?.postinstall ?? ''), /patch-snowluma-sdk/, 'postinstall 必须仍挂补丁脚本');
-
-  // 顺带报告 dist 里是否还有**未修**的相对导入。
-  // ⚠️ 这里刻意**只提示不断言**：补丁是就地把扩展名补上的，跑过一次之后自然就"没有需要修的了"，
-  //    所以"命中 0 个"既可能是上游修好了、也可能只是本机已经补过 —— 断言它会让这条测试
-  //    依赖安装顺序（第一版就是这么写错的，装完再跑必红）。
-  const dist = path.join(ROOT, 'node_modules', '@snowluma', 'sdk', 'dist');
-  let unresolved = 0;
-  const walk = (dir) => {
-    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-      const full = path.join(dir, e.name);
-      if (e.isDirectory()) { walk(full); continue; }
-      if (!full.endsWith('.js')) continue;
-      const src = fs.readFileSync(full, 'utf8');
-      for (const m of src.matchAll(/from\s+'(\.\.?\/[^']+)'/g)) {
-        const spec = m[1];
-        if (spec.endsWith('.js') || spec.endsWith('.json')) continue;
-        const t = path.resolve(path.dirname(full), spec);
-        if (fs.existsSync(t + '.js') || fs.existsSync(t + '.json')) unresolved += 1;
-      }
-    }
-  };
-  if (fs.existsSync(dist)) {
-    walk(dist);
-    console.log(unresolved === 0
-      ? '  ℹ️  dist 中没有未修的相对导入（补丁已生效，或上游已修好 —— 两种情况都不需要动作）'
-      : `  ⚠️  dist 中仍有 ${unresolved} 处未修的相对导入：postinstall 可能没跑到，请重跑 npm install`);
-    assert.equal(unresolved, 0, 'dist 里不应残留未修的相对导入（否则 postinstall 没生效）');
-  } else {
-    console.log('  ⏭  跳过 dist 扫描：@snowluma/sdk 未安装');
-  }
+test('本地 OneBot 客户端可被纯 Node ESM 解析', async () => {
+  const sdk = await import('../src/onebot-client.js');
+  assert.equal(typeof sdk.OneBotWebSocketClient, 'function', 'OneBotWebSocketClient 应可导入');
+  assert.equal(typeof sdk.text, 'function', 'text 消息构造器应可导入');
 });
 
 test('桥接订阅了「上游还活着」的证据（onEvent）', () => {

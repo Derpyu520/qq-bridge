@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SnowLumaWebSocketClient, text } from '@snowluma/sdk';
+import { OneBotWebSocketClient as SnowLumaWebSocketClient, text } from '../src/onebot-client.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const cfg = JSON.parse(fs.readFileSync(path.resolve(__dirname, '..', 'config.json'), 'utf8'));

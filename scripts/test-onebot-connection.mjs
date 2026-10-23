@@ -1,9 +1,9 @@
-// 一次性连接测试：用 @snowluma/sdk 连接 SnowLuma 的 OneBot WebSocket 网关，
+// 一次性连接测试：用内置 OneBot 客户端连接 SnowLuma/NapCat 的 OneBot WebSocket 网关，
 // 验证地址、端口、accessToken 是否正确。成功即打印 ✅ 并退出。
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SnowLumaWebSocketClient } from '@snowluma/sdk';
+import { OneBotWebSocketClient as SnowLumaWebSocketClient } from '../src/onebot-client.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const cfg = JSON.parse(fs.readFileSync(path.resolve(__dirname, '..', 'config.json'), 'utf8'));

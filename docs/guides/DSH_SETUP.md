@@ -21,7 +21,7 @@
    npm install
    ```
 
-   > `postinstall` 会自动修补 `@snowluma/sdk` 的 ESM 打包 bug。
+   > 依赖已内置 OneBot 11 客户端，不再需要 `postinstall` 补丁。
 
 3. **创建配置文件**：
 

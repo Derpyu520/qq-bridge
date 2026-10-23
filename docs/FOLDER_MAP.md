@@ -59,7 +59,7 @@ DSH/                         ← 工作区根（不是仓库根）
 | `diagnose-acl.mjs` | 只读盘点：列出仓库里所有被**切断 ACL 继承**的路径，分「有意收紧（`state/`、`config.json`）」与「非预期收紧」两类，并对后者打印恢复继承的命令。背景见 [guides/SECURITY_BASELINE.md](guides/SECURITY_BASELINE.md) §2.6：DSH 沙箱的写权限只靠继承下发能力 SID，切断继承 ⇒ 沙箱里写不进去。**必须在无沙箱终端跑**（沙箱禁止以管道 stdio 拉起 icacls） | 保留（`npm run diagnose:acl`） |
 | `dsh-modules.mjs` | 小工具：按路径加载 DSH 安装内的模块 | 保留 |
 | `check-onebot-status.mjs` | 手工排查：查 OneBot 连通性 | 保留（运维常用） |
-| `patch-*.mjs` | **补丁**（含 `postinstall` 的 `patch-snowluma-sdk.mjs`：修 `@snowluma/sdk` 的 ESM 打包 bug） | `patch-snowluma-sdk.mjs` **必须保留**（postinstall 依赖）；其余见第四节 |
+| `patch-*.mjs` | **补丁**（历史遗留；SnowLuma SDK 补丁已随依赖移除而删除） | 见第四节 |
 | `cleanup-*.mjs` | **清理一次性残留**（probe 会话/工作区、测试会话） | 见第四节 |
 | `fix-*.mjs` | **一次性修复**（针对某次运行产生的脏数据） | 见第四节 |
 | `diag-*.mjs` | **诊断**（如归档并清理日志） | 见第四节 |
@@ -74,7 +74,7 @@ DSH/                         ← 工作区根（不是仓库根）
 docs/
 ├── README.md     # 文档索引（每篇一句话 + 是否仍然有效）  ← 先看这个
 ├── FOLDER_MAP.md # 本文件
-├── guides/       # 面向使用者/运维：DSH_SETUP / DSH_020_ADAPTATION / SECURITY_BASELINE / TOKEN_USAGE_CONSOLE / CONSOLE-UI-TESTING / PRIVACY / PROJECT_GUIDE / VOICE
+├── guides/       # 面向使用者/运维：DSH_SETUP / DSH_020_ADAPTATION / MACOS_NAPCAT / SECURITY_BASELINE / TOKEN_USAGE_CONSOLE / CONSOLE-UI-TESTING / PRIVACY / PROJECT_GUIDE / VOICE
 ├── design/       # 设计与规划：GEN2_SIMULATION_PLAN / SOCIAL_MODE_PLAN / DSH_QQ_TOOLS_PLAN / 真人语感策略
 ├── research/     # 调研：SnowLuma功能调研 / 免打扰 / 表情包 / 本地模型选型
 ├── audits/       # 审查与优化报告（最新的全项目体检是 AUDIT_REPORT_2026-09-20）
@@ -115,13 +115,12 @@ docs/
 | `scripts/patch-web-mcp-timeout.mjs` | 给 DSH 的 web MCP 配置打超时补丁；属对**外部 DSH 安装**的一次性改动，重启/升级 DSH 后语义就变了 |
 | `scripts/probe-015.mjs` | **v0.2.0 已删除**：针对 DSH **0.1.5** 的探针，结论早已被 verifier 取代，且它走的是 0.1.5 的点号协议路径。同一用途改由 `scripts/probe-020-protocol.mjs`（`npm run probe:protocol`）承担 | 已删除 |
 | `scripts/probe-rpc-compat.mjs` / `probe-models.mjs` / `probe-workspace.mjs` / `probe-events.mjs` / `probe-tools.mjs` | 协议/能力探针：问完「DSH 现在长什么样」用处就小了。**v0.2.0 已修好**：它们的鉴权过去各自复制「从 guard 日志抓 launch token」，那条路在 DSH 0.1.7 起就死了（一律 401），现统一走 `probe-auth.mjs` 的离线铸造 Cookie；工作区也改到系统临时目录（`state/` 的 ACL 被收紧，沙箱里写不进去）。挂在 `npm run probe:*` 上，按需重跑 | 保留 |
-| `scripts/test-onebot-connection.mjs` / `test-mcp-*.mjs`（`test-mcp-exec` / `-host` / `-safe` / `-web-search`） | **不在** `test-audit.mjs` 的清单里，属手工排查脚本而非回归套件；功能上被 `check-onebot-status.mjs` / `test-audit-security-mcp.mjs` 覆盖 |
+| `scripts/test-onebot-connection.mjs` / `test-mcp-*.mjs`（`-host` / `-safe` / `-web-search`） | **不在** `test-audit.mjs` 的清单里，属手工排查脚本而非回归套件；功能上被 `check-onebot-status.mjs` / `test-audit-security-mcp.mjs` 覆盖 |
 
 处理建议（**没有执行**，等确认）：确认无用后整批移到一个不影响 `npm run test:audit` 的位置
 （例如 `scripts/legacy/`），或直接删除——它们都不在 `package.json` 脚本里，也没有被 `test-audit.mjs` 引用，
 移动不会影响任何自动化回归。反过来，**下面这些千万别当"过期脚本"清掉**：
 
-- `scripts/patch-snowluma-sdk.mjs`（`postinstall` 依赖，删了 `npm install` 就坏）
 - `scripts/test-audit.mjs` 清单里的每一个（完整清单见该文件 `tests[]` 数组）
 - `scripts/console-ui-*.json` / `console-ui-fixture.mjs` / `fixtures/`（控制台回归基线）
 - `scripts/audit-bridge-harness.mjs`、`scripts/dsh-modules.mjs`（被测试/工具引用）

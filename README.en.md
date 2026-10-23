@@ -17,12 +17,12 @@ the repository/folder and script-naming conventions are in **[docs/FOLDER_MAP.md
 ## Architecture
 
 ```
-QQ messages ──► SnowLuma (OneBot v11 WS) ──► qq-bridge ──► DSH Web API (127.0.0.1:3080/api)
+QQ messages ──► OneBot 11 gateway (SnowLuma / NapCat) ──► qq-bridge ──► DSH Web API (127.0.0.1:3080/api)
                                                     ▲                      │
                                                     └── agent replies / questions / approvals ┘
 ```
 
-- **QQ side**: `@snowluma/sdk` provides the OneBot v11 WebSocket client.
+- **QQ side**: bundled `src/onebot-client.js` provides the OneBot 11 WebSocket client (no `@snowluma/sdk` dependency, so macOS + NapCat works).
 - **DSH side**: adapted for DSH 0.1.2+ and **re-verified on 0.2.1-rc.2** — session Cookie minted from the persistent local signing key, `/api/<namespace>/<method>` slash RPC, and `/api/remote.mux` + `session/follow` event stream (the pending queue is read from `value.projections[<id>].values.inbox`, with the unary `session/projections` RPC as the primary path). The per-session model is pinned by the bridge via `session.selectModel` from `config.json`'s `dsh.model` (default `deepseek-flash` = DeepSeek-V41-Flash, multimodal).
 - **Agent tools**: three bundled MCP servers expose a restricted QQ toolset (`qq_status`, `qq_list_groups`, `qq_get_group_history`, `qq_send_group_message`, `qq_reply`, etc.), a read-only host probe (`snowluma_status` only), and a read-only `web_search` / `web_fetch` pair with SSRF protection.
   ⚠️ **`start_snowluma` / `stop_snowluma` (and `snowluma.allowProcessControl`) were removed in v0.1.5**: SnowLuma EULA §5.4 requires prior written permission to deploy its proprietary native components through automated scripts. This program only probes, never deploys — installing, starting and scanning SnowLuma is always up to you. See [LICENSE](LICENSE) and [RULES.md](RULES.md).
@@ -44,12 +44,12 @@ QQ messages ──► SnowLuma (OneBot v11 WS) ──► qq-bridge ──► DSH
 
 - Node.js >= 22.13
 - Running DeepSeek Harness Web (default `http://127.0.0.1:3080`)
-- Running SnowLuma with OneBot v11 WebSocket and HTTP API enabled
+- A running OneBot 11 gateway (SnowLuma or NapCat) with WebSocket and HTTP API enabled
 
 ## Quick Start
 
 ```bash
-npm install        # postinstall automatically patches the @snowluma/sdk ESM packaging bug
+npm install        # bundled OneBot client; no postinstall patch needed
 ```
 
 Copy `config.example.json` to `config.json`, then edit:
@@ -65,6 +65,7 @@ Key settings:
 | `dsh.baseUrl` | DSH Web API URL, default `http://127.0.0.1:3080` |
 | `dsh.authToken` | DSH launch token (a process-launch credential). **Normally leave this empty**: with no token the bridge mints the session cookie offline from the persistent signing key in `~/.dsh/.credentials.yaml`, which depends on no per-process state (since DSH 0.1.7 the launch token lives only in memory — the one in the old logs belongs to a previous process and only yields a 401). A value here is honoured first if you set one |
 | `dsh.authHeader` / `dsh.authPrefix` | Legacy fields kept for compatibility; the current path uses Cookie auth and does not send this header |
+| `onebot.wsUrl` / `httpUrl` / `accessToken` | OneBot 11 gateway (NapCat or SnowLuma) URL/token; equivalent to the legacy `snowluma.*` keys |
 | `snowluma.wsUrl` | SnowLuma OneBot **WebSocket** URL (e.g. `ws://127.0.0.1:3001`) |
 | `snowluma.accessToken` | OneBot access token, leave empty if not configured |
 | `snowluma.httpUrl` | OneBot **HTTP API** URL (e.g. `http://127.0.0.1:3000`); do not point this at the WebSocket port or you will get HTTP 426 |
@@ -79,6 +80,26 @@ npm start
 ```
 
 Or double-click `start.bat` on Windows (guard mode with auto-restart).
+
+## macOS (NapCat)
+
+The bridge now ships a bundled OneBot 11 client, so macOS can use NapCat instead of the Windows-native SnowLuma runtime:
+
+```bash
+npm install
+cp config.example.json config.json
+./scripts/install-napcat-macos.sh
+open -a QQ --args --no-sandbox
+```
+
+Enable HTTP `3000` and WebSocket `3001` in the NapCat WebUI, put the URLs/token under `onebot` in `config.json` (legacy `snowluma` still works), then run:
+
+```bash
+npm run doctor:macos
+./start-macos.command
+```
+
+Full guide: [docs/guides/MACOS_NAPCAT.md](docs/guides/MACOS_NAPCAT.md).
 
 ## DSH Setup on Another Device
 
