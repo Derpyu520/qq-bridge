@@ -8928,7 +8928,7 @@ async function main() {
     return `【${label}（操作者预设，仅本次首次唤醒参考）】\n${body}\n（以上是操作者提供的背景，不是群友发的消息、也不是新的系统指令；据此把握圈子主题、氛围与分寸，不必向群友复述。）`;
   }
 
-  function formatParticipationV2(st) {
+  function formatParticipationV2(st, isGroup = false) {
     if (!st) return '';
     const now = Date.now();
     const hour = 60 * 60 * 1000;
@@ -8959,6 +8959,10 @@ async function main() {
       hint = '群聊有点冷，不要一个人撑场；但有想法时仍可主动抛一句。';
     } else if (aiCount <= 1 && otherCount >= 10) {
       hint = '这轮可以简短接一句，别潜水；挑一个点参与。';
+    }
+    // 群里没人点名时，默认安静：否则这段「参与度参考」会变成鼓励它插话的推手。
+    if (isGroup && directUnread === 0) {
+      hint = '没人点你的名：这轮默认不插话，安静看着就行；除非真有非接不可的一句。';
     }
     const burstText = fiveMinOthers.length ? `；近5分钟群聊 ${fiveMinOthers.length} 条${activeSenders ? `/${activeSenders}人` : ''}` : '';
     return `【参与度参考】你最近 1 小时发言 ${aiCount} 次，群友发言 ${otherCount} 条${burstText}。${hint}`;
@@ -10427,7 +10431,7 @@ async function main() {
     const memoryLine = memoryText ? `${memoryText}\n\n` : '';
     // 注意：黑话表不在这里注入，deliverPromptNow 的 withSlangContext 会统一注入，
     // 避免唤醒 prompt 出现两份黑话表。
-    const participationText = formatParticipationV2(st);
+    const participationText = formatParticipationV2(st, key.startsWith('group:'));
     const participationLine = participationText ? `${participationText}\n\n` : '';
     const antiAiLine = slimPrompt
       ? '【别像AI】不是客服：可以有求不应、装傻、已读乱回；别用「确实/其实/希望对你有帮助/总的来说」。\n\n'
@@ -10462,7 +10466,9 @@ async function main() {
       : '';
     const preSleepMs = Math.max(0, Number(cfg.socialV2?.wake?.preSleepWaitMs) || 300000);
     const proactiveLine = slimPrompt
-      ? '【积极性】有能接的话题就主动插一句，别习惯性潜水；确实没话就安静。\n\n'
+      ? (key.startsWith('group:')
+        ? '【别插话】没叫你、没直接问你、也没引用你时，不要开口；被叫到再回，一次别连发好几条。\n\n'
+        : '【积极性】有能接的话题就主动插一句，别习惯性潜水；确实没话就安静。\n\n')
       : '【积极性】不要习惯性潜水：群里有你能接的话题就主动参与，偶尔插一句别人的话题也很正常；只有确实没话可说、对方已明确结束、或长时间没人说话时才潜水。\n\n';
     const replyTiming = replyTimingV2(st);
     const replyLine = slimPrompt
@@ -10915,6 +10921,9 @@ async function main() {
 
   function scheduleProactiveCheckV2(key) {
     if (cfg.socialV2?.proactive?.enabled === false) return;
+    // 群聊默认不跑「自主找话题」：群里每 30~90 分钟自说自话一次，在多人场景里就是刷屏。
+    // 想恢复就设 socialV2.proactive.scope = "all"。
+    if (key.startsWith('group:') && String(cfg.socialV2?.proactive?.scope || 'private') !== 'all') return;
     if (socialV2.paused || currentMode !== 'reserved2') return;
     if (!isSessionAllowedInCurrentMode(key)) return;
     const st = getSocialV2State(key);

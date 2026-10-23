@@ -245,6 +245,7 @@
       "autoReadback": true
     },
     "proactive": {
+      "scope": "private",
       "enabled": true,
       "checkIntervalMinMs": 1800000,
       "checkIntervalMaxMs": 5400000,
