@@ -26,6 +26,10 @@ export const name = 'qq-tool-restrict'
 
 export const inject = ['tools']
 
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 /**
  * 本地执行 / 文件访问 / 进程控制类工具：仿真会话**不得**拥有。
  *
@@ -211,6 +215,8 @@ export const SAFE_TOOL_NAMES = Object.freeze([
   'mcp__snowluma__qq_list_voices',
   // QQ 空间说说（公开内容；默认关闭，开启后仍由桥接做审计与限频）
   'mcp__snowluma__qq_send_qzone_msg',
+  // 写日记（唯一能写本机文件的工具；路径写死在 diary/，默认关闭）
+  'mcp__snowluma__qq_write_diary',
   // —— mcp-snowluma-host：只读探活 ——
   'mcp__snowluma-host__snowluma_status',
   // —— mcp-web-search-safe：只读联网 ——
@@ -223,6 +229,35 @@ export const SAFE_TOOL_NAMES = Object.freeze([
 
 // 无害模型侧工具（单独导出供测试断言"它们不在 restrict 名单里"）。
 export const SAFE_EXACT = Object.freeze(['ask_user_question', 'todo_write'])
+
+// 白名单文件：与内置 SAFE_TOOL_NAMES 同源，但**改动即时生效**（按 mtime 缓存 10 秒）。
+//
+// 为什么需要这个文件：本模块由 DSH 在被 agent 装载时 import，Node 的 ESM 模块缓存是
+// 进程级的 —— 改代码后即使新建会话，拿到的仍是旧模块（实测：加 qq_write_diary 后
+// 新会话依然报「不在白名单」）。而每次加一个工具都重启 DSH 太难受。
+// 于是把「名单」从代码里挪出来：guard 每次调用前读一次文件（10 秒缓存），
+// 改 JSON 即生效，不需要重启 DSH。文件缺失/损坏时回退到内置名单（fail-closed 方向：
+// 内置名单是当前已知安全集合，不会因为文件被删就把所有工具放行）。
+const ALLOWLIST_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'tool-allowlist.json')
+let allowlistCache = { at: 0, mtimeMs: -1, names: null }
+function loadSafeTools() {
+  const now = Date.now()
+  if (allowlistCache.names && now - allowlistCache.at < 10_000) return allowlistCache.names
+  try {
+    const stat = fs.statSync(ALLOWLIST_FILE)
+    if (allowlistCache.names && allowlistCache.mtimeMs === stat.mtimeMs) {
+      allowlistCache.at = now
+      return allowlistCache.names
+    }
+    const doc = JSON.parse(fs.readFileSync(ALLOWLIST_FILE, 'utf8'))
+    const names = Array.isArray(doc?.tools) ? doc.tools.filter((n) => typeof n === 'string' && n) : []
+    if (names.length) {
+      allowlistCache = { at: now, mtimeMs: stat.mtimeMs, names: new Set(names) }
+      return allowlistCache.names
+    }
+  } catch {}
+  return new Set(SAFE_TOOL_NAMES)
+}
 
 export function apply(ctx) {
   // 1) 把已知危险全局工具从 schema 隐藏（restrict 只影响继承的全局层，
@@ -245,12 +280,11 @@ export function apply(ctx) {
   }
 
   // 2) 执行期白名单：任何不在允许范围内的工具调用都会被拒绝。
-  //    显式全名（见 SAFE_TOOL_NAMES）：MCP server 新增工具不会自动获得权限。
-  const safe = new Set(SAFE_TOOL_NAMES)
+  //    显式全名（见 SAFE_TOOL_NAMES / tool-allowlist.json）：MCP server 新增工具不会自动获得权限。
   ctx.tools.guard((exec) => {
     const name = exec?.name
     if (typeof name !== 'string' || name.length === 0) return '工具名无效，已拒绝'
-    if (safe.has(name)) return
+    if (loadSafeTools().has(name)) return
     return `工具 "${name}" 不在 QQ 桥接白名单内，已拒绝（仅允许 ${SAFE_TOOL_NAMES.length} 个显式登记的工具）`
   })
 }

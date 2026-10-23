@@ -141,7 +141,8 @@
       "collectSticker": true,
       "getSelfImage": true,
       "sendVoice": false,
-      "sendQzone": false
+      "sendQzone": false,
+      "writeDiary": false
     },
     "wake": {
       "defaultMode": "diving",
@@ -262,6 +263,12 @@
       "minGapMs": 1800000,
       "ugcRight": 1,
       "maxChars": 1000
+    },
+    "diary": {
+      "enabled": false,
+      "time": "22:00",
+      "key": "",
+      "maxChars": 2000
     }
   },
   "webSearch": {

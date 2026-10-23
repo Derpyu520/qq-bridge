@@ -832,7 +832,9 @@ function loadConfig() {
         collectSticker: true,
         getSelfImage: true,
         // QQ 空间说说：默认关闭（公开内容，需显式开启）。
-        sendQzone: false
+        sendQzone: false,
+        // 写日记（唯一能写本机文件的工具）：默认关闭，需显式开启。
+        writeDiary: false
       },
       wake: {
         defaultMode: 'diving',
@@ -930,6 +932,15 @@ function loadConfig() {
         minGapMs: 1800000,    // 两条之间至少 30 分钟
         ugcRight: 1,          // 1=公开 4=好友 16=部分好友 64=仅自己 128=部分不可见
         maxChars: 1000
+      },
+      // 每天定时写日记（写进 qq-bridge/diary/日记.txt，由 AI 调 qq_write_diary 落笔）。
+      // 注意：日记工具是**唯一**能写本机文件的能力，所以路径写死在 diary/ 下，
+      // 内容同样过敏感信息审计（不许把路径/凭据写进日记）。
+      diary: {
+        enabled: false,       // 默认关闭；开启后才会定时唤醒
+        time: '22:00',        // 每天几点（本机时区）
+        key: '',              // 写日记的会话 key，留空 = private:<ownerQQ>
+        maxChars: 2000        // 单篇字数上限
       },
       ...(file.socialV2 ?? {})
     }
@@ -1330,6 +1341,8 @@ function listLoopbackListeningPorts() {
  * @returns {Promise<string>} 找到的 baseUrl；找不到返回 ''。
  */
 async function discoverDshBase(configured, { rounds = 8, intervalMs = 10000, skipPorts = [] } = {}) {
+  // 离线回归里禁止探测：审计 harness 用 vm 求值本文件，没有真实 DSH、也不该等 70 秒。
+  if (process.env.QQ_BRIDGE_NO_DISCOVERY === '1') return '';
   // 这些端口是我们自己的服务或 SnowLuma，扫到了也不用探（由调用方传入，避免依赖 cfg 作用域）。
   const skip = new Set([3100, 3000, 3001, 5099, ...skipPorts.map(Number)]);
   for (let round = 0; round < rounds; round += 1) {
@@ -3031,6 +3044,7 @@ async function main() {
             scheduleProactiveCheckV2(key);
           }
           log('桥接模式已确定为 reserved2，恢复有限睡眠定时器');
+          scheduleDiaryV2();
         }
         try { await flushQueue(); } catch (error) { log('补投队列异常:', error?.message ?? error); }
         // DSH 恢复后，把离线期间攒下的黑话学习窗口补触发
@@ -3051,6 +3065,7 @@ async function main() {
             scheduleProactiveCheckV2(key);
           }
           log('桥接模式已进入二代仿真模式，重建有限睡眠定时器');
+          scheduleDiaryV2();
         }
         log(`桥接模式已切换为: ${currentMode}`);
         lastMode = currentMode;
@@ -5570,6 +5585,46 @@ async function main() {
             const idx = QZONE_POST_TIMES.indexOf(now);
             if (idx >= 0) QZONE_POST_TIMES.splice(idx, 1);
             sendJson({ ok: false, error: error?.message ?? String(error) }, 500);
+          }
+          return;
+        }
+        // ── 写日记（reserved2；AI 唯一能写本机文件的通道） ─────────────────────
+        //
+        // 边界：agent token + 会话 key + reserved2 + 工具开关；**路径写死**在 diary/ 下，
+        // 内容过敏感信息审计（日记里也不该出现本机路径/凭据/会话令牌）。
+        if (req.method === 'POST' && url.pathname === '/api/socialV2/diary') {
+          const body = await readBody();
+          const key = String(body.key ?? '').trim();
+          const agentToken = String(req.headers['x-agent-token'] ?? '').trim();
+          if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
+          if (currentMode !== 'reserved2') { sendJson({ ok: false, error: '该接口仅 reserved2 模式可用' }, 403); return; }
+          if (!agentToken) { sendJson({ ok: false, error: '必须携带 agent token' }, 403); return; }
+          if (!agentTokenOk(key, agentToken)) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          if (!v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
+          if (!v2ToolEnabled('writeDiary')) { sendJson({ ok: false, error: '工具未启用：qq_write_diary' }, 403); return; }
+          const content = String(body.content ?? '').trim();
+          const maxChars = Math.max(1, Number(cfg.socialV2?.diary?.maxChars) || 2000);
+          if (!content) { sendJson({ ok: false, error: 'content 不能为空' }, 400); return; }
+          if (content.length > maxChars) { sendJson({ ok: false, error: `日记不能超过 ${maxChars} 字` }, 400); return; }
+          if (auditOutboundBatch([content], KNOWN_AGENT_TOKENS).sensitive) {
+            appendActivity(`${key} [diary] 日记被拦截（疑似敏感信息）`);
+            sendJson({ ok: false, error: '日记内容含敏感信息（路径/凭据/令牌），已阻止写入' }, 403);
+            return;
+          }
+          const now = new Date();
+          const pad = (n) => String(n).padStart(2, '0');
+          const dateLabel = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+          const timeLabel = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+          const file = path.join(ROOT, 'diary', '日记.txt');
+          try {
+            fs.mkdirSync(path.dirname(file), { recursive: true });
+            const entry = `\n===== ${dateLabel} ${timeLabel} =====\n${content}\n`;
+            fs.appendFileSync(file, entry, 'utf8');
+            log(`[diary] 已写入 ${content.length} 字 -> ${path.relative(ROOT, file)}`);
+            appendActivity(`${key} [diary] 写入日记 ${content.length} 字`);
+            sendJson({ ok: true, written: content.length, date: dateLabel, time: timeLabel, file: 'diary/日记.txt' });
+          } catch (error) {
+            sendJson({ ok: false, error: `写入日记失败：${error?.message ?? error}` }, 500);
           }
           return;
         }
@@ -10339,6 +10394,9 @@ async function main() {
     if (reason === 'proactiveCheck') {
       return `${base}【主动机会】${key}\n原因：群里已经安静了一段时间，这是一次你可以主动冒泡的机会。\n优先主动开个话题、追问上次没聊完的事、分享一个刚想到的想法；如果一时想不到，可以用 mcp__web-search-safe__web_search 搜一下当前热点/时事/网络热梗，再结合记忆里的群友兴趣挑一个自然角度。只要内容自然，就大胆开口；如果实在没话想说，再安静收尾（qq_mark_read 或 qq_set_wake_config）。`;
     }
+    if (reason === 'diary') {
+      return `${base}【写日记】${key}\n原因：到了每天写日记的时间。\n请调用 qq_write_diary，把今天真正发生的事和你的感受写成一篇日记（第一人称，1~3 段，300~800 字左右）：可以写群聊里有意思的片段、你自己想到的事、今天的情绪；不要编造没发生的事，不要把别人的隐私、群聊原文、本机路径或凭据写进去。写完跟管理员说一句日记写好了，然后按平常的收尾流程（沉睡前观察 → 设置下次唤醒）结束。`;
+    }
     if (reason === 'poke') {
       return `${base}【唤醒】${key}\n原因：有人拍了一拍（可能拍了你，也可能拍了别人）。\n先看未读/最近消息里的 [拍一拍] 事件：如果是拍你，可以自然回应一句，也可以用 qq_send_poke 回一个拍一拍；如果是拍别人，觉得有趣也可以接梗。除了回应，偶尔也可以主动戳一下正在聊的人/熟人，像真人手贱/提醒/逗一下，但别频繁。不想接就安静收尾（qq_mark_read 或 qq_set_wake_config）。`;
     }
@@ -10769,11 +10827,56 @@ async function main() {
 
   function clearAllSocialV2Timers() {
     for (const key of socialV2.conversations.keys()) clearSocialV2Timers(key);
+    if (diaryTimer) { clearTimeout(diaryTimer); diaryTimer = null; }
     pendingWakeKeys.clear();
     wakeConfigUpdatedKeys.clear();
     markReadCalledKeys.clear();
     wakeConfigMissCount.clear();
     messageMediaStore.clear();
+  }
+
+  // ── 每天定时写日记 ──────────────────────────────────────────────────────────
+  // 到点后用既有的唤醒调度把 AI 叫起来（reason='diary'），由它调 qq_write_diary 落笔。
+  // 只排一个 setTimeout：触发后立刻排下一天，避免多实例/多次设置导致重复唤醒。
+  let diaryTimer = null;
+  function scheduleDiaryV2() {
+    const d = cfg.socialV2?.diary ?? {};
+    if (d.enabled !== true) {
+      if (diaryTimer) { clearTimeout(diaryTimer); diaryTimer = null; }
+      return;
+    }
+    const m = /^(\d{1,2}):(\d{2})$/.exec(String(d.time ?? '22:00').trim());
+    const hh = m ? Number(m[1]) : NaN;
+    const mm = m ? Number(m[2]) : NaN;
+    if (!m || hh > 23 || mm > 59) {
+      log(`[diary] socialV2.diary.time 格式无效（${d.time}），应为 HH:MM；本次不排程`);
+      return;
+    }
+    const now = new Date();
+    const next = new Date(now);
+    next.setHours(hh, mm, 0, 0);
+    if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1);
+    const targetKey = String(d.key ?? '').trim() || `private:${String(cfg.ownerQQ ?? '')}`;
+    if (diaryTimer) clearTimeout(diaryTimer);
+    diaryTimer = setTimeout(async () => {
+      diaryTimer = null;
+      try {
+        if (cfg.ownerQQ == null && !String(d.key ?? '').trim()) {
+          log('[diary] 未配置 ownerQQ 或 socialV2.diary.key，跳过本次日记');
+        } else if (currentMode !== 'reserved2') {
+          log(`[diary] 当前模式 ${currentMode} 不是 reserved2，跳过本次日记`);
+        } else {
+          log(`[diary] 到点写日记（${targetKey}），安排唤醒`);
+          scheduleWakeV2(targetKey, 'diary');
+        }
+      } catch (error) {
+        log('日记唤醒失败:', error?.message ?? error);
+      } finally {
+        scheduleDiaryV2(); // 排下一天
+      }
+    }, next.getTime() - now.getTime());
+    diaryTimer.unref?.();
+    log(`[diary] 已排程：每天 ${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')} 写日记（下次 ${next.toLocaleString()}，目标 ${targetKey}）`);
   }
 
   function drainPromptQueue(key, errorMsg) {

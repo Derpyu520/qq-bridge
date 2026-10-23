@@ -331,6 +331,8 @@ const TOOL_CONFIG_FLAGS = {
   qq_list_voices: 'sendVoice',
   // QQ 空间说说：默认关闭（公开内容），开启后 AI 可自主发，但由桥接限频 + 内容审计。
   qq_send_qzone_msg: 'sendQzone',
+  // 写日记（唯一能写本机文件的工具）：路径写死在 diary/ 下，默认关闭。
+  qq_write_diary: 'writeDiary',
   // 下面这些曾经漏登记。漏一个不是"多注册一个工具"那么轻：桥接那边按 `v2ToolEnabled(flag)`
   // 在**调用期**一律 403，而这里不登记就等于"控制台显示已关闭、模型每次请求仍收到它的完整
   // 描述与参数 schema，然后调用它、再拿到 403"——既白烧 token（本文件开头 176 行起就是为省这份
@@ -1397,6 +1399,31 @@ server.tool(
       return { content: [{ type: 'text', text: `已发布说说：${data?.chars ?? content.length} 字（可见范围 ${data?.ugcRight ?? 1}）` }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `发布说说失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+// 写日记：AI 唯一能写本机文件的通道。路径由桥接写死（qq-bridge/diary/日记.txt），
+// 内容过敏感信息审计；默认关闭，由 socialV2.tools.writeDiary 控制是否注册。
+server.tool(
+  'qq_write_diary',
+  '把一篇日记写进本机的日记文件（桥接会按日期分节追加，记事本可直接打开）。**这是写真实文件**，只在被要求写日记、或到了每日日记时间时调用；一次写一篇，第一人称，写今天真实发生的事和感受，不要编造，不要把群聊原文、别人的隐私、本机路径或凭据写进去。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    content: z.string().describe('日记正文（纯文本，1~3 段，建议 300~800 字，不要 Markdown）'),
+  },
+  async ({ key, token, content }) => {
+    try {
+      const data = await agentApi('/api/socialV2/diary', {
+        method: 'POST',
+        body: JSON.stringify({ key, content }),
+        headers: { 'x-agent-token': token },
+        timeoutMs: 30000,
+      });
+      return { content: [{ type: 'text', text: `日记已写入：${data?.written ?? content.length} 字（${data?.date ?? ''}，文件 ${data?.file ?? 'diary/日记.txt'}）` }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `写日记失败：${error?.message ?? error}` }], isError: true };
     }
   }
 );
