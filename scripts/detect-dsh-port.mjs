@@ -92,7 +92,7 @@ for (const port of candidates) {
 
 if (!picked) {
   log('⚠️ 没找到可用的 DSH 端口（DSH 可能没在运行），保持原 baseUrl');
-  process.exit(0);
+  process.exit(process.argv.includes('--require') ? 1 : 0);
 }
 
 const next = `http://127.0.0.1:${picked}`;
