@@ -10458,10 +10458,11 @@ async function main() {
       if (hint) styleLine = `${hint}\n\n`;
     }
     const stickerCfg = cfg.socialV2?.sticker ?? {};
+    // 瘦身版表情块的策略提示：只留「什么时候发、多久一次、别怎么发」，比 full 版短一半。
+    const stickerSlimHint = '【发表情】接梗/吐槽/自嘲/无语/晚安/别人发图回一张时，优先配一张；大约每 2~3 轮一次，玩梗热闹时可以更密；别连发同一张，别和文字挤在同一个气泡里。';
     const stickerLine = stickerCfg.enabled !== false && stickerCfg.includeInPrompt !== false
       ? (slimPrompt
-        // 瘦身版：只给图库清单（4 张），使用策略交给 preset 里的【表情包】规则。
-        ? `${buildStickerContext(stickerEntries, Math.min(4, Number(stickerCfg.promptMaxStickers) || 4))}\n\n`
+        ? `${stickerSlimHint}\n${buildStickerContext(stickerEntries, Math.min(6, Number(stickerCfg.promptMaxStickers) || 6))}\n\n`
         : `${buildStickerStrategyHint()}\n${buildStickerContext(stickerEntries, stickerCfg.promptMaxStickers ?? 8)}\n\n`)
       : '';
     const preSleepMs = Math.max(0, Number(cfg.socialV2?.wake?.preSleepWaitMs) || 300000);
