@@ -8333,7 +8333,9 @@ async function main() {
   // - 观察期间没人说话 → 可以设置唤醒并沉睡（preSleepWaitSatisfiedAt）。
   // - 观察期间有人发了新消息 → 等待工具会把新消息带回给 AI（preSleepWaitObservedAt）；
   //   AI 看过新消息后若判断没必要参与，可以直接沉睡；若参与了（发送/拍一拍），则下次想睡需重新观察。
-  const EXPLICIT_END_RE = /(?:不聊了|不说了|晚安|睡了|先睡了|下了|先下了|拜拜|再见|走了|先走|撤了|去忙|忙了|下次再聊|下次聊|散了吧|结束|就到这|先这样|就这样吧|886|88|睡觉了|下班了|去洗澡|去吃饭了)/i;
+  // 「潜水」本身也是明确的收尾指令：群友直接说“你潜水吧”时，
+  // 不该再让他干等 5 分钟沉睡前观察（工具会报“还不能立刻设置潜水”）。
+  const EXPLICIT_END_RE = /(?:潜水|不聊了|不说了|晚安|睡了|先睡了|下了|先下了|拜拜|再见|走了|先走|撤了|去忙|忙了|下次再聊|下次聊|散了吧|结束|就到这|先这样|就这样吧|886|88|睡觉了|下班了|去洗澡|去吃饭了)/i;
 
   function hasExplicitEndV2(st) {
     const recent = Array.isArray(st?.recentMessages) ? st.recentMessages : [];
