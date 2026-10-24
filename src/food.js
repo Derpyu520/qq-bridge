@@ -79,9 +79,10 @@ export function createFoodPicker({ stateDir, log = () => {} }) {
 
   /**
    * 抽一份推荐。
-   * @returns {{ name, kind:'dish'|'meme', meal, label, alternates: string[], memeRatio: number }}
+   * asker 用来区分「谁问的」：不同人各问各的，只有同一个人重复问才算「你又问」。
+   * @returns {{ name, kind:'dish'|'meme', meal, label, alternates: string[], memeRatio: number, asker: string|null, timesToday: number }}
    */
-  function pick({ meal, memeRatio = 0.3, now = new Date() } = {}) {
+  function pick({ meal, memeRatio = 0.3, now = new Date(), asker = '' } = {}) {
     const m = POOLS[meal] ? meal : guessMeal(now);
     const pool = POOLS[m];
     const hist = loadHistory();
@@ -101,11 +102,17 @@ export function createFoodPicker({ stateDir, log = () => {} }) {
       alternates.push(altPool.splice(Math.floor(Math.random() * altPool.length), 1)[0]);
     }
 
-    hist.push({ name, kind: useMeme ? 'meme' : 'dish', meal: m, at: new Date().toISOString() });
+    const who = String(asker || '').trim();
+    const today = new Date(now).toDateString();
+    const timesToday = who
+      ? hist.filter((x) => x && x.asker === who && new Date(x.at || 0).toDateString() === today).length + 1
+      : 0;
+
+    hist.push({ name, kind: useMeme ? 'meme' : 'dish', meal: m, at: new Date().toISOString(), asker: who || null });
     if (hist.length > 30) hist.splice(0, hist.length - 30);
     saveHistory();
 
-    return { name, kind: useMeme ? 'meme' : 'dish', meal: m, label: MEAL_LABEL[m], alternates, memeRatio: ratio };
+    return { name, kind: useMeme ? 'meme' : 'dish', meal: m, label: MEAL_LABEL[m], alternates, memeRatio: ratio, asker: who || null, timesToday };
   }
 
   return { pick, guessMeal, pools: POOLS };

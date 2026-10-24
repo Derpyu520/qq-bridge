@@ -6932,15 +6932,25 @@ async function main() {
             const foodCfg = cfg.socialV2?.food ?? {};
             const mode = String(body.mode ?? 'auto');
             const ratio = mode === 'meme' ? 0.95 : mode === 'normal' ? 0 : (Number(foodCfg.memeRatio) ?? 0.3);
-            const r = foodPicker.pick({ meal: body.meal, memeRatio: ratio });
-            sendJson({
-              ok: true,
-              key,
-              ...r,
-              hint: r.kind === 'meme'
-                ? '这是个梗，回一句就够（比如「就吃这个」/「行啊你」），别解释梗，也别硬科普。'
-                : '直接把这个说给她/他，别列营养、别加「建议」；想加一句就加一句很短的。'
-            });
+            // 谁问的：优先用模型传的，没传就取最近一条别人发的消息的发送者。
+            // 不区分提问人的后果：不同群友各问一次，它却当成同一个人反复问，就会说「一天问我三回了」。
+            let asker = String(body.asker ?? '').trim();
+            if (!asker) {
+              const st = getSocialV2State(key);
+              const pool = [...(Array.isArray(st.unread) ? st.unread : []), ...(Array.isArray(st.recentMessages) ? st.recentMessages : [])];
+              const last = [...pool].reverse().find((m) => m && !m.isSelf && String(m.text || m.plain || '').trim());
+              if (last) asker = String(last.sender || last.user_id || '').trim();
+            }
+            const r = foodPicker.pick({ meal: body.meal, memeRatio: ratio, asker });
+            const repeat = Number(r.timesToday) >= 2;
+            const hint = r.kind === 'meme'
+              ? (repeat
+                ? `这是个梗，照发。同一个人（${r.asker}）今天第 ${r.timesToday} 次问，可以顺口损一句；但别把别人的提问算到他头上。`
+                : '这是个梗，回一句就够（比如「就吃这个」/「行啊你」），别解释梗，也别硬科普。')
+              : (repeat
+                ? `同一个人（${r.asker}）今天第 ${r.timesToday} 次问，可以直接说；想吐槽一句也行，但别把别人的提问算进来。`
+                : `这是${r.asker ? ` ${r.asker} ` : '今天'}第一次问，别说什么「又」「三回」；直接报名字。`);
+            sendJson({ ok: true, key, ...r, repeat, hint });
           } catch (error) {
             sendJson({ ok: false, error: String(error?.message ?? error).slice(0, 200) }, 500);
           }

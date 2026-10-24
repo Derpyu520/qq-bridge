@@ -1390,13 +1390,14 @@ server.tool(
     key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
     token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
     meal: z.enum(['auto', 'breakfast', 'lunch', 'dinner', 'lateNight', 'any']).optional().describe('哪一顿；不填按当前时间猜'),
-    mode: z.enum(['auto', 'normal', 'meme']).optional().describe('auto=按配置概率出梗；normal=只推正经吃的；meme=基本必出梗')
+    mode: z.enum(['auto', 'normal', 'meme']).optional().describe('auto=按配置概率出梗；normal=只推正经吃的；meme=基本必出梗'),
+    asker: z.string().optional().describe('提问的人（昵称或 QQ 号）；不填会自动取最近一条别人发的消息的发送者')
   },
-  async ({ key, token, meal, mode }) => {
+  async ({ key, token, meal, mode, asker }) => {
     try {
       const data = await agentApi('/api/socialV2/food', {
         method: 'POST',
-        body: JSON.stringify({ key, meal: meal && meal !== 'auto' ? meal : '', mode: mode || 'auto' }),
+        body: JSON.stringify({ key, meal: meal && meal !== 'auto' ? meal : '', mode: mode || 'auto', asker: asker || '' }),
         headers: { 'x-agent-token': token }
       });
       return { content: [{ type: 'text', text: serializeModelData(data) }] };
