@@ -59,6 +59,7 @@ import { createWebStickerStore } from './sticker-web.js';
 import { buildStyleHint } from './style-sample.js';
 import { createBiliClient } from './bilibili.js';
 import { createSelfEvolve } from './self-evolve.js';
+import { createFoodPicker } from './food.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -1401,6 +1402,7 @@ async function main() {
   const innerLife = createInnerLife({ stateDir: STATE_DIR, getConfig: () => cfg, log });
   const imageClient = createNovelAIClient({ getConfig: () => cfg, stateDir: STATE_DIR, log });
   const webStickers = createWebStickerStore({ stateDir: STATE_DIR, log });
+  const foodPicker = createFoodPicker({ stateDir: STATE_DIR, log });
   const biliClient = createBiliClient({ getConfig: () => cfg, stateDir: STATE_DIR, log });
   // 自我调整：风格备忘由她自己写、下轮唤醒能看到；人设建议必须人工批准才写进角色卡。
   const selfEvolve = createSelfEvolve({
@@ -6915,6 +6917,32 @@ async function main() {
             sendJson({ ok: true, key, ...r });
           } catch (error) {
             sendJson({ ok: false, error: String(error?.message ?? error).slice(0, 240) }, 502);
+          }
+          return;
+        }
+        // 食物推荐：有人问「吃啥」时抽一个（偶尔是梗）
+        if (url.pathname === '/api/socialV2/food' && req.method === 'POST') {
+          const body = await readBody();
+          const key = String(body.key ?? '').trim();
+          if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
+          if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2ToolEnabled('food')) { sendJson({ ok: false, error: '工具未启用：qq_food' }, 403); return; }
+          try {
+            const foodCfg = cfg.socialV2?.food ?? {};
+            const mode = String(body.mode ?? 'auto');
+            const ratio = mode === 'meme' ? 0.95 : mode === 'normal' ? 0 : (Number(foodCfg.memeRatio) ?? 0.3);
+            const r = foodPicker.pick({ meal: body.meal, memeRatio: ratio });
+            sendJson({
+              ok: true,
+              key,
+              ...r,
+              hint: r.kind === 'meme'
+                ? '这是个梗，回一句就够（比如「就吃这个」/「行啊你」），别解释梗，也别硬科普。'
+                : '直接把这个说给她/他，别列营养、别加「建议」；想加一句就加一句很短的。'
+            });
+          } catch (error) {
+            sendJson({ ok: false, error: String(error?.message ?? error).slice(0, 200) }, 500);
           }
           return;
         }

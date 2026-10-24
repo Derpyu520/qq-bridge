@@ -347,6 +347,7 @@ const TOOL_CONFIG_FLAGS = {
   qq_style_note: 'selfEvolve',
   qq_style_notes: 'selfEvolve',
   qq_role_proposal: 'selfEvolve',
+  qq_food: 'food',
   qq_slang_query: 'slangQuery',
   qq_slang_submit: 'slangSubmit',
   qq_send_voice: 'sendVoice',
@@ -1377,6 +1378,30 @@ server.tool(
       return { content: [{ type: 'text', text: serializeModelData(data) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `画图失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+// ── 食物推荐 ────────────────────────────────────────────────────────────────
+server.tool(
+  'qq_food',
+  '有人问「早上/中午/晚上吃啥」时抽一个吃的。返回一个推荐（偶尔是梗），直接说出来就行，别列营养、别加「建议」。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    meal: z.enum(['auto', 'breakfast', 'lunch', 'dinner', 'lateNight', 'any']).optional().describe('哪一顿；不填按当前时间猜'),
+    mode: z.enum(['auto', 'normal', 'meme']).optional().describe('auto=按配置概率出梗；normal=只推正经吃的；meme=基本必出梗')
+  },
+  async ({ key, token, meal, mode }) => {
+    try {
+      const data = await agentApi('/api/socialV2/food', {
+        method: 'POST',
+        body: JSON.stringify({ key, meal: meal && meal !== 'auto' ? meal : '', mode: mode || 'auto' }),
+        headers: { 'x-agent-token': token }
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `推荐吃啥失败：${error?.message ?? error}` }], isError: true };
     }
   }
 );

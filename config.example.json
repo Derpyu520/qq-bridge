@@ -149,7 +149,8 @@
       "imageGen": true,
       "webSticker": true,
       "bili": true,
-      "selfEvolve": true
+      "selfEvolve": true,
+      "food": true
     },
     "wake": {
       "defaultMode": "diving",
@@ -302,6 +303,9 @@
       "enabled": true,
       "maxStyleNotes": 20,
       "proposalMinIntervalDays": 7
+    },
+    "food": {
+      "memeRatio": 0.3
     }
   },
   "webSearch": {
