@@ -248,9 +248,9 @@
       "unreadLimit": 30,
       "contextWindow": 20,
       "inlineWakeMessages": true,
-      "wakeMessageLimit": 12,
+      "wakeMessageLimit": 20,
       "wakeRecentLimit": 4,
-      "wakeMaxChars": 6000
+      "wakeMaxChars": 8000
     },
     "initialPromptMaxChars": 2000,
     "media": {
