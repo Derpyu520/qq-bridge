@@ -230,7 +230,18 @@
       "defaultVolume": 1,
       "loudness": "normal",
       "ffmpegPath": "",
-      "autoReadback": true
+      "autoReadback": true,
+      "tts": {
+        "enabled": false,
+        "provider": "edge",
+        "voice": "zh-CN-XiaoxiaoNeural",
+        "rate": "-5%",
+        "pitch": "+0Hz",
+        "maxChars": 80,
+        "timeoutMs": 30000,
+        "cacheDir": "audio/.tts-cache",
+        "maxCacheFiles": 120
+      }
     },
     "proactive": {
       "enabled": true,

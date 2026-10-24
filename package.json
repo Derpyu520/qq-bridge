@@ -29,6 +29,7 @@
     "test-slang": "node scripts/test-slang-learn.mjs",
     "test-stickers": "node scripts/test-stickers.mjs",
     "test-voice": "node scripts/test-voice.mjs",
+    "test:tts": "node scripts/test-tts.mjs",
     "test-voice:gui": "node scripts/test-voice-gui.mjs",
     "test-voice:system": "node scripts/test-voice-system.mjs",
     "test-encoding": "node scripts/test-encoding.mjs",
@@ -61,6 +62,7 @@
     "harden-acl": "node scripts/harden-state-acl.mjs"
   },
   "dependencies": {
+    "@andresaya/edge-tts": "^1.9.1",
     "@deepseek-ai/dsh-host-apiproxy": "0.1.1-rc.2",
     "@deepseek-ai/schemastery": "^3.18.1",
     "@modelcontextprotocol/sdk": "^1.30.0",

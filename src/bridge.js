@@ -24,6 +24,7 @@ import { compactModelMessage, describeAge } from './qq-model-view.js';
 import { safeFetchBuffer, looksLikeImageBuffer } from './safe-fetch.js';
 import { normalizeImageForModel } from './media-normalize.js';
 import { AUDIO_EXTS, cleanupTemp, describeAudio, formatBytes, formatDuration, inspectAudio, listAudioFiles, parseTargetKey, processAudioVolume, resolveAudioProcessing, resolveAudioSource, safeJoinLibrary } from './send-voice-lib.js';
+import { normalizeTtsConfig, prepareTtsText, synthesizeTts } from './tts.js';
 import { discoverSnowLumaConnection, persistSnowLumaEndpoint, persistToken } from './snowluma-conn.js';
 import { hardenDir, manualDirCommand } from './state-acl.mjs';
 import { extractForwardIds, forwardIdFromData, sanitizeForwardId, formatForwardResponse } from './forward.js';
@@ -1565,7 +1566,8 @@ async function main() {
       defaultVolume: Number(v.defaultVolume) > 0 ? Number(v.defaultVolume) : 1,
       loudness: v.loudness || 'normal',
       ffmpegPath: process.env.FFMPEG_PATH || v.ffmpegPath || null,
-      autoReadback: v.autoReadback !== false
+      autoReadback: v.autoReadback !== false,
+      tts: normalizeTtsConfig(v.tts ?? {}, ROOT)
     };
   }
 
@@ -1871,17 +1873,31 @@ async function main() {
    * AI 通道入口：解析引用 → 限流 → 发送 → 记账 → 回读校验。
    * 返回 { messageId, detail, verified, readback }。
    */
-  async function sendVoiceForV2(key, voiceRef, { label = '', verify = null, readback = false, audio = null } = {}) {
+  async function sendVoiceForV2(key, voiceRef, { label = '', verify = null, readback = false, audio = null, text = null } = {}) {
     const vc = voiceCfg();
     if (!vc.enabled) throw new Error('语音功能已关闭（socialV2.voice.enabled=false）');
-    const resolved = resolveVoicePathForV2(voiceRef);
+    const rawText = text == null ? '' : String(text).trim();
+    const useTts = rawText.length > 0;
+    let ttsInfo = null;
+    let resolved;
+    // 额度先查，避免先烧一次 TTS 再被频率上限拒绝。
+    voiceBudgetCheck(key, vc);
+    if (useTts) {
+      if (!vc.tts.enabled) throw new Error('TTS 未开启（socialV2.voice.tts.enabled=false）');
+      const clean = prepareTtsText(rawText, vc.tts.maxChars);
+      const r = await synthesizeTts(clean, vc.tts, { root: ROOT });
+      resolved = { path: r.path, via: 'tts-edge' };
+      ttsInfo = { text: clean, voice: r.voice, cached: r.cached === true, bytes: r.bytes };
+      if (!label) label = `TTS：${clean.slice(0, 20)}`;
+    } else {
+      resolved = resolveVoicePathForV2(voiceRef);
+    }
     // 音量参数校验前置（AI 传错时给出可读错误，而不是让 ffmpeg 报奇怪的错）
     if (audio) resolveAudioProcessing({ volume: audio.volume ?? vc.defaultVolume, normalize: audio.normalize === true, loudness: audio.loudness ?? vc.loudness });
-    voiceBudgetCheck(key, vc);
     const sent = await sendVoiceV2(key, resolved.path, { guard: true, audit: true, audio });
     voiceBudgetCommit(key);
     recordVoiceSentV2(key, sent, label);
-    log(`[voice] ${key} 已发送语音 ${path.basename(resolved.path)} (${sent.detail}, messageId=${sent.messageId ?? '?'})`);
+    log(`[voice] ${key} 已发送语音 ${path.basename(resolved.path)} (${sent.detail}, messageId=${sent.messageId ?? '?'}${useTts ? ', tts' : ''})`);
     appendActivity(`${key} [voice] 发送语音 ${path.basename(resolved.path)} (${sent.detail})`);
     let readbackText = null;
     const wantReadback = readback === true;
@@ -1906,7 +1922,7 @@ async function main() {
     // 默认做「回读到 record 段」的落地校验；转写按需（自己发的语音通常没有转写）。
     const wantVerify = verify === true || (verify !== false && vc.autoReadback);
     const verification = wantVerify ? await verifyVoiceMessageSent(sent.messageId) : null;
-    return { ...sent, key, file: resolved.path, via: resolved.via, verification, readback: readbackText };
+    return { ...sent, key, file: resolved.path, via: resolved.via, verification, readback: readbackText, tts: ttsInfo };
   }
 
   // 发送一个收藏表情（按 emoji_id/url/md5 解析，发图片段）。
@@ -5682,10 +5698,16 @@ async function main() {
             sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403);
             return;
           }
+          const voiceRef = body.voice ?? body.file ?? '';
+          const ttsText = typeof body.text === 'string' ? body.text : '';
+          if (!String(voiceRef).trim() && !ttsText.trim()) {
+            sendJson({ ok: false, error: 'voice 或 text 至少给一个' }, 400);
+            return;
+          }
           // 只要名字（解析）不要内容（预览）：dry-run 也必须经过与真发相同的解析与校验。
-          let resolved;
+          let resolved = null;
           try {
-            resolved = resolveVoicePathForV2(body.voice ?? body.file ?? '');
+            if (!ttsText.trim()) resolved = resolveVoicePathForV2(voiceRef);
           } catch (error) {
             sendJson({ ok: false, error: error?.message ?? String(error) }, 400);
             return;
@@ -5693,12 +5715,19 @@ async function main() {
           try {
             voiceBudgetCheck(key, voice);
             if (body.dryRun === true) {
-              const probe = await inspectAudio(resolved.path, { maxBytes: voice.maxBytes, maxSeconds: voice.maxSeconds });
+              let file = resolved?.path;
+              if (!file) {
+                if (!voice.tts.enabled) { sendJson({ ok: false, error: 'TTS 未开启（socialV2.voice.tts.enabled=false）' }, 400); return; }
+                const clean = prepareTtsText(ttsText, voice.tts.maxChars);
+                file = (await synthesizeTts(clean, voice.tts, { root: ROOT })).path;
+              }
+              const probe = await inspectAudio(file, { maxBytes: voice.maxBytes, maxSeconds: voice.maxSeconds });
               if (!probe.ok) { sendJson({ ok: false, error: probe.error }, 400); return; }
-              sendJson({ ok: true, dryRun: true, key, file: resolved.path, detail: describeAudio(probe) });
+              sendJson({ ok: true, dryRun: true, key, file: path.basename(file), detail: describeAudio(probe), tts: !resolved });
               return;
             }
-            const sent = await sendVoiceForV2(key, body.voice ?? body.file, {
+            const sent = await sendVoiceForV2(key, voiceRef, {
+              text: ttsText.trim() ? ttsText : null,
               label: body.label ? String(body.label).slice(0, 100) : '',
               verify: body.verify,
               readback: body.readback === true,
@@ -5717,6 +5746,7 @@ async function main() {
               // verified=true 表示已用 get_msg 回读到这条消息的 record 段（"真的发出去了"的硬证据）
               verified: sent.verification?.confirmed === true,
               readback: sent.readback,
+              tts: sent.tts ?? null,
               warnings: sent.warnings
             });
           } catch (error) {
@@ -5912,12 +5942,15 @@ async function main() {
               dir: agentCall ? undefined : voice.dir,
               count: items.length,
               voices: items,
+              tts: voice.tts.enabled
+                ? { enabled: true, provider: voice.tts.provider, voice: voice.tts.voice, maxChars: voice.tts.maxChars }
+                : { enabled: false },
               limits: { maxSeconds: voice.maxSeconds, maxBytes: voice.maxBytes, maxPerMinute: voice.maxPerMinute, maxPerHour: voice.maxPerHour },
               // ⚠️ 提示语里也不能出现绝对路径：AI 通道下同样要脱敏（dir 字段已经抑制了，
               // 但这里的模板字符串曾无条件插值 voice.dir —— 等于从旁边的字段又漏出去一次）。
               hint: items.length
-                ? '用 qq_send_voice 传 name 即可把其中一个当语音发出去'
-                : (agentCall ? '语音库为空：请让管理员先把音频放进语音库' : `语音库为空：把音频文件放进 ${voice.dir} 后重试`)
+                ? '用 qq_send_voice 传 name 即可把其中一个当语音发出去；也可以传 text 用 TTS 现场合成'
+                : (agentCall ? '语音库为空；可以直接用 qq_send_voice 传 text 让 TTS 现场合成' : `语音库为空：把音频文件放进 ${voice.dir} 后重试`)
             });
           } catch (error) {
             sendJson({ ok: false, error: `读取语音库失败：${error?.message ?? error}` }, 500);

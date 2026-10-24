@@ -8,6 +8,7 @@ config.json
 *.log
 *.bak
 *.bak-*
+.dsh-ops-*.lock
 
 # Local development / planning / research docs (not part of public project)
 /PROJECT_GUIDE.md

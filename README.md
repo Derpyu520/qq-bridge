@@ -358,8 +358,8 @@ SnowLuma 同一个账号的 **HTTP token（默认 3000 端口）与 WebSocket to
 
 - agent 回复在回合结束时一次性发送（不做流式逐字转发）；回复超过 `socialV2.send.maxMessageChars`（默认 500 字，可用 `social.maxReplyChars` 调整）自动按句读/URL 边界分段
 - 图片及部分表情可以通过安全下载接入多模态模型；语音/视频以及无法取得图片字节的消息仍使用占位文本
-- **发**语音是支持的（独立工具的图形界面 / 命令行 / AI 工具，见 `docs/README.md` 的文档索引）；但**收**到的语音目前只显示占位文本，不做语音转写入上下文
-- **AI 发语音默认关闭**（`socialV2.voice.enabled` 与 `tools.sendVoice` 默认 `false`）：先把音频放进 `audio/`，再到控制台打开开关；你自己发语音不受这个开关影响
+- **发**语音是支持的（语音库 / 命令行 / 图形界面 / AI 工具），AI 既可以发 `audio/` 里的音频，也可以直接传 `text` 让 Edge TTS 现场合成；但**收**到的语音目前只显示占位文本，不做语音转写入上下文
+- **AI 发语音默认关闭**（`socialV2.voice.enabled` 与 `tools.sendVoice` 默认 `false`）：当前本机已开启语音库和 TTS；其他部署要先把音频放进 `audio/` 或配置 `socialV2.voice.tts`，再到控制台打开开关；你自己发语音不受这个开关影响
 - agent 的 Markdown 回复会转成纯文本（链接保留 `文字 (url)` 形式）
 - `@snowluma/sdk` 的 npm 发布版存在 ESM 扩展名 bug，本仓库通过 postinstall 补丁修复（见 `scripts/patch-snowluma-sdk.mjs`）
 
