@@ -109,6 +109,7 @@
     "enabled": true,
     "autoReplyCheckMs": 30000,
     "agentPreset": "qq-chat-v2",
+    "bindHomeSession": "owner",
     "provideRecommendations": true,
     "tools": {
       "getPrompt": true,

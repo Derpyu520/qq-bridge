@@ -2960,7 +2960,7 @@ async function refreshDshModel() {
       el.value = option;
       const info = labels[option] || {};
       const isDefault = option === (r.providerDefault || r.default);
-      el.textContent = `${option}${isDefault ? '（默认）' : ''}`;
+      el.textContent = `${info.name || option}${isDefault ? '（默认）' : ''}`;
       if (info.description) el.title = info.description;
       select.appendChild(el);
     }
