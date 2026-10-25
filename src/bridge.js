@@ -8229,6 +8229,11 @@ async function main() {
   const messageMediaStore = new Map();
   // 二代会话见过的 forward id（有界，避免 recentMessages 滚动淘汰后无法读取刚见过的转发）
   const seenForwardIds = new Map(); // key -> Set<string>
+  // 已入库的 QQ messageId（全局有界 LRU）。用于把重复投递的同一条消息变成幂等操作
+  // —— 上游健康检查 / WS 重连 / 网关重试都会重复投递，不去重会让 unread 虚高、
+  // 已读水位多走一格（水位只增不减，走多了就再也回不来）。
+  const seenMessageIds = new Set();
+  const MAX_SEEN_MESSAGE_IDS = 500;
 
   // 归一化“指定群友发言唤醒”名单：
   // - 只保留正整数 QQ 号（字符串形式），拒绝 null/对象/“null”/非法字符等脏数据；
@@ -9797,6 +9802,28 @@ async function main() {
     const st = getSocialV2State(key);
     const recentLimit = Number(cfg.socialV2?.context?.recentLimit) || 100;
     const unreadLimit = Number(cfg.socialV2?.context?.unreadLimit) || 30;
+    // ── messageId 去重（幂等入库）────────────────────────────────────────────
+    //
+    // 上游健康检查、WS 重连、OneBot 网关重试都可能把**同一条**消息再投一次。
+    // 不去重时同一条会被入库两次：模型看到重复消息，`unread` 长度虚高，
+    // 已读水位（`lastUnreadSeq`）多走一格 —— 而水位一旦被推高就再也回不去，
+    // 表现为"这条消息明明看过却算未读"或反之。
+    //
+    // 只对**有 messageId** 的消息去重（拍一拍等合成的条目 messageId 为 null，
+    // 它们本来就可能连续多条内容相同，不能按内容去重）。
+    // 用有界 LRU（保留最近 500 个 id）而不是无限 Set，避免长期运行无界增长。
+    const msgId = messageId != null && String(messageId) !== '' ? String(messageId) : null;
+    if (msgId && seenMessageIds.has(msgId)) return;
+    if (msgId) {
+      seenMessageIds.add(msgId);
+      if (seenMessageIds.size > MAX_SEEN_MESSAGE_IDS) {
+        // Set 迭代顺序即插入顺序：删掉最老的若干个。
+        for (const old of seenMessageIds) {
+          seenMessageIds.delete(old);
+          if (seenMessageIds.size <= MAX_SEEN_MESSAGE_IDS) break;
+        }
+      }
+    }
     // 存储层的归一化**不能只留 kind/file/url/faceId**：reserved2 的图片/表情工具
     // （findMessageMedia → fetchOneBotImage / fetchMediaData）只从这里的产物取字段。
     // 丢了 emojiId/subType，fetchOneBotImage 的 isSticker 判定为假 ⇒ 市场/收藏表情会先走
@@ -9832,7 +9859,7 @@ async function main() {
     }
     const msg = {
       seq: (st.lastUnreadSeq || 0) + 1,
-      messageId: messageId != null ? String(messageId) : null,
+      messageId: msgId,
       sender,
       userId: userId != null ? String(userId) : null,
       text: truncateText(String(textContent), 200),
@@ -11227,9 +11254,67 @@ async function main() {
   }
 
   // 二代拍一拍（notify/poke）事件处理：写入消息流并按需唤醒。
+  // ── 撤回事件（group_recall / friend_recall）──────────────────────────────────
+  //
+  // 上游只挂了 `notify`（拍一拍），**完全没有**撤回分支。后果：
+  //
+  //   ① 被撤回的消息仍然留在 recentMessages / unread 里，模型还能读到它 ——
+  //      "撤回"在用户认知里是"这句话不算数了"，但在模型上下文里它照旧生效；
+  //   ② 模型可能引用一条**已经不存在**的消息（引用/看图/复述都会指向空气）；
+  //   ③ 群友可以"发敏感内容 → 撤回"来规避，而桥接这边什么都没发生。
+  //
+  // 这里把撤回落到存储层：命中 messageId 的条目替换成占位（保留 seq/时间，不删条目
+  // —— 删掉会让 seq 出现空洞，而已读水位是按 seq 走的）。同时清掉派生缓存
+  // （引用解析缓存 / 媒体缓存 / 转发 id / 黑话窗口），否则它们还会把原文吐出来。
+  function handleRecallNotice(event) {
+    const type = event?.notice_type;
+    if (type !== 'group_recall' && type !== 'friend_recall') return false;
+    const groupId = event?.group_id ?? event?.groupId ?? null;
+    const key = groupId != null ? convKey('group', String(groupId)) : convKey('private', String(event?.user_id ?? ''));
+    const canonical = canonicalV2Key(key);
+    const messageId = event?.message_id != null ? String(event.message_id) : '';
+    if (!canonical || !messageId) return false;
+    const st = socialV2.conversations.get(canonical);
+    if (!st) return false;
+
+    const originals = [...(st.recentMessages || []), ...(st.unread || [])]
+      .filter((m) => m && String(m.messageId ?? '') === messageId);
+    if (!originals.length) return false;
+
+    // 占位：保留 seq 与时间（水位与排序都依赖它们），正文换成明确标记。
+    const placeholder = (m) => ({
+      ...m,
+      text: '[该消息已被撤回]',
+      plain: '[该消息已被撤回]',
+      tail: '',
+      media: [],
+      hasMedia: false,
+      forwardIds: [],
+      hasForward: false,
+      recalled: true
+    });
+    for (const field of ['recentMessages', 'unread']) {
+      st[field] = (st[field] || []).map((m) => (String(m?.messageId ?? '') === messageId ? placeholder(m) : m));
+    }
+    // 派生缓存必须一起清，否则它们还会把原文吐回去。
+    for (const cached of replyInfoCache.keys()) {
+      if (String(cached).startsWith(`${canonical}:`)) replyInfoCache.delete(cached);
+    }
+    const media = messageMediaStore.get(canonical);
+    if (media) {
+      media.delete(messageId);
+      for (const m of originals) if (m.seq != null) media.delete(String(m.seq));
+    }
+    for (const m of originals) {
+      for (const fid of m.forwardIds || []) seenForwardIds.get(canonical)?.delete(String(fid));
+    }
+    saveSocialV2State();
+    log(`已处理撤回：${canonical} messageId=${messageId}`);
+    return true;
+  }
+
   async function handlePokeNotice(event) {
-    if (!event || event.sub_type !== 'poke') return;
-    const selfId = event.self_id;
+    if (!event || event.sub_type !== 'poke') return;    const selfId = event.self_id;
     const groupId = event.group_id ?? event.groupId ?? null;
     const senderIdRaw = event.sender_id ?? event.user_id ?? event.sender?.user_id ?? null;
     const targetIdRaw = event.target_id ?? event.targetId ?? null;
@@ -11832,6 +11917,18 @@ async function main() {
   bot.onNotice('notify', async (event) => {
     try { await handlePokeNotice(event); } catch (error) { log('处理拍一拍事件出错:', error?.message ?? error); }
   });
+  // 撤回事件走独立的 notice_type（group_recall / friend_recall），不是 notify 的 sub_type。
+  for (const noticeType of ['group_recall', 'friend_recall']) {
+    try {
+      bot.onNotice(noticeType, async (event) => {
+        try { handleRecallNotice({ ...event, notice_type: noticeType }); }
+        catch (error) { log('处理撤回事件出错:', error?.message ?? error); }
+      });
+    } catch (error) {
+      // 不同 OneBot 实现的订阅方法可能不同；注册失败不影响主链路。
+      log(`（撤回事件订阅不可用 ${noticeType}：${error?.message ?? error}）`);
+    }
+  }
 
   // ── 上游健康：任何事件包都算「SnowLuma 还活着」，心跳还额外带接收链路健康度 ──
   // 用 onEvent 挂一个**旁路**订阅（不影响主链路）：
