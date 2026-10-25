@@ -98,6 +98,42 @@ await test('R1 无令牌智能体调用：closed-agent 可发送/探测，v2 面
   } finally { await h.close(); }
 });
 
+// ── R25. QQ 号与管理员身份默认不给 agent ─────────────────────────────────────
+//
+// `userId`（QQ 号）与 `isOwner`（谁是管理员）都是**标识性信息**：模型拿到之后既能
+// 把它们写进别的会话，也能在群里报出来。而 agent 真正用到的场景很窄（主要是 atUserId
+// 点名，那可以用群名片对应）。默认不给，需要时显式打开；控制台不受影响。
+await test('R25 active-members 对 agent 隐藏 userId/isOwner，控制台仍可见', async () => {
+  const h = await bridgeHarness({
+    config: {
+      ownerQQ: 123, allow: { private: ['123'], groups: ['456'] },
+      agentPreset: 'qq-chat-v2', socialV2: { enabled: true, tools: { getActiveMembers: true } }
+    }
+  });
+  try {
+    h.setMode('reserved2');
+    h.setSelfIdentity('樰', '10002');
+    const st = h.getSocialV2State('group:456');
+    h.appendSocialV2Message('group:456', '小明', 'x', 'x', false, false, '1', [], '999');
+    h.appendSocialV2Message('group:456', '管理员甲', 'y', 'y', true, true, '2', [], '123');
+
+    await withServer(h, async (port) => {
+      const asAgent = await call(port, '/api/socialV2/active-members?key=group:456', {
+        headers: { 'x-agent-token': st.agentToken }
+      });
+      assert.equal(asAgent.status, 200);
+      assert.equal(String(asAgent.body).includes('userId'), false, 'agent 视角不得出现 userId');
+      assert.equal(String(asAgent.body).includes('isOwner'), false, 'agent 视角不得出现 isOwner');
+      assert.ok(String(asAgent.body).includes('小明'), '群名片仍应保留（点名要用）');
+
+      const asConsole = await call(port, '/api/socialV2/active-members?key=group:456');
+      assert.equal(asConsole.status, 200);
+      assert.ok(String(asConsole.body).includes('userId'), '控制台必须仍能看到 userId（操作者本就需要）');
+      assert.ok(String(asConsole.body).includes('isOwner'), '控制台必须仍能看到 isOwner');
+    });
+  } finally { await h.close(); }
+});
+
 // ── R2. 分条发送失败：错误必须可读，且预占额度要回滚 ─────────────────────────
 await test('R2 send-burst 失败路径不再抛 ReferenceError，并回滚发送额度', async () => {
   const h = await bridgeHarness({

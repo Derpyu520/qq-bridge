@@ -3164,6 +3164,28 @@ async function main() {
     };
     // 二代会话工具必须仍命中当前模式的白名单/准入；避免白名单移除后旧 agentToken 继续读状态。
     const v2SessionAllowed = isSessionAllowedInCurrentMode;
+
+    /**
+     * 隐私分级：agent 调用时默认剥掉标识性字段（QQ 号、管理员身份）。
+     *
+     * 为什么：`userId` / `isOwner` 是**标识性信息** —— 模型拿到之后既能把它们写进别的
+     * 会话，也能在群里报出来；而 agent 真正用到的场景很窄（主要是 `atUserId` 点名，
+     * 那可以用群名片对应）。默认不给，需要时由 `socialV2.privacy.exposeUserId = true`
+     * 显式打开；控制台（非 agent 调用）不受影响 —— 操作者本来就能看到这些。
+     *
+     * 递归处理：这些字段可能出现在嵌套结构里（members[].userId、消息详情里的 sender 等）。
+     */
+    const agentMemberView = (value, agentCall) => {
+      if (!agentCall || cfg.socialV2?.privacy?.exposeUserId === true) return value;
+      if (Array.isArray(value)) return value.map((item) => agentMemberView(item, true));
+      if (!value || typeof value !== 'object') return value;
+      return Object.fromEntries(
+        Object.entries(value)
+          .filter(([name]) => !['userId', 'user_id', 'isOwner'].includes(name))
+          .map(([name, child]) => [name, agentMemberView(child, true)])
+      );
+    };
+
     const server = http.createServer(async (req, res) => {
       let url;
       try { url = new URL(req.url ?? '/', `http://127.0.0.1:${port}`); }
@@ -6572,7 +6594,17 @@ async function main() {
             map.set(key2, cur);
           }
           const members = [...map.values()].sort((a, b) => b.count - a.count || b.lastTime - a.lastTime).slice(0, limit);
-          sendJson({ ok: true, key, members });
+          // ── 隐私分级：QQ 号与管理员身份默认不给 agent ────────────────────────
+          //
+          // `userId`（QQ 号）与 `isOwner`（谁是管理员）都是**标识性信息**：模型拿到之后
+          // 既能把它们写进别的会话（见表情备注/黑话那条跨会话信息流），也能在群里
+          // 报出来。而 agent 用这两个字段的场景其实很窄 —— 主要就是 `atUserId` 点名，
+          // 那个可以直接用 `sender`（群名片）让模型自己对应。
+          //
+          // 因此默认只返回群名片；确实需要（例如要让模型按 QQ 号点名）时由
+          // `socialV2.privacy.exposeUserId = true` 显式打开。
+          // 控制台（无 x-agent-token）不受影响 —— 操作者本来就能看到这些。
+          sendJson({ ok: true, key, members: agentMemberView(members, !!req.headers['x-agent-token']) });
           return;
         }
         // ── 群成员列表（v2 读工具；替代只有 closed-agent 才能用的旧只读工具）────────
