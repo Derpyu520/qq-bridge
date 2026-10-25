@@ -1755,11 +1755,11 @@ async function main() {
     let resolveSend;
     let rejectSend;
     const sendPromise = new Promise((resolve, reject) => { resolveSend = resolve; rejectSend = reject; });
-    sendChain = sendChain.then(async () => {
+    sendChain = sendChainFor(key).then(async () => {
       try {
         if (assertSendAllowed) assertSendAllowed();
-        // 语音条比图片大、要过一次 SILK 转码，给 60s 预算（文本/图片共用同一 sendChain，
-        // 所以这条语音发完之前后面的文本会自然排队，不会插队到语音前面）。
+        // 语音条比图片大、要过一次 SILK 转码，给 60s 预算（与文本/图片共用**同一会话**的
+        // 发送链，所以这条语音发完之前，本会话后面的文本会自然排队，不会插队到语音前面）。
         const httpUrl = String(cfg.snowluma?.httpUrl || 'http://127.0.0.1:3000').replace(/\/+$/, '');
         const action = kind === 'private' ? 'send_private_msg' : 'send_group_msg';
         const params = kind === 'private'
@@ -1802,6 +1802,7 @@ async function main() {
     } finally {
       // 音量处理产物是一次性的：发完（或失败）就删，别把 temp 撑大
       cleanupTemp(sendPath, processed.converted);
+      rememberSendChain(key, sendChain);
     }
   }
 
@@ -1945,14 +1946,14 @@ async function main() {
     const action = kind === 'private' ? 'send_private_msg' : 'send_group_msg';
     const params = kind === 'private' ? { user_id: Number(id), message: segments } : { group_id: Number(id), message: segments };
     const httpUrl = String(cfg.snowluma?.httpUrl || 'http://127.0.0.1:3000').replace(/\/+$/, '');
-    // 与文本发送共用 sendChain，保证“先文字后表情”的真人顺序不被并发工具调用打乱。
+    // 与文本发送共用**同一会话**的发送链，保证“先文字后表情”的真人顺序不被并发工具调用打乱。
     let sendResolve;
     let sendReject;
     const sendResult = new Promise((resolve, reject) => {
       sendResolve = resolve;
       sendReject = reject;
     });
-    sendChain = sendChain.then(async () => {
+    sendChain = sendChainFor(key).then(async () => {
       try {
         // 真人发表情前通常会有短暂停顿，避免“文字刚发完表情立刻跟上”的机械感。
         await sleep(randInt(800, 2000));
@@ -1976,6 +1977,7 @@ async function main() {
         sendReject(error);
       }
     });
+    rememberSendChain(key, sendChain);
     const data = await sendResult;
     // 更新本地使用统计
     const updated = markStickerUsed(stickerEntries, entry.id, 'sticker');
@@ -7206,7 +7208,32 @@ async function main() {
   const pending = new Map(); // key -> { kind, rpcId, sessionId, ... }
 
   // QQ 发送队列（顺序发送 + 间隔，避免触发频率限制）
-  let sendChain = Promise.resolve();
+  //
+  // ── 为什么按会话分链（而不是全局一条链）─────────────────────────────────────
+  //
+  // 原来这里是模块级唯一一条 `let sendChain = Promise.resolve()`，所有会话共用。
+  // 于是 A 群连发 6 条（条间还有 sendDelayMs 的随机间隔）时，B 群的一条消息要排在
+  // 它后面等着 —— 实测 B 群被阻塞约 7.3 秒。三个后果：
+  //
+  //   ① 跨会话串行：活跃群的刷屏会把其它群/私聊的回复一起拖慢；
+  //   ② 时序侧信道：观察"我的消息多久被回"可以推断另一个会话正在刷屏（而攻击者
+  //      本来不该知道别的会话的存在）；
+  //   ③ 与"按会话隔离"的整体设计不一致 —— 会话状态、令牌、水位都是 per-key 的，
+  //      唯独发送队列是全局的。
+  //
+  // 需要保序的只有**同一个会话内部**：`sendToQQ` 的"先文字后表情"、`sendBurst` 的
+  // 条间间隔，都是同一 key 内的顺序要求。跨 key 没有任何顺序语义，不需要串。
+  const sendChains = new Map();
+  const sendChainKey = (key) => String(key);
+  const sendChainFor = (key) => sendChains.get(sendChainKey(key)) ?? Promise.resolve();
+  /** 记回该会话的链尾；链跑完后若没有新的追加就把条目删掉（避免 Map 无界增长）。 */
+  function rememberSendChain(key, chain) {
+    const canonical = sendChainKey(key);
+    sendChains.set(canonical, chain);
+    const cleanup = () => { if (sendChains.get(canonical) === chain) sendChains.delete(canonical); };
+    chain.then(cleanup, cleanup);
+    return chain;
+  }
   function redactKnownTokensOnly(text) {
     let s = String(text ?? '');
     for (const token of KNOWN_AGENT_TOKENS) {
@@ -7221,6 +7248,7 @@ async function main() {
   const lastSendFailed = new Map(); // key -> true（下一次成功即清除）
 
   function sendToQQ(key, msg) {
+    let sendChain = sendChainFor(key);
     const assertSendAllowed = captureSendGuard(key);
     const safeMsg = redactKnownTokensOnly(msg);
     const [kind, id] = key.split(':');
@@ -7239,7 +7267,7 @@ async function main() {
         })
         .then(() => sleep(cfg.sendDelayMs));
     }
-    return sendChain;
+    return rememberSendChain(key, sendChain);
   }
 
   /** 上一批发往该会话的消息是否全部成功。 */
@@ -7397,9 +7425,10 @@ async function main() {
     return { main: main.filter(Boolean), followUp: null };
   }
 
-  // 分条发送：与 sendToQQ 共用同一 sendChain，严格顺序；条间随机间隔，
+  // 分条发送：与本会话的 sendToQQ 共用同一条发送链，严格顺序；条间随机间隔，
   // 有概率使用长间隔（错落感）；最后一条后不再 sleep。
   function sendBurstToQQ(key, messages, socialCfgOrMin, maybeMax) {
+    let sendChain = sendChainFor(key);
     const assertSendAllowed = captureSendGuard(key);
     const [kind, id] = key.split(':');
     let min, max, longProb = 0, longMin = 0, longMax = 0;
@@ -7439,7 +7468,7 @@ async function main() {
         sendChain = sendChain.then(() => sleep(delay));
       }
     }
-    return sendChain.then(() => sent);
+    return rememberSendChain(key, sendChain).then(() => sent);
   }
 
 
@@ -7991,6 +8020,7 @@ async function main() {
   }
 
   function sendMessagesV2(key, messages, delays, replyToMessageId, atUserId = null) {
+    let sendChain = sendChainFor(key);
     const assertSendAllowed = captureSendGuard(key);
     const [kind, id] = key.split(':');
     const sent = [];
@@ -8014,7 +8044,7 @@ async function main() {
         sendChain = sendChain.then(() => sleep(d));
       }
     }
-    return sendChain.then(() => {
+    return rememberSendChain(key, sendChain).then(() => {
       if (failed.length > 0) {
         const err = new Error(`QQ 发送失败 ${failed.length}/${messages.length} 条：${failed[0]?.message ?? '未知错误'}`);
         err.sent = sent.slice();
