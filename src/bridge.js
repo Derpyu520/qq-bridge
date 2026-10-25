@@ -22,6 +22,7 @@ import { SENSITIVE_RE, auditOutboundBatch } from './sensitive.js';
 import { looksLikeUnfinished } from './v2-wait.js';
 import { compactModelMessage } from './qq-model-view.js';
 import { safeFetchBuffer, looksLikeImageBuffer } from './safe-fetch.js';
+import { shrinkImageBuffer } from './image-shrink.js';
 import { AUDIO_EXTS, cleanupTemp, describeAudio, formatBytes, formatDuration, inspectAudio, listAudioFiles, parseTargetKey, processAudioVolume, resolveAudioProcessing, resolveAudioSource, safeJoinLibrary } from './send-voice-lib.js';
 import { discoverSnowLumaConnection, persistSnowLumaEndpoint, persistToken } from './snowluma-conn.js';
 import { hardenDir, manualDirCommand } from './state-acl.mjs';
@@ -8036,15 +8037,25 @@ async function main() {
           ...(media.subType ? { subType: String(media.subType) } : {})
         };
         if (img?.buffer) {
-          if (totalBytes + img.buffer.length > MAX_MEDIA_BYTES) {
+          // 模型对图片有体积预算，QQ 原图常常 8~12MB —— 直接给会被 DSH 换成占位符
+          // （表现就是「读图报错」）。超过阈值先缩到 1600px / JPEG，再按总量校验。
+          let preparedBuffer = img.buffer;
+          let preparedMime = img.mimeType || 'image/jpeg';
+          const shrunk = shrinkImageBuffer(preparedBuffer);
+          if (shrunk) {
+            log(`[media] ${noun}过大（${Math.round(preparedBuffer.length / 1024)}KB），已压缩到 ${Math.round(shrunk.buffer.length / 1024)}KB`);
+            preparedBuffer = shrunk.buffer;
+            preparedMime = shrunk.mimeType;
+          }
+          if (totalBytes + preparedBuffer.length > MAX_MEDIA_BYTES) {
             out.push({ ...base, text: `（${noun}总大小超限，已跳过）` });
             continue;
           }
-          totalBytes += img.buffer.length;
+          totalBytes += preparedBuffer.length;
           out.push({
             ...base,
-            mimeType: img.mimeType || 'image/jpeg',
-            data: img.buffer.toString('base64'),
+            mimeType: preparedMime,
+            data: preparedBuffer.toString('base64'),
             text: ''
           });
         } else {
