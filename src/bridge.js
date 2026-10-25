@@ -585,6 +585,35 @@ function normalizeReasoningEffort(value) {
 
 // 敏感文本脱敏：把 SENSITIVE_RE 命中的片段替换为 ***，供日志/反馈/活动记录写入前使用。
 // SENSITIVE_RE 未带 g 标志，这里动态补 g 以替换所有命中片段。
+//
+// ── 为什么还要片段匹配（不只是整串）────────────────────────────────────────
+//
+// 整串匹配（`raw.includes(token)`）只拦得住"一次性把整个 token 发出去"。模型只要把
+// 同一个 token 拆成两条消息、或者中间插一个字符，整串匹配就全部落空 —— 而拆条恰好是
+// 这个桥接**鼓励**的行为（SPACE_SPLIT_HINT：想分多条消息时用空格分隔）。于是：
+//
+//     qq_send_message({ messages: ['前半段 3f2a1b9c', '后半段 8d4e5f60'] })
+//
+// 两条各自都不含完整 token，闸门放行，QQ 上拼起来就是完整令牌。
+//
+// 做法：拿每个已知 token 的**所有 12 字符窗口**去比对。12 是权衡值 —— 足够长到不会
+// 在日常聊天里误伤（随机 12 字符 hex 段碰撞概率可忽略），又足够短到拆条后每一段仍能命中。
+// 窗口数 = token.length - 11，token 本身是 32 位 hex，即每个 token 最多 21 个窗口。
+const TOKEN_FRAGMENT_WIDTH = 12;
+
+/** 文本里是否出现任一已知 token 的任意 12 字符窗口。 */
+function hasKnownTokenFragment(text) {
+  const value = String(text ?? '');
+  if (!value) return false;
+  for (const token of KNOWN_AGENT_TOKENS) {
+    if (!token || token.length < TOKEN_FRAGMENT_WIDTH) continue;
+    for (let i = 0; i + TOKEN_FRAGMENT_WIDTH <= token.length; i += 1) {
+      if (value.includes(token.slice(i, i + TOKEN_FRAGMENT_WIDTH))) return true;
+    }
+  }
+  return false;
+}
+
 function redactSensitiveText(text) {
   let raw = String(text ?? '');
   try {
@@ -1544,7 +1573,7 @@ async function main() {
    */
   function assertOutboundAuditOk(key, subject) {
     const text = String(subject ?? '');
-    const hasKnownToken = [...KNOWN_AGENT_TOKENS].some((t) => t && text.includes(t));
+    const hasKnownToken = hasKnownTokenFragment(text);
     if (shouldAuditKey(key) && (SENSITIVE_RE.test(text) || hasKnownToken)) {
       log(`⚠️ 语音发送被安全策略拦截 (${key})：${hasKnownToken ? '文件名含会话令牌' : '文件名疑似含敏感信息'}`);
       appendActivity(`${key} [voice] 发送被拦截（文件名疑似敏感信息${hasKnownToken ? '/会话令牌' : ''}）`);
@@ -7212,7 +7241,9 @@ async function main() {
     for (const token of KNOWN_AGENT_TOKENS) {
       if (token && s.includes(token)) s = s.split(token).join('***');
     }
-    return s;
+    // 整串没命中时再看片段：拆成两条发出去的令牌，单条只有片段，
+    // 这里必须把片段也抹掉，否则两条拼起来仍是完整令牌。
+    return hasKnownTokenFragment(s) ? '***' : s;
   }
 
   // 最近一次发送是否全部成功（按 key）。调用方据此决定要不要刷新「我发过言了」的时间戳 ——
@@ -7457,7 +7488,7 @@ async function main() {
       segments.push({ type: 'at', data: { qq: at } });
     }
     const rawMessage = String(message ?? '');
-    const hasKnownToken = [...KNOWN_AGENT_TOKENS].some((t) => t && rawMessage.includes(t));
+    const hasKnownToken = hasKnownTokenFragment(rawMessage);
     if (hasKnownToken) {
       log(`发送内容包含会话令牌，已阻止发送 (${kind}:${id})`);
       throw new Error('发送内容包含会话令牌，已阻止发送');
@@ -8052,7 +8083,7 @@ async function main() {
 
   // 统一出站消息：先完整文本审计，再发送。返回是否真的发出。
   async function auditAndSend(key, text) {
-    const hasKnownToken = [...KNOWN_AGENT_TOKENS].some((t) => t && String(text ?? '').includes(t));
+    const hasKnownToken = hasKnownTokenFragment(text);
     if (shouldAuditKey(key) && (SENSITIVE_RE.test(text) || hasKnownToken)) {
       log(`⚠️ 回复被安全策略拦截 (${key})，疑似包含敏感信息${hasKnownToken ? '（含会话令牌）' : ''}`);
       appendActivity(`${key} agent 回复被拦截（疑似敏感信息${hasKnownToken ? '/会话令牌' : ''}）`);
@@ -11589,7 +11620,7 @@ async function main() {
                   continue;
                 }
                 // 审计（对完整文本执行，避免截断漏判；这里只判断，不发送，避免双重发送）
-                const hasKnownToken = [...KNOWN_AGENT_TOKENS].some((t) => t && plain.includes(t));
+                const hasKnownToken = hasKnownTokenFragment(plain);
                 if (shouldAuditKey(key) && (SENSITIVE_RE.test(plain) || hasKnownToken)) {
                   log(`⚠️ 回复被安全策略拦截 (${key})，疑似包含敏感信息${hasKnownToken ? '（含会话令牌）' : ''}`);
                   appendActivity(`${key} agent 回复被拦截（疑似敏感信息${hasKnownToken ? '/会话令牌' : ''}）`);
