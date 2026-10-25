@@ -41,10 +41,13 @@ export function presetRowId(name) {
  * node_modules junction 由 setup-dsh.mjs 或 dev_heal_links 维护。
  */
 export const GUARD_SPECIFIER = 'qq-agent-presets/qq-tool-restrict.mjs';
+/** 会话绑定插件（按 agent scope 挂载 snowluma MCP）的等价引用。 */
+export const SELF_KEY_SCOPE_SPECIFIER = 'qq-agent-presets/qq-self-key-scope.mjs';
 
 /** 源里允许出现的相对行名 → 新机制下的等价引用。其它相对名一律报错（避免静默装不上）。 */
-const RELATIVE_ROW_REWRITES = new Map([
+export const RELATIVE_ROW_REWRITES = new Map([
   ['./qq-tool-restrict.mjs', GUARD_SPECIFIER],
+  ['./qq-self-key-scope.mjs', SELF_KEY_SCOPE_SPECIFIER],
 ]);
 
 export const BUNDLE_DIR = path.join(REPO_ROOT, 'plugins', 'qq-agent-presets');

@@ -171,6 +171,13 @@
   name: ./qq-tool-restrict.mjs
   config: {}
 
+# ── 会话绑定：按当前 agent scope 挂载 snowluma MCP ──────────────────────────
+# 把 QQ 会话 key（编码在 sessionId 里）通过 env 传给 MCP 子进程，使「谁调都能用」
+# 的全局 MCP 变成「只服务当前会话」。与 qq-tool-restrict 的执行期校验互补。
+- id: qq-self-key-scope
+  name: ./qq-self-key-scope.mjs
+  config: {}
+
 # ── 上下文管理（保留，避免长聊爆上下文） ────────────────────────────────────
 
 - id: compaction

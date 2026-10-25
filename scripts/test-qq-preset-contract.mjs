@@ -24,10 +24,12 @@ test('reserved2 YAML resolves to the expected persona and template variables', (
 
 test('local/admin tool restrictions and existing compaction budgets stay intact', () => {
   assert.deepEqual(preset.map((row) => row.id), [
-    'persona', 'tool-web', 'tool-ask-user', 'tool-todo', 'qq-tool-restrict', 'compaction',
+    'persona', 'tool-web', 'tool-ask-user', 'tool-todo', 'qq-tool-restrict', 'qq-self-key-scope', 'compaction',
   ]);
   assert.deepEqual(preset.find((row) => row.id === 'tool-web').config, { search: false, fetch: false });
   assert.equal(preset.find((row) => row.id === 'qq-tool-restrict').name, './qq-tool-restrict.mjs');
+  // 会话绑定插件必须在 preset 里：它是 snowluma MCP 的唯一挂载点（全局层已不再注册）。
+  assert.equal(preset.find((row) => row.id === 'qq-self-key-scope').name, './qq-self-key-scope.mjs');
   const compaction = preset.find((row) => row.id === 'compaction');
   assert.deepEqual(compaction.isolate, { compaction: true, toolResultPruner: true });
   assert.deepEqual(compaction.config.find((row) => row.id === 'tool-result-pruner').config, {

@@ -12,7 +12,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import yaml from 'js-yaml';
 import {
-  BUNDLE_DIR, GUARD_SPECIFIER, PRESETS, REPO_ROOT,
+  BUNDLE_DIR, GUARD_SPECIFIER, PRESETS, RELATIVE_ROW_REWRITES, REPO_ROOT,
   buildPatches, patchFileFor, presetRowId,
 } from './build-agent-preset-patches.mjs';
 
@@ -48,11 +48,16 @@ for (const name of PRESETS) {
     `${name}: preset.yml 的 name/description/order 原样带进 config`);
   ok(Array.isArray(row.config.plugins) && row.config.plugins.length > 0, `${name}: config.plugins 非空（新机制里必填）`);
 
-  // 与源行列表逐字对比：只允许守卫行的 name 被改写。
+  // 与源行列表逐字对比：只允许**已登记**的相对行名被改写（见 build 脚本的
+  // RELATIVE_ROW_REWRITES）。这里按同一张表来算期望值，避免每加一个相对行插件
+  // 就要同步改一次测试。
   const source = load(path.join(REPO_ROOT, 'dsh', 'agent-presets', name, 'agent.cordis.yml'));
   const expected = structuredClone(source);
-  for (const r of expected) if (r.name === './qq-tool-restrict.mjs') r.name = GUARD_SPECIFIER;
-  assert.deepEqual(row.config.plugins, expected, `${name}: config.plugins 必须与 agent.cordis.yml 完全一致（守卫名除外）`);
+  for (const r of expected) {
+    const rewritten = RELATIVE_ROW_REWRITES.get(r.name);
+    if (rewritten !== undefined) r.name = rewritten;
+  }
+  assert.deepEqual(row.config.plugins, expected, `${name}: config.plugins 必须与 agent.cordis.yml 完全一致（已登记的相对行名除外）`);
   ok(true, `${name}: config.plugins 与 agent.cordis.yml 逐字一致（${expected.length} 行）`);
 
   // 人格正文是产品本体：单独再钉一次，防止「顺手改写/截断」。

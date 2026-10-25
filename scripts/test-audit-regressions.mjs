@@ -23,6 +23,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { bridgeHarness } from './audit-bridge-harness.mjs';
 import { mdToPlain } from '../src/md-to-plain.js';
 import { extractJsonArray } from '../src/slang-learner.js';
@@ -96,6 +97,71 @@ await test('R1 无令牌智能体调用：closed-agent 可发送/探测，v2 面
       assert.equal(v2send.status, 403, '无令牌智能体调用不得走 v2 发送');
     });
   } finally { await h.close(); }
+});
+
+// ── R26. 会话绑定：编解码往返 + 跨会话 key 必须被拒 ─────────────────────────
+//
+// 背景：DSH 的 MCP 桥只传 name + arguments，协议里没有「这次调用来自哪个会话」的字段。
+// 于是 MCP server 只能按**模型给的 key** 去解析会话令牌 —— 模型把 key 换成别的群号
+// 就能读到那个群的会话状态。修法是桥接在建 DSH 会话时把 QQ 会话 key 编码进 sessionId，
+// 插件侧解出来当可信身份，再与模型给的 key 比对。
+//
+// 这条把「编码往返一致」与「跨会话一律拒绝」钉成断言。
+await test('R26 会话绑定：sessionId 编解码往返 + 跨会话 key 被拒', async () => {
+  const selfKey = await import('../plugins/qq-agent-presets/qq-self-key.mjs');
+
+  // 编码：必须与桥接 canonicalV2Key 同口径（前导零归一、拒绝 0/负数/非数字）。
+  assert.equal(selfKey.encodeSelfKey('group:456'), 'qqb-g-456');
+  assert.equal(selfKey.encodeSelfKey('group:0456'), 'qqb-g-456', '前导零必须归一成同一个 id');
+  assert.equal(selfKey.encodeSelfKey('private:123'), 'qqb-p-123');
+  for (const bad of ['bogus', 'group:0', 'group:-1', 'group:', '', 'group:1.5']) {
+    assert.equal(selfKey.encodeSelfKey(bad), '', `非法 key 必须编码失败：${bad}`);
+  }
+
+  // 解码：只有桥接绑定的形状才解得出来，DSH 自生成 id 一律为空。
+  assert.equal(selfKey.decodeSelfKey('qqb-g-456'), 'group:456');
+  assert.equal(selfKey.decodeSelfKey('qqb-p-123'), 'private:123');
+  for (const foreign of ['session-abc', '', 'qqb-x-1', 'qqb-g-0', 'session-123']) {
+    assert.equal(selfKey.decodeSelfKey(foreign), '', `非桥接 id 必须解不出：${foreign}`);
+  }
+
+  // 可信身份取自 exec.agent.id（DSH 里 Agent.id 就是 SessionId）。
+  assert.equal(selfKey.trustedSelfKeyOf({ agent: { id: 'qqb-g-456' } }), 'group:456');
+  assert.equal(selfKey.trustedSelfKeyOf({ agent: { session: { id: 'qqb-p-9' } } }), 'private:9');
+  assert.equal(selfKey.trustedSelfKeyOf({}), '');
+  assert.equal(selfKey.trustedSelfKeyOf({ agent: { id: 'session-abc' } }), '');
+
+  // 端到端：绑定 group:456 的 MCP 进程里，跨会话 key 必须被拒，本会话放行（走到网络层）。
+  const { spawn } = await import('node:child_process');
+  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+  const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js');
+  const entry = fileURLToPath(new URL('../src/mcp-snowluma-safe.js', import.meta.url));
+
+  const callWith = async (selfKeyValue, targetKey) => {
+    const transport = new StdioClientTransport({
+      command: process.execPath, args: [entry],
+      env: { ...process.env, QQ_BRIDGE_SELF_KEY: selfKeyValue || '' },
+      stderr: 'ignore'
+    });
+    const client = new Client({ name: 'fixture', version: '1' });
+    await client.connect(transport);
+    try {
+      const r = await client.callTool({ name: 'qq_get_prompt', arguments: { key: targetKey, token: 'fixture' } });
+      return String(r.content?.[0]?.text ?? '');
+    } finally { await client.close(); }
+  };
+
+  const crossSession = await callWith('group:456', 'group:789');
+  assert.ok(crossSession.includes('该会话不可用'), `绑定 456 时调 789 必须被拒，实得：${crossSession.slice(0, 80)}`);
+  assert.equal(crossSession.includes('fetch failed'), false, '必须在**到达网络层之前**就被拒');
+
+  // 前导零别名不能绕过绑定
+  const zeroPadded = await callWith('group:456', 'group:0456');
+  assert.equal(zeroPadded.includes('该会话不可用'), false, 'group:0456 与 group:456 是同一会话，不应被拒');
+
+  // 未注入 SELF_KEY（手动直跑调试）时保持既有行为，不因缺环境变量把 MCP 变成不可用
+  const unbound = await callWith('', 'group:789');
+  assert.equal(unbound.includes('该会话不可用'), false, '未绑定 SELF_KEY 时不应启用这道门');
 });
 
 // ── R2. 分条发送失败：错误必须可读，且预占额度要回滚 ─────────────────────────

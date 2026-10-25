@@ -127,8 +127,18 @@ const MANAGED_MCP_IDS = ['mcp-snowluma', 'mcp-snowluma-host', 'mcp-web-search-sa
 
 function mcpEntries() {
   const node = process.execPath;
+  // ── snowluma 不再在**全局层**注册 ────────────────────────────────────────────
+  //
+  // 为什么必须移出全局层：全局注册的 MCP 是「谁调都能用」的 —— MCP 协议里没有
+  // 「这次调用来自哪个会话」的字段，因此 server 只能按**模型给的 key** 去解析会话令牌，
+  // 模型（或被注入的群友文本）把 key 换成别的群号就能读到那个群的会话状态。
+  //
+  // 现在改由 agent preset 的 `qq-self-key-scope` 行**按会话**挂载：桥接在建 DSH 会话时
+  // 预分配一个把 QQ 会话 key 编码进去的 sessionId，插件侧解出来就是可信身份，
+  // 再通过 env 传给 MCP 子进程。
+  //
+  // 保留在全局层的两个 server 不涉及会话寻址（host 是控制面、web-search 是公网只读）。
   const servers = {
-    'mcp-snowluma': { serverName: 'snowluma', script: path.join(REPO_ROOT, 'src', 'mcp-snowluma-safe.js'), toolCallTimeoutMs: 725000 },
     'mcp-snowluma-host': { serverName: 'snowluma-host', script: path.join(REPO_ROOT, 'src', 'mcp-host-server.js') },
     'mcp-web-search-safe': { serverName: 'web-search-safe', script: path.join(REPO_ROOT, 'src', 'mcp-web-search-safe.js') },
   };

@@ -1374,6 +1374,22 @@ function canonicalV2Key(key) {
   return `${m[1]}:${id}`;
 }
 
+/**
+ * 把 QQ 会话 key 编码成桥接预分配的 DSH sessionId（`qqb-<g|p>-<id>`）。
+ *
+ * 与 `plugins/qq-agent-presets/qq-self-key.mjs` 的 `encodeSelfKey` 必须保持同口径 ——
+ * 那边是插件侧解码的权威实现，这里为了不让 bridge.js 依赖插件目录而保留一份。
+ * 两处都有回归测试钉住（`test-audit-regressions.mjs` 的 R26）。
+ *
+ * @returns {string} 可安全用作 sessionId 的字符串；key 不合法时返回 ''。
+ */
+function encodeSelfKey(key) {
+  const canonical = canonicalV2Key(key);
+  if (!canonical) return '';
+  const [kind, id] = canonical.split(':');
+  return `qqb-${kind === 'group' ? 'g' : 'p'}-${id}`;
+}
+
 const APPROVE_WORDS = new Set(['通过', '同意', '允许', '批准', 'yes', 'y', 'approve', 'ok']);
 const REJECT_WORDS = new Set(['拒绝', '不同意', '不允许', '驳回', 'no', 'n', 'reject', 'deny']);
 
@@ -8151,6 +8167,18 @@ async function main() {
           }
           const params = { workspaceId: wsValue.workspace.workspaceId };
           if (withPreset && preset) params.agentPreset = preset;
+          // ── 会话绑定：把 QQ 会话 key 编码进 sessionId ─────────────────────────
+          //
+          // DSH 的 MCP 桥只传 name + arguments，协议里没有「这次调用来自哪个会话」的
+          // 字段。因此桥接在这里**预分配**一个把 key 编码进去的 sessionId；插件侧
+          // （qq-self-key-scope / qq-tool-restrict）把它解回来就是可信身份。
+          //
+          // 安全性来自「模型无法选择或影响 sessionId」——它由桥接传入，模型看不到也
+          // 改不了（dsh-host-apiproxy: `request.payload.sessionId ?? session-${randomUUID()}`）。
+          // 只有**真正的 QQ 会话**才编码；黑话学习会话等内部会话保持 DSH 自生成 id，
+          // 这样它们在插件侧解不出 key，自然拿不到 QQ MCP。
+          const boundSessionId = encodeSelfKey(key);
+          if (boundSessionId) params.sessionId = boundSessionId;
           const value = unwrap(await api.sessions.create(params), 'session.create');
           sessionId = value.sessionId;
           if (withPreset && preset) {

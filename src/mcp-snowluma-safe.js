@@ -23,6 +23,42 @@ import { serializeModelData } from './qq-model-view.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 
+// ── 会话绑定（SELF_KEY）──────────────────────────────────────────────────────
+//
+// 桥接为每个 QQ 会话派生一个 MCP 进程，spawn 时注入 `QQ_BRIDGE_SELF_KEY=<该会话 key>`。
+// 这个值**不由模型决定**（模型既看不到也改不了），因此可以当作可信身份。
+//
+// 为什么必须有这道门：MCP 协议里没有「这次调用来自哪个会话」的字段，所有带 `key`
+// 参数的工具本来只能按**模型给的 key** 去解析会话令牌 —— 模型（或被注入的群友文本）
+// 只要把 key 换成别的群号，就能读到那个群的会话状态。有了 SELF_KEY，凡带 key 的调用
+// 都先与它比对，不一致一律拒绝。
+//
+// 未注入 SELF_KEY 时（例如手动直跑本文件调试）**保持既有行为**，不因为缺少这个
+// 环境变量而把整个 MCP 变成不可用 —— 那样会让部署升级变成一次硬故障。
+const SELF_KEY = canonicalKey(process.env.QQ_BRIDGE_SELF_KEY) || '';
+/** 所有「非当前会话」的拒绝共用同一句文案：不可区分，避免群号枚举 oracle。 */
+const SELF_KEY_DENIAL = '该会话不可用';
+
+/** 归一化会话 key（与桥接 canonicalKey 同口径：去掉前导零、校验正整数）。 */
+function canonicalKey(value) {
+  const m = /^(group|private):(\d{1,20})$/.exec(String(value ?? '').trim());
+  if (!m) return '';
+  const id = Number(m[2]);
+  if (!Number.isSafeInteger(id) || id <= 0) return '';
+  return `${m[1]}:${id}`;
+}
+
+/**
+ * 校验一次带 key 的调用是否指向当前会话。
+ * @returns {string} 拒绝理由；空串表示放行。
+ */
+function selfKeyGuard(key) {
+  if (!SELF_KEY) return '';
+  const canonical = canonicalKey(key);
+  if (!canonical || canonical !== SELF_KEY) return SELF_KEY_DENIAL;
+  return '';
+}
+
 function loadConfig() {
   try {
     let text = fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8');
@@ -354,6 +390,27 @@ const disabledTools = [];
     if (flag && cfg.socialV2?.tools?.[flag] === false) {
       disabledTools.push(`${name}(${flag})`);
       return undefined;
+    }
+    // ── 会话绑定闸门（SELF_KEY）──────────────────────────────────────────────
+    //
+    // 在**统一注册点**包一层，而不是逐个改 31 个带 key 的工具 —— 逐改容易漏
+    // （新增工具时忘了加），而这里是所有工具必经之路。
+    //
+    // 判据是「参数表里**声明**了 key」，不是「运行时 arguments 里有没有 key」：
+    // 声明才是工具的身份，运行时 arguments 是模型可控的 —— 用它来判断
+    // 「该不该校验」等于让攻击者自己选考卷。
+    const schema = rest.length >= 2 ? rest[rest.length - 2] : undefined;
+    const handler = rest[rest.length - 1];
+    if (schema && typeof schema === 'object' && Object.prototype.hasOwnProperty.call(schema, 'key')
+        && typeof handler === 'function') {
+      const guarded = async (args, ...tail) => {
+        const denial = selfKeyGuard(args?.key);
+        if (denial) {
+          return { content: [{ type: 'text', text: denial }], isError: true };
+        }
+        return handler(args, ...tail);
+      };
+      rest[rest.length - 1] = guarded;
     }
     return registerTool(name, ...rest);
   };

@@ -48,6 +48,9 @@
           - id: qq-tool-restrict
             name: qq-agent-presets/qq-tool-restrict.mjs
             config: {}
+          - id: qq-self-key-scope
+            name: qq-agent-presets/qq-self-key-scope.mjs
+            config: {}
           - id: compaction
             name: cordis:group
             group: true
