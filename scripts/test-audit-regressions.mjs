@@ -98,6 +98,43 @@ await test('R1 无令牌智能体调用：closed-agent 可发送/探测，v2 面
   } finally { await h.close(); }
 });
 
+// ── R21. forward-media 只允许取回本会话确实见过的媒体 ────────────────────────
+//
+// 背景：qq_get_forward_msg 有 seenForwardIds 校验（只能读本会话见过的 forward id），
+// 但 forward-media 接口原来**直接信任请求体的 media** 并真的去下载。
+// 于是模型（或被注入的群友文本）可以凭空编一个 URL 让桥接去抓 —— 校验必须落在
+// 「这个媒体是不是本会话见过的」，而不是「调用方说它是什么」。
+await test('R21 forward-media 拒绝请求体里凭空编造的媒体引用', async () => {
+  const h = await bridgeHarness({ config: { allow: { private: ['123'], groups: ['456', '789'] } } });
+  try {
+    h.setMode('reserved2');
+    const KEY = 'group:456';
+    const st = h.getSocialV2State(KEY);
+    const token = String(st.agentToken);
+
+    // 凭空编一个媒体引用（从未在 get_forward_msg 里出现过）
+    const forged = { kind: 'image', url: 'https://evil.example/payload.png' };
+
+    await withServer(h, async (port) => {
+      const res = await call(port, '/api/socialV2/forward-media', {
+        method: 'POST', token, body: { key: KEY, media: [forged] }
+      });
+      assert.equal(res.status, 403, `编造的媒体必须被拒，实际 ${res.status} ${res.body}`);
+      assert.match(String(res.json?.error ?? ''), /不在当前会话已读取的转发节点中/);
+    });
+
+    // 正例：经 rememberForwardMedia 登记（= get_forward_msg 真的返回过）之后必须放行。
+    // 用会被 SSRF 拦下的内网地址，这样能确认"走到了下载那一步"而不是被登记表拦住。
+    h.rememberForwardMedia(KEY, [{ media: [{ kind: 'image', url: 'http://127.0.0.1/x.png' }] }]);
+    await withServer(h, async (port) => {
+      const res = await call(port, '/api/socialV2/forward-media', {
+        method: 'POST', token, body: { key: KEY, media: [{ kind: 'image', url: 'http://127.0.0.1/x.png' }] }
+      });
+      assert.notEqual(res.status, 403, `已登记的媒体不应被登记表拒绝，实际 ${res.status} ${res.body}`);
+    });
+  } finally { await h.close(); }
+});
+
 // ── R2. 分条发送失败：错误必须可读，且预占额度要回滚 ─────────────────────────
 await test('R2 send-burst 失败路径不再抛 ReferenceError，并回滚发送额度', async () => {
   const h = await bridgeHarness({

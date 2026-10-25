@@ -102,6 +102,37 @@ test('URLs and every DNS result are validated before opening a connection', asyn
   assert.equal(transport.requests.length, 0);
 });
 
+// ── 端口白名单：SSRF 判定只看地址，不看端口 ──────────────────────────────────
+//
+// 一个**公网可达**的非常规端口（某内网服务通过端口映射暴露出来）在地址判定看来完全
+// 合法，于是能被拿来探测。端口白名单把"能抓什么"收窄到常规 Web 端口，与地址判定互补。
+test('optional allowPorts rejects non-web ports before opening a connection', async (t) => {
+  const transport = mockTransport(t, []);
+  const allowPorts = [80, 443, 8080, 8443];
+
+  // 默认不限端口：既有调用方行为不变（否则会静默收紧媒体抓取）。
+  await assert.doesNotReject(validateFetchUrl('http://public.test:9200/'));
+
+  // 显式传入白名单后，非常规端口必须被拦。
+  for (const url of [
+    'http://public.test:9200/', 'http://public.test:6379/', 'http://public.test:8081/',
+    'https://public.test:8444/', 'http://public.test:3000/',
+  ]) {
+    await assert.rejects(validateFetchUrl(url, { allowPorts }), /端口 \d+ 不在允许列表/);
+  }
+
+  // 白名单内的端口（含省略端口的默认 80/443）必须照常放行。
+  for (const url of [
+    'http://public.test/', 'https://public.test/', 'http://public.test:80/',
+    'https://public.test:443/', 'http://public.test:8080/', 'https://public.test:8443/',
+  ]) {
+    await assert.doesNotReject(validateFetchUrl(url, { allowPorts }));
+  }
+
+  // 校验必须在**发起连接之前**失败。
+  assert.equal(transport.requests.length, 0);
+});
+
 test('HTTP transport pins the validated IP and preserves Host and TLS SNI', async (t) => {
   const before = lookupCalls.length;
   const { requests } = mockTransport(t, [{ body: 'fixture' }]);
