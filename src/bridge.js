@@ -792,7 +792,11 @@ function loadConfig() {
         setStickerRemark: false,
         stickerNote: true,
         collectSticker: true,
-        getSelfImage: true
+        getSelfImage: true,
+        // QQ 空间（说说）：直连协议端，不走桥接会话。对外发布，用户可在控制台关闭。
+        sendQzone: true,
+        listQzone: true,
+        deleteQzone: true
       },
       wake: {
         defaultMode: 'diving',
@@ -4443,7 +4447,7 @@ async function main() {
             merged.autoReplyCheckMs = Number.isFinite(n) ? Math.max(1000, Math.round(n)) : (current.autoReplyCheckMs ?? 30000);
           }
           // tools：只接受布尔开关
-          const toolFlags = ['getPrompt', 'getUnread', 'getRecent', 'socialState', 'sendGroup', 'sendPrivate', 'reply', 'sendBurst', 'sendMessage', 'waitMessages', 'feedback', 'getMyRecent', 'getMessageDetail', 'getActiveMembers', 'setWakeConfig', 'markRead', 'memory', 'slangQuery', 'slangSubmit', 'getImages', 'getForwardMsg', 'sendPoke', 'listStickers', 'getStickerImage', 'sendSticker', 'setStickerRemark', 'stickerNote', 'collectSticker', 'getSelfImage', 'sendVoice'];
+          const toolFlags = ['getPrompt', 'getUnread', 'getRecent', 'socialState', 'sendGroup', 'sendPrivate', 'reply', 'sendBurst', 'sendMessage', 'waitMessages', 'feedback', 'getMyRecent', 'getMessageDetail', 'getActiveMembers', 'setWakeConfig', 'markRead', 'memory', 'slangQuery', 'slangSubmit', 'getImages', 'getForwardMsg', 'sendPoke', 'listStickers', 'getStickerImage', 'sendSticker', 'setStickerRemark', 'stickerNote', 'collectSticker', 'getSelfImage', 'sendVoice', 'sendQzone', 'listQzone', 'deleteQzone'];
           if (body.tools && typeof body.tools === 'object') {
             merged.tools = { ...(current.tools ?? {}), ...body.tools };
             for (const k of toolFlags) {
@@ -4705,7 +4709,10 @@ async function main() {
             stickerNote: 'qq_sticker_note',
             collectSticker: 'qq_collect_sticker',
             getSelfImage: 'qq_get_self_image',
-            sendVoice: 'qq_send_voice / qq_list_voices'
+            sendVoice: 'qq_send_voice / qq_list_voices',
+            sendQzone: 'qq_send_qzone_msg',
+            listQzone: 'qq_get_qzone_msg',
+            deleteQzone: 'qq_delete_qzone_msg'
           };
           const tools = cfg.socialV2?.tools ?? {};
           const stickerToolFlags = new Set(['listStickers', 'getStickerImage', 'sendSticker', 'setStickerRemark', 'stickerNote', 'collectSticker']);

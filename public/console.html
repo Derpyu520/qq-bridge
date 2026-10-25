@@ -2050,6 +2050,9 @@ button:active:not(:disabled) {
         <label class="v2-tool-item"><input type="checkbox" data-v2-tool="stickerNote"> <span><b>qq_sticker_note</b><span class="meta">给表情记录本地含义/标签/用法</span></span></label>
         <label class="v2-tool-item"><input type="checkbox" data-v2-tool="setStickerRemark"> <span><b>qq_set_sticker_remark</b><span class="meta">修改 QQ 官方表情备注（默认禁用，慎用）</span></span></label>
         <label class="v2-tool-item"><input type="checkbox" data-v2-tool="sendVoice"> <span><b>qq_send_voice / qq_list_voices</b><span class="meta">发送语音条（只能发语音库里的音频；偶然而为的强表达）</span></span></label>
+        <label class="v2-tool-item"><input type="checkbox" data-v2-tool="sendQzone"> <span><b>qq_send_qzone_msg</b><span class="meta">发 QQ 空间说说（对外发布，不是聊天消息；可带图、可设权限）</span></span></label>
+        <label class="v2-tool-item"><input type="checkbox" data-v2-tool="listQzone"> <span><b>qq_get_qzone_msg</b><span class="meta">读说说列表 / 好友动态，拿 tid</span></span></label>
+        <label class="v2-tool-item"><input type="checkbox" data-v2-tool="deleteQzone"> <span><b>qq_delete_qzone_msg</b><span class="meta">按 tid 删一条说说</span></span></label>
       </div>
       <div class="meta" style="margin-top:6px">二代黑话学习：AI 可用 <code>qq_slang_submit</code> 提交陌生词，也可由桥接自动提取；管理员在「黑话词库」页面筛选确认后，词条会自动写入黑话提示词并注入 <code>qq_get_prompt</code> 与后续唤醒。</div>
 
@@ -3499,6 +3502,15 @@ function summarizeToolArgs(tool, args) {
   } else if (t.includes('qq_send_poke')) {
     push('key', obj.key);
     if (obj.targetUserId != null && obj.targetUserId !== '') push('target', obj.targetUserId);
+  } else if (t.includes('qq_send_qzone_msg')) {
+    if (obj.content) push('正文', String(obj.content).slice(0, 40));
+    if (Array.isArray(obj.images) && obj.images.length) push('图', obj.images.length + ' 张');
+    if (obj.ugc_right != null && obj.ugc_right !== '') push('权限', obj.ugc_right);
+  } else if (t.includes('qq_delete_qzone_msg')) {
+    if (obj.tid) push('tid', String(obj.tid).slice(0, 30));
+  } else if (t.includes('qq_get_qzone_msg')) {
+    if (obj.num != null) push('条数', obj.num);
+    if (obj.feeds) push('类型', '好友动态');
   } else if (t.includes('qq_get_forward_msg')) {
     push('key', obj.key);
     if (obj.id != null && obj.id !== '') push('id', String(obj.id).slice(0, 40));

@@ -345,6 +345,11 @@ const TOOL_CONFIG_FLAGS = {
   qq_get_self_image: 'getSelfImage',
   qq_sticker_note: 'stickerNote',
   qq_set_sticker_remark: 'setStickerRemark',
+  // QQ 空间三条：跟其它工具不同，它们直连协议端而不走桥接（见下方 "QQ 空间（说说）" 那段），
+  // 但开关仍登记在这儿——否则控制台显示"已关闭"、注册期却照样把描述塞进每次请求。
+  qq_send_qzone_msg: 'sendQzone',
+  qq_get_qzone_msg: 'listQzone',
+  qq_delete_qzone_msg: 'deleteQzone',
 };
 const disabledTools = [];
 {
@@ -793,6 +798,93 @@ if (cfg.socialV2?.tools?.sendPoke !== false) {
         return { content: [{ type: 'text', text: serializeModelData(data) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `拍一拍失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+}
+
+// ── QQ 空间（说说）──────────────────────────────────────────────────────────
+//
+// 这一组**不走桥接**，直接打协议端的 OneBot HTTP API。
+// 理由：空间不是"会话"，没有 key、没有会话令牌、也不进唤醒/白名单那一套；
+// 鉴权只有 snowluma.accessToken 一层。
+// 已实测（2026-10-26）：POST /get_qzone_msg_list 带 `authorization: Bearer <accessToken>`
+// 返回 {"status":"ok","retcode":0,...}；不带令牌是 retcode 1401 unauthorized。
+//
+// 风险提示写在描述里而不是藏在代码注释里：发说说是对外发布，跟聊天消息不是一回事。
+if (cfg.socialV2?.tools?.sendQzone !== false) {
+  server.tool(
+    'qq_send_qzone_msg',
+    '发表一条 QQ 空间说说（对外发布，会立刻对好友可见，不是聊天消息）。content 是正文；images 可传图片 URL 或本地文件路径，协议端自己上传；ugc_right 是查看权限代码（不传＝默认）；target_uins 配合 ugc_right 限定可见的人。返回带 tid，可用来改权限或删除。别拿它做调试——发出去就有人看得见。',
+    {
+      content: z.string().describe('说说正文，纯文字；与 images 至少给一个'),
+      images: z.array(z.union([z.string(), z.number()])).optional().describe('配图列表：图片 URL 或本地文件路径'),
+      ugc_right: z.union([z.number(), z.string()]).optional().describe('查看权限代码，不传＝默认'),
+      target_uins: z.array(z.union([z.string(), z.number()])).optional().describe('可见范围里的 QQ 号列表（配合 ugc_right）')
+    },
+    async ({ content, images, ugc_right, target_uins }) => {
+      try {
+        const text = String(content ?? '').trim();
+        const pics = Array.isArray(images) ? images.map((x) => String(x ?? '').trim()).filter(Boolean) : [];
+        if (!text && pics.length === 0) {
+          return { content: [{ type: 'text', text: '发说说失败：正文和 images 不能同时为空。' }], isError: true };
+        }
+        if (text.length > 1000) {
+          return { content: [{ type: 'text', text: `发说说失败：正文 ${text.length} 字，超过 QQ 空间 1000 字上限，先删到 1000 以内。` }], isError: true };
+        }
+        const params = { content: text };
+        if (pics.length) params.images = pics;
+        const right = String(ugc_right ?? '').trim();
+        if (right) params.ugc_right = /^\d+$/.test(right) ? Number(right) : right;
+        if (Array.isArray(target_uins) && target_uins.length) params.target_uins = target_uins.map((x) => String(x));
+        const data = await onebot('send_qzone_msg', params);
+        return { content: [{ type: 'text', text: serializeModelData(data) }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `发说说失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+}
+
+if (cfg.socialV2?.tools?.listQzone !== false) {
+  server.tool(
+    'qq_get_qzone_msg',
+    '读取 QQ 空间说说列表（默认机器人自己的空间，只读）。用来确认刚发的那条到底在不在、拿 tid（删除或改权限要用）、或者看好友动态。返回 tid / content / 时间。',
+    {
+      num: z.number().optional().describe('一次取几条，默认 10'),
+      pos: z.number().optional().describe('从第几条开始，默认 0'),
+      target_uin: z.union([z.number(), z.string()]).optional().describe('看谁的空间；不传＝机器人自己'),
+      feeds: z.boolean().optional().describe('true＝好友动态流（get_qzone_feeds），false/不传＝指定空间的说列表')
+    },
+    async ({ num, pos, target_uin, feeds }) => {
+      try {
+        const uin = String(target_uin ?? '').trim();
+        const data = feeds
+          ? await onebot('get_qzone_feeds', { page_num: Math.max(1, Number(pos) || 1), count: Number(num) || 10 })
+          : await onebot('get_qzone_msg_list', { num: Number(num) || 10, pos: Number(pos) || 0, ...(uin ? { target_uin: uin } : {}) });
+        return { content: [{ type: 'text', text: serializeModelData(data) }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `读说说失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+}
+
+if (cfg.socialV2?.tools?.deleteQzone !== false) {
+  server.tool(
+    'qq_delete_qzone_msg',
+    '删除一条已发表的 QQ 空间说说（按 tid，tid 从 qq_send_qzone_msg 的返回或 qq_get_qzone_msg 列表里拿）。发错字、配错图用它收场。',
+    {
+      tid: z.string().describe('说说 tid')
+    },
+    async ({ tid }) => {
+      try {
+        const id = String(tid ?? '').trim();
+        if (!id) return { content: [{ type: 'text', text: '删说说失败：tid 是空的。' }], isError: true };
+        const data = await onebot('delete_qzone_msg', { tid: id });
+        return { content: [{ type: 'text', text: serializeModelData(data) }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `删说说失败：${error?.message ?? error}` }], isError: true };
       }
     }
   );
