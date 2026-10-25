@@ -151,14 +151,22 @@ test('写回沿用文件主导行尾，且不吞掉块尾空行', () => {
 });
 
 test('只含空格/Tab 的行也能安全往返（不会被当成空行读丢）', () => {
+  // 取**够用的**头部行而不是固定前 3 行：预设正文会随迭代增删段落，
+  // 写死行数会让"改预设"顺手把这条测试弄挂，而它想验证的其实是空白行往返。
+  const head = originalPrefix.split('\n');
+  const needed = presetBlockingSubstrings('v2');
+  let take = 0;
+  for (let i = 0; i < head.length && take === 0; i += 1) {
+    if (needed.every((s) => head.slice(0, i + 1).join('\n').includes(s))) take = i + 1;
+  }
+  assert.ok(take > 0, '前置条件：内置预设的头部若干行里应当已经覆盖全部安全不变量');
   const spaced = [
-    ...originalPrefix.split('\n').slice(0, 3),
+    ...head.slice(0, take),
     '   ',
     '\t',
     ' 带前后空格的正文 ',
     '正常一行',
   ].join('\n');
-  // 前 3 行来自原文，因此安全不变量仍然齐全
   const next = renderPresetPromptYaml(source, spaced);
   assert.equal(extractPresetPrefix(next), spaced, '空白行必须原样保留');
 });
