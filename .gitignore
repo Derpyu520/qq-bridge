@@ -66,3 +66,26 @@ docs/guides/VOICE.md
 # 语音库（用户个人音频素材，config.json 的 socialV2.voice.dir 指向此处）
 audio/
 
+
+# 本机调试脚本 / 个人启动器（2026-10-26 整理发布时加的，别跟着推上去）
+/scripts/check-memory-injected.mjs
+/scripts/compress-session-log.mjs
+/scripts/fix-session-log.mjs
+/scripts/fix-session-log2.mjs
+/scripts/inspect-session-cache.mjs
+/scripts/inspect-session-log.mjs
+/scripts/inspect-social.mjs
+/scripts/peek-session-meta.mjs
+/scripts/peek-session-titles.mjs
+/scripts/probe-effort.mjs
+/scripts/show-model.mjs
+/scripts/sync-qq-world.mjs
+/scripts/validate-as-dsh.mjs
+/scripts/verify-session-log.mjs
+/tools/
+/pnpm-lock.yaml
+/一键接入QQ.bat
+
+# 个人人格卡（角色文件是用户内容，这两份只属于我）
+/roles/大肥鱼.md
+/roles/肥鱼.md
