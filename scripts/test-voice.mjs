@@ -16,6 +16,7 @@ import {
 } from '../src/send-voice-lib.js';
 // 独立发语音工具在仓库上一级（不在本仓库里）：位置解析与"不在时怎么跳过"走共享口径。
 import { hasVoiceTool, skipVoiceTool, voiceToolPath } from './voice-tool-locator.mjs';
+import { readConsoleBundle } from './console-source.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -210,7 +211,7 @@ console.log('## preset 人设已描述语音能力（否则 AI 不知道自己�
 
 console.log('## 控制台契约');
 {
-  const html = fs.readFileSync(path.join(ROOT, 'public', 'console.html'), 'utf8');
+  const html = readConsoleBundle(ROOT);
   const bridgeSrc = fs.readFileSync(path.join(ROOT, 'src', 'bridge.js'), 'utf8');
   ok(html.includes('data-v2-tool="sendVoice"'), '控制台有 sendVoice 工具开关');
   // 原断言写死「sendVoice 是数组最后一个元素」，toolFlags 尾部接了空间三件套后

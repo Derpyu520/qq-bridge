@@ -518,6 +518,23 @@ function pruneStateBackups(keep = STATE_BACKUP_KEEP) {
   return removed;
 }
 
+// 控制台页面里的静态资源版本号：取 public/console.css / console.js 的 mtime。
+// 写死在 HTML 里的 ?v= 只是占位，真正发出去的以文件时间为准 —— 改完 js 不用记得改 HTML。
+function consoleAssetVersion() {
+  const parts = ['console.css', 'console.js'].map((name) => {
+    try { return Math.round(fs.statSync(path.join(ROOT, 'public', name)).mtimeMs).toString(36); } catch { return '0'; }
+  });
+  return parts.join('-');
+}
+
+function renderConsoleHtml() {
+  const html = fs.readFileSync(path.join(ROOT, 'public', 'console.html'), 'utf8');
+  const v = consoleAssetVersion();
+  return html
+    .replace(/href="\/console\.css(?:\?v=[^"]*)?"/, `href="/console.css?v=${v}"`)
+    .replace(/src="\/console\.js(?:\?v=[^"]*)?"/, `src="/console.js?v=${v}"`);
+}
+
 function listPresetBackups(name) {
   try {
     const prefix = presetBackupPrefix(name) + '.';
@@ -3483,11 +3500,40 @@ async function main() {
           }
         }
         if (req.method === 'GET' && url.pathname === '/') {
-          res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', ...SECURITY_HEADERS });
+          res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', ...SECURITY_HEADERS, 'Cache-Control': 'no-cache' });
           try {
-            res.end(fs.readFileSync(path.join(ROOT, 'public', 'console.html'), 'utf8'));
+            // 页面和它的静态资源在同一个 mtime 上取版本号：改完 console.js 刷新就拿新的，
+            // 不用手工改 ?v=，也不会因为缓存看到旧面板。
+            res.end(renderConsoleHtml());
           } catch {
             res.end('控制台页面缺失：qq-bridge/public/console.html');
+          }
+          return;
+        }
+        // 控制台的静态资源（2026-10-26 从 console.html 里拆出来的）。
+        // 文件都只在 public/ 下白名单里的两项，不做通用静态目录。
+        if (req.method === 'GET' && (url.pathname === '/console.css' || url.pathname === '/console.js')) {
+          const name = url.pathname === '/console.css' ? 'console.css' : 'console.js';
+          const file = path.join(ROOT, 'public', name);
+          try {
+            const body = fs.readFileSync(file);
+            const mtime = fs.statSync(file).mtimeMs;
+            // 带 ?v=<mtime> 的请求可以长缓存；不带版本号的仍然每次问一遍，避免改完看不到。
+            const versioned = Boolean(url.searchParams.get('v'));
+            // SECURITY_HEADERS 里本来带 Cache-Control: no-store（接口都不许缓存）。
+            // 静态资源要例外，所以先把那条摘掉再展开，否则同一个头会出现两次、
+            // 浏览器按最严格的那条走，等于白写。
+            const { 'Cache-Control': _noStore, ...safeHeaders } = SECURITY_HEADERS;
+            res.writeHead(200, {
+              'content-type': name.endsWith('.css') ? 'text/css; charset=utf-8' : 'text/javascript; charset=utf-8',
+              'cache-control': versioned ? 'public, max-age=31536000, immutable' : 'no-cache',
+              'last-modified': new Date(mtime).toUTCString(),
+              ...safeHeaders,
+            });
+            res.end(body);
+          } catch {
+            res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', ...SECURITY_HEADERS });
+            res.end(`控制台资源缺失：qq-bridge/public/${name}`);
           }
           return;
         }

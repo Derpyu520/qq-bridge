@@ -16,6 +16,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bridgeHarness } from './audit-bridge-harness.mjs';
+import { readConsoleBundle } from './console-source.mjs';
 
 let failures = 0;
 async function test(name, run) {
@@ -288,7 +289,7 @@ await test('端到端：群消息进线触发的首次唤醒，投递给 DSH 的
 // ── 9. 控制台静态接线（无浏览器环境下的替代回归） ────────────────────────────
 await test('控制台有初始提示词面板，且事件/接口都已接线', async () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-  const html = fs.readFileSync(path.join(root, 'public', 'console.html'), 'utf8');
+  const html = readConsoleBundle(root);
   for (const id of ['v2InitPromptKey', 'v2InitPromptText', 'v2InitPromptLoad', 'v2InitPromptSave', 'v2InitPromptClear', 'v2InitPromptMsg', 'v2InitPromptCount', 'v2InitPromptMax']) {
     const n = (html.match(new RegExp(`id="${id}"`, 'g')) ?? []).length;
     assert.equal(n, 1, `控制台元素 ${id} 必须存在且唯一（实际 ${n} 处）`);

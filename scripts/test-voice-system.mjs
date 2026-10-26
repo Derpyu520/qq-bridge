@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 // 独立发语音工具在仓库上一级（不在本仓库里）：位置解析与"不在时怎么跳过"走共享口径。
 import { hasVoiceTool, skipVoiceTool, voiceToolDir, voiceToolPath } from './voice-tool-locator.mjs';
+import { readConsoleBundle } from './console-source.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // 独立发语音工具的入口文件在仓库上一级的 voice-tool/，共享内核仍是本仓库 src/。
@@ -167,7 +168,7 @@ console.log('## qq-bridge 语音系统：MCP 工具与开关映射');
 
 console.log('## qq-bridge 语音系统：控制台与 preset');
 {
-  const html = read('public/console.html');
+  const html = readConsoleBundle(ROOT);
   ok(html.includes('data-v2-tool="sendVoice"'), '控制台有 sendVoice 工具开关');
   ok(html.includes('id="voiceList"') && html.includes('id="voiceSendBtn"'), '控制台有语音库调试面板');
   ok(/api\/voice\/list/.test(html) && /api\/voice\/send/.test(html), '面板调用操作者端点');

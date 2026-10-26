@@ -361,6 +361,22 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
         res.end(await readFile(file));
         return;
       }
+      // 控制台页面在 2026-10-26 拆出了两个静态资源；离线 fixture 也得供上，
+      // 否则预览/截图里样式和交互全丢，只有裸 HTML。
+      if (method === 'GET' && (path === '/console.css' || path === '/console.js')) {
+        const name = path.slice(1);
+        try {
+          const body = await readFile(resolve(projectRoot, 'public', name));
+          res.writeHead(200, {
+            'content-type': name.endsWith('.css') ? 'text/css; charset=utf-8' : 'text/javascript; charset=utf-8',
+            'cache-control': 'no-store',
+          });
+          res.end(body);
+        } catch {
+          json({ ok: false, error: `missing public/${name}` }, 404);
+        }
+        return;
+      }
       if (path === '/favicon.ico') { res.writeHead(204); res.end(); return; }
       if (method === 'GET' && path === '/__fixture/requests') return json({ requests, unknownRequests });
       if (method === 'GET' && path === '/__fixture/info') return json({ offline: true, htmlPath: file });

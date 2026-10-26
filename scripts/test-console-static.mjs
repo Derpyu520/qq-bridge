@@ -4,9 +4,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 // 独立发语音工具在仓库上一级（不在本仓库里）：位置解析与"不在时怎么跳过"走共享口径。
 import { hasVoiceTool, skipVoiceTool, voiceToolPath } from './voice-tool-locator.mjs';
+import { readConsoleBundle, readConsoleParts } from './console-source.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const html = fs.readFileSync(path.join(ROOT, 'public', 'console.html'), 'utf8');
+// 2026-10-26 起控制台拆成 html/css/js 三个文件：查契约用 bundle（等价于拆分前的整页），
+// 只看结构/ID 用 parts.html，解析逻辑用 parts.js。
+const parts = readConsoleParts(ROOT);
+const html = readConsoleBundle(ROOT);
 
 let bad = 0;
 const ok = (cond, name, extra = '') => {
@@ -41,10 +45,22 @@ ok(/api\('\/api\/voice\/send'/.test(html), '面板调用 /api/voice/send');
 ok(/typeof loadVoiceLibrary === 'function'|async function loadVoiceLibrary/.test(html), 'loadVoiceLibrary 已定义');
 
 console.log('## JS 语法');
-const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
-const big = scripts.sort((a, b) => b.length - a.length)[0];
-try { new Function(big); ok(true, '主 script 语法可解析', `${big.length} 字符`); }
+// 主逻辑现在在 public/console.js 里；html 里只剩主题引导那一小段内联脚本。
+try { new Function(parts.js); ok(true, '主 script 语法可解析', `${parts.js.length} 字符`); }
 catch (e) { ok(false, '主 script 语法', e.message); }
+for (const [name, body] of [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]).entries()) {
+  try { new Function(body); ok(true, `内联脚本 ${name + 1} 可解析`); }
+  catch (e) { ok(false, `内联脚本 ${name + 1} 语法`, e.message); }
+}
+
+console.log('## 静态资源拆分');
+ok(/<link rel="stylesheet" href="\/console\.css\?v=/.test(parts.html), '页面用 link 引 console.css 并带版本号');
+ok(/<script src="\/console\.js\?v=/.test(parts.html), '页面用外链引 console.js 并带版本号');
+ok(parts.css.length > 10000, 'console.css 非空', `${parts.css.length} 字符`);
+ok(parts.js.length > 10000, 'console.js 非空', `${parts.js.length} 字符`);
+// HTML 里不该再残留大段样式/脚本：拆分若被回退，这条会立刻失败。
+ok(!/<style>/.test(parts.html), 'console.html 里不再有 <style> 块');
+ok(parts.html.length < 60000, 'console.html 保持精简', `${parts.html.length} 字符`);
 
 console.log('## 语音图形界面的音量控件');
 if (!hasVoiceTool()) {
