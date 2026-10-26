@@ -556,8 +556,8 @@ await test('R20 换绑 QQ 账号后同群仍有会话，但记下原账号并告
   } finally { await h.close(); }
 });
 
-//   R21 群策略：静音的群不落状态，群级 wake 覆盖只作用于该群
-await test('R21 群策略：静音不落未读，群级关键词只对该群生效', async () => {
+//   R21 群策略：静音的群不落状态，群级关键词能唤醒这个群
+await test('R21 群策略：静音不落未读，群级关键词能唤醒该群', async () => {
   const h = await bridgeHarness();
   try {
     h.setMode('reserved2');
@@ -566,20 +566,33 @@ await test('R21 群策略：静音不落未读，群级关键词只对该群生�
       sender: { card: '老王', nickname: '老王' },
       message: [{ type: 'text', data: { text } }]
     });
+    // bootstrap 不是这条测试的对象，先把它关掉，否则它那一枪会混进 prompts 里
+    const st = h.getSocialV2State('group:456');
+    st.bootstrapSent = true;
+
     // ① 静音：连未读都不攒
     h.cfg.socialV2 = { ...(h.cfg.socialV2 ?? {}), groups: { 'group:456': { muted: true } } };
     await h.handleIncoming('group', '456', msg(16001, 601, '在吗'), h.cfg);
-    assert.equal(h.getSocialV2State('group:456').unread.length, 0, '静音的群不该落未读');
+    assert.equal(st.unread.length, 0, '静音的群不该落未读');
 
-    // ② 取消静音 + 群级关键词：只有这个群认「开工」
+    // ② 取消静音，给这个群配自己的唤醒条件：只认「开工」
     h.cfg.socialV2.groups = {
-      'group:456': { wake: { triggers: { atMention: false, nameMention: false, question: false, probability: 0, keywords: ['开工'] } } }
+      'group:456': { wake: { batchWindowMs: 1000, triggers: { atMention: false, nameMention: false, question: false, probability: 0, keywords: ['开工'] } } }
     };
-    await h.handleIncoming('group', '456', msg(16002, 602, '开工'), h.cfg);
-    const st = h.getSocialV2State('group:456');
+
+    // 不 @、概率 0、群级关键词里也没有这句 —— 不该唤醒
+    await h.handleIncoming('group', '456', msg(16002, 602, '吃了吗'), h.cfg);
+    await new Promise(r => setTimeout(r, 1400));
     assert.equal(st.unread.length, 1, '取消静音后要恢复落库');
-    await h.handleIncoming('group', '789', msg(16003, 603, '开工'), h.cfg);
-    assert.equal(h.getSocialV2State('group:789').unread.length, 0, '789 不在白名单，本来就不收');
+    assert.equal(h.calls.prompts.length, 0, '群级配置里没有这句的关键词，不该唤醒');
+
+    // 命中群级关键词「开工」—— 该唤醒，而且投出去的就是这句
+    await h.handleIncoming('group', '456', msg(16003, 603, '开工了'), h.cfg);
+    await new Promise(r => setTimeout(r, 1400));
+    assert.equal(h.calls.prompts.length, 1, '群级关键词命中要唤醒一次');
+    const woke = (h.calls.prompts[0].content || []).map(c => c.text || '').join('\n');
+    assert(woke.includes('开工了'), '唤醒内容要带上触发的那句话');
+    assert.equal(st.unread.length, 2, '两条该落未读');
   } finally { await h.close(); }
 });
 
