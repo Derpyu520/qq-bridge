@@ -10,7 +10,7 @@ import os from 'node:os';
 import http from 'node:http';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import yaml from 'js-yaml';
 import { extractPresetPrefix, presetPromptBlockers, presetPromptWarnings, renderPresetPromptYaml } from './preset-prompt.js';
 import { GEN1_ROLE_LINE_RE, parseRoleSections, roleCharStats, roleSectionReport, selectRoleText } from './role-card.js';
@@ -1400,6 +1400,13 @@ let stateDirHardened = null;
 async function main() {
   const cfg = loadConfig();
   fs.mkdirSync(STATE_DIR, { recursive: true });
+  // 控制台「重启桥接」拉起的接力进程带这个环境变量：先让出一点时间给正在退出的旧实例
+  // 释放锁文件和控制台端口，再走正常启动流程。其它启动路径没有这个变量，行为不变。
+  const restartDelayMs = Number(process.env.BRIDGE_RESTART_DELAY_MS) || 0;
+  if (restartDelayMs > 0) {
+    delete process.env.BRIDGE_RESTART_DELAY_MS;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(10000, restartDelayMs)));
+  }
   hardenStateDirAcl();
   acquireLock();
   loadState();
@@ -7203,7 +7210,10 @@ async function main() {
         }
         // ── 重启桥接（守护模式下 5 秒后自动拉起） ──────────────────────────────
         if (req.method === 'POST' && url.pathname === '/api/restart') {
-          sendJson({ ok: true, message: '正在重启桥接（若由守护窗口启动，5 秒后自动恢复）…' });
+          // 重启不能只靠「守护窗口自动恢复」：没有守护时（比如手动 node 起的、或守护脚本已经退了）
+          // 这里一 exit 就再也没有进程顶上来，日志停在「控制台：重启桥接」，端口直接消失——
+          // 表现就是「QQ 消息发不过来了」。所以退出前先拉起一个接力子进程，让重启自给自足。
+          sendJson({ ok: true, message: '正在重启桥接（先拉起接力进程，再退出当前实例）…' });
           setTimeout(() => {
             log('控制台：重启桥接');
             // 退出前落盘：SIGINT/SIGTERM 的收尾路径会 saveState()/saveSocialV2State()，
@@ -7211,7 +7221,21 @@ async function main() {
             try { saveState(); } catch (error) { log('重启前保存会话映射失败:', error?.message ?? error); }
             try { saveSocialV2State(); } catch (error) { log('重启前保存二代会话状态失败:', error?.message ?? error); }
             releaseLock();
-            process.exit(0);
+            // 接力进程延迟 1.5s 再起来（BRIDGE_RESTART_DELAY_MS），
+            // 免得和正在退出的本进程抢锁文件/控制台端口，被判成「已有实例」后 exit 2。
+            try {
+              const child = spawn(process.execPath, process.argv.slice(1), {
+                cwd: process.cwd(),
+                detached: true,
+                stdio: 'ignore',
+                env: { ...process.env, BRIDGE_RESTART_DELAY_MS: '1500' },
+              });
+              child.unref();
+              log(`控制台：已拉起接力进程 pid=${child.pid ?? '?'}，当前实例退出`);
+            } catch (error) {
+              log(`控制台：接力进程拉起失败，本实例退出后需要手动启动：${error?.message ?? error}`);
+            }
+            setTimeout(() => process.exit(0), 300);
           }, 500);
           return;
         }
