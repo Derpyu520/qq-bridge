@@ -22,6 +22,9 @@ import { GEN1_ROLE_LINE_RE, parseRoleSections, roleCharStats, roleSectionReport,
 import { fileURLToPath } from 'node:url';
 import { SnowLumaWebSocketClient, text } from '@snowluma/sdk';
 import { NodeApiClient, unwrap, createTurnCollector, discoverDshLaunchToken } from './dsh-client.js';
+// 主动聊天（任务书：DSH_QQ_Bridge_主动聊天）——独立子系统，不接管既有的社交唤醒
+import { createProactiveStore } from './proactive/store.mjs';
+import { createProactiveEngine } from './proactive/engine.mjs';
 import { mdToPlain, splitForQQ, truncateText, truncateTextTail } from './md-to-plain.js';
 import { planSocialTimeline, splitLongSegment } from './qq-text-split.js';
 import { SENSITIVE_RE } from './sensitive.js';
@@ -5046,6 +5049,34 @@ async function main() {
         }
         // 群策略：每个群可以单独设「静音」和唤醒默认值，落在 config.json 的
         // socialV2.groups["group:456"] 里。智能体不许改自己所在群的规则，只有控制台能改。
+        // 主动聊天（任务书要求：可查看状态/队列、可暂停、可临时手动跑一次）
+        if (url.pathname === '/api/socialV2/proactive') {
+          if (req.headers['x-agent-token']) { sendJson({ ok: false, error: '主动聊天只能由控制台调整' }, 403); return; }
+          if (req.method === 'GET') {
+            sendJson({ ok: true, ...proactiveEngine.status() });
+            return;
+          }
+          if (req.method === 'POST') {
+            const body = await readBody();
+            const patch = {};
+            if (typeof body.enabled === 'boolean') patch.enabled = body.enabled;
+            if (typeof body.dryRun === 'boolean') patch.dryRun = body.dryRun;
+            if (body.policy && typeof body.policy === 'object' && !Array.isArray(body.policy)) patch.policy = body.policy;
+            const configFile = path.join(ROOT, 'config.json');
+            const file = readConfigObject(configFile);
+            file.socialV2 = file.socialV2 && typeof file.socialV2 === 'object' && !Array.isArray(file.socialV2) ? file.socialV2 : {};
+            const engineCfg = file.socialV2.proactiveEngine && typeof file.socialV2.proactiveEngine === 'object' ? file.socialV2.proactiveEngine : {};
+            file.socialV2.proactiveEngine = { ...engineCfg, ...patch, policy: { ...(engineCfg.policy ?? {}), ...(patch.policy ?? {}) } };
+            atomicWriteJson(configFile, file);
+            cfg.socialV2 = file.socialV2;
+            const applied = proactiveEngine.configure(patch);
+            const report = body.forceTick === true ? await proactiveEngine.tick() : null;
+            sendJson({ ok: true, config: applied, report });
+            return;
+          }
+          sendJson({ ok: false, error: '只支持 GET 与 POST' }, 405);
+          return;
+        }
         if (url.pathname === '/api/socialV2/group-policy') {
           if (req.method === 'GET') {
             const key = String(url.searchParams.get('key') ?? '').trim();
@@ -8278,6 +8309,19 @@ async function main() {
     return readHomeSessionId();
   }
 
+  // 主动聊天要知道「这个人和她的哪个 DSH 会话说话」：绑好会话后记一笔范围表。
+  // 第一版只支持私聊（任务书要求），群一律不记，避免主动跑去群里说话。
+  function rememberProactiveScope(key, sessionId) {
+    if (!key.startsWith('private:')) return;
+    if (!sessionId) return;
+    try {
+      const userId = key.slice('private:'.length);
+      proactiveStore.upsertScope({ userId, dshSessionId: sessionId, qqTargetId: userId, enabledChannels: ['qq'] });
+    } catch (error) {
+      log('主动聊天：记范围失败', error?.message ?? error);
+    }
+  }
+
   async function ensureSession(key) {
     const epoch = sessionEpoch;
     const policy = sessionPolicy(key);
@@ -8296,6 +8340,7 @@ async function main() {
           retireSession(key);
         } else {
           if (epoch !== sessionEpoch || !isCurrentSession(key, existing)) throw new Error('会话创建期间已重置或权限已变化');
+          rememberProactiveScope(key, existing);
           return existing;
         }
       }
@@ -8310,6 +8355,7 @@ async function main() {
         reverse.set(home, key);
         saveState();
         try { api.events.follow(home); } catch {}
+        rememberProactiveScope(key, home);
         log(`会话 ${key} 绑到用户的家会话 ${home}（bindHomeSession=${cfg.socialV2.bindHomeSession}）`);
         return home;
       }
@@ -8368,6 +8414,7 @@ async function main() {
         throw new Error('会话创建期间已重置，丢弃新会话');
       }
       state.sessions[key] = sessionId;
+      rememberProactiveScope(key, sessionId);
       state.sessionPolicies[key] = policy;
       reverse.set(sessionId, key);
       saveState();
@@ -8413,6 +8460,151 @@ async function main() {
     pendingTimers: new Map(),      // key -> Set<timerId>：社交排程中尚未触发的定时器
     exitingSessions: new Set()     // sessionId：当前正在等待“活跃超时退场”发言完成的 DSH 会话
   };
+
+  // ── 主动聊天（任务书：DSH_QQ_Bridge_主动聊天）──────────────────────────────
+  // 与现有的 scheduleProactiveCheckV2 是两套东西：那套是社交行为（她自己在群里接话），
+  // 这套是有记录、有话题、有额度、可 dry-run 的「主动联系」。默认 dry-run，什么都不发。
+  const proactiveStore = createProactiveStore({
+    file: path.join(STATE_DIR, 'proactive.db'),
+    onError: (error) => log('主动聊天库异常：', error?.message ?? error),
+  });
+
+  const PROACTIVE_TURN_TIMEOUT_MS = 180_000;
+  const PROACTIVE_SILENT_TTL_MS = 300_000;
+
+  /**
+   * 让桥别把这一轮自动转发到 QQ。
+   * 回复必须由主动聊天自己发，否则桥发一遍、引擎再发一遍，她会说两次话。
+   */
+  function proactiveSilenceTurn(sessionId) {
+    const silentId = `proactive-${Date.now()}`;
+    const list = social.silentTurns.get(sessionId) ?? [];
+    social.silentTurns.set(sessionId, [...list, { id: silentId, ts: Date.now() }]);
+    const timer = setTimeout(() => {
+      const arr = social.silentTurns.get(sessionId) ?? [];
+      const next = arr.filter((item) => item.id !== silentId);
+      if (next.length > 0) social.silentTurns.set(sessionId, next);
+      else social.silentTurns.delete(sessionId);
+    }, PROACTIVE_SILENT_TTL_MS);
+    timer.unref?.();
+    return silentId;
+  }
+
+  /** 主动联系时给模型的话。不复述评分、不解释为什么联系她 —— 那会让她说话像客服。 */
+  /**
+   * 固定要求段：抽成一处常量，是为了让这段文字在**每一次**主动联系里逐字相同
+   * （模型端的稳定前缀更容易命中缓存），也让人能不读代码就整段换掉
+   * （`socialV2.proactiveEngine.prompt.rules`）。
+   */
+  const PROACTIVE_RULES = String(cfg.socialV2?.proactiveEngine?.prompt?.rules ?? '').trim() || [
+    '这不是她发来的消息，是你自己突然想找她说话。',
+    '要求：只说一两句，像人突然想起来才说的那种。别解释你为什么联系她，别复述上面这些信息。',
+    '如果你觉得现在真的没什么可说，就只回 [SILENT]，我当作这一轮没发生。',
+  ].join('\n');
+
+  /**
+   * 主动联系的提示词。
+   *
+   * 三条边界（都是省 token 换来的，别再往回调）：
+   *   ① 只有「现在 / 最近几句 / 心里记着的事 / 时机分」是变量，其余逐字固定；
+   *   ② 最近几句由策略里的 contextMessages 决定（默认 6，不是把 200 条全塞进来）；
+   *   ③ 不贴完整时间线、不复述历史消息的原文 —— 那些交给会话自己记得。
+   */
+  function buildProactivePrompt({ topic, score, context }) {
+    const stamp = new Date().toLocaleString('zh-CN', { timeZone: cfg.timeZone || 'Asia/Shanghai' });
+    const lines = ['【主动联系】', `现在：${stamp}`];
+    const recent = Array.isArray(context) ? context.slice(0, 12) : [];
+    if (recent.length > 0) {
+      lines.push('最近几句：');
+      for (const m of recent) {
+        const body = String(m?.text ?? '').trim();
+        if (!body) continue;
+        lines.push(`${m?.isSelf ? '你' : (String(m?.sender ?? '').trim() || '她')}：${body}`);
+      }
+    }
+    if (topic?.summary) lines.push(`你心里记着的事：${topic.summary}`);
+    lines.push(`时机分：${score}`, PROACTIVE_RULES);
+    return lines.join('\n');
+  }
+
+  /**
+   * 调 DSH 生成一句话。
+   * 注意任务书的红线：这是「调用 AI 拿回复」，不是「写入会话记录」——
+   * DSH 没有写助手消息的接口，这里走的就是正常的一轮 prompt。
+   */
+  async function proactiveGenerate({ userId, sessionId, topic, score, context }) {
+    const key = convKey('private', userId);
+    if (!sessionId) return { ok: false, error: '没有会话' };
+    if (isConversationBusyV2(key, getSocialV2State(key))) return { ok: false, error: '会话正忙' };
+    proactiveSilenceTurn(sessionId);
+    const waiter = proactiveEngine.expectTurn(sessionId, PROACTIVE_TURN_TIMEOUT_MS);
+    try {
+      await withTimeout(
+        api.sessions.prompt({
+          sessionId,
+          mode: 'queue',
+          content: [{ type: 'text', text: buildProactivePrompt({ topic, score, context }) }],
+        }),
+        PROACTIVE_TURN_TIMEOUT_MS,
+        '主动聊天 prompt',
+      );
+    } catch (error) {
+      return { ok: false, error: `发起失败：${error?.message ?? error}` };
+    }
+    const turn = await waiter;
+    if (!turn?.ok) return { ok: false, error: turn?.error ?? '没等到回复', usage: turn?.usage ?? null };
+    const plain = mdToPlain(turn.text).trim();
+    if (!plain || isSilentMarker(plain)) return { ok: false, error: '她选择不说' };
+    return { ok: true, text: plain, usage: turn.usage ?? null };
+  }
+
+  /** 投递一个渠道。第一版只有 QQ 私聊；群里不许主动找（任务书：默认只支持私聊）。 */
+  async function proactiveDeliver({ channel, targetId, text: body }) {
+    if (channel !== 'qq') return { ok: false, error: `暂不支持的渠道 ${channel}` };
+    if (!targetId) return { ok: false, error: '没有 QQ 目标' };
+    if (!bot) return { ok: false, error: 'QQ 协议端未连接' };
+    const id = Number(targetId);
+    if (!Number.isFinite(id) || id <= 0) return { ok: false, error: `QQ 目标不合法：${targetId}` };
+    if (!Array.isArray(cfg.allow?.private) || !cfg.allow.private.includes(id)) {
+      return { ok: false, error: `QQ ${id} 不在 allow.private 里` };
+    }
+    try {
+      assertSendAllowed();
+      await withTimeout(bot.sendPrivateMessage(id, text(escapeCqText(body))), SEND_TIMEOUT_MS, `主动聊天发送 private:${id}`);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: String(error?.message ?? error) };
+    }
+  }
+
+  const proactiveEngine = createProactiveEngine({
+    store: proactiveStore,
+    config: {
+      enabled: cfg.socialV2?.proactiveEngine?.enabled === true,
+      dryRun: cfg.socialV2?.proactiveEngine?.dryRun !== false,
+      policy: cfg.socialV2?.proactiveEngine?.policy ?? {},
+    },
+    timeZone: cfg.timeZone,
+    log,
+    generate: proactiveGenerate,
+    deliver: proactiveDeliver,
+    isBusy: (userId) => isConversationBusyV2(convKey('private', userId), getSocialV2State(convKey('private', userId))),
+    // 上下文按需加载：只给策略要的那几条（默认 6），不把 200 条历史全塞进提示词。
+    // 数据源就是桥自己在记的 recentMessages —— 已经在内存里，不必再查一遍 DSH。
+    recentMessages: (userId, limit) => {
+      const key = convKey('private', String(userId));
+      const list = socialV2.conversations.get(key)?.recentMessages;
+      if (!Array.isArray(list) || list.length === 0) return [];
+      const n = Math.max(1, Math.min(Number(limit) || 6, 20));
+      return list.slice(-n).map((m) => ({
+        isSelf: m?.isSelf === true,
+        sender: String(m?.sender ?? ''),
+        text: String(m?.plain ?? m?.text ?? '').slice(0, 200),
+      }));
+    },
+  });
+// 进程收尾与测试夹具都靠它把 sqlite 句柄放掉（不放的话临时目录删不掉）
+globalThis.__closeProactive = () => { try { proactiveEngine.stop(); proactiveStore.close(); } catch {} };
 
   // ── 二代仿真模式（reserved2）运行时状态与唤醒配置 ────────────────────────
   const socialV2 = {
@@ -11153,6 +11345,10 @@ async function main() {
       log(`忽略未授权会话 ${key}（当前模式 ${currentMode}，来自 ${event.user_id}）`);
       return;
     }
+    // 主动聊天：记「她最后一条消息」的时间。只记私聊 —— 第一版不主动找群。
+    if (kind === 'private') {
+      try { proactiveStore.touchUserMessage(String(id), Date.now()); } catch (error) { log('主动聊天：记消息时间失败', error?.message ?? error); }
+    }
     // 群策略：静音的群什么都不进状态（连未读都不攒），但日志留一行，便于事后查
     // 「这条消息为什么没反应」。放在账号守卫之前，省一次状态访问。
     if (groupPolicyV2(key)?.muted === true) {
@@ -11812,6 +12008,8 @@ async function main() {
               }
             }
             // collector 生命周期见 trackTurnEvent()：只为 turn/start 建、空壳 turn/end 即清。
+            // 主动聊天自己也在等这一轮的结果（它发起的主动联系要拿回复，不能靠桥转发）
+            try { proactiveEngine.observe(frame.sessionId, frame.event); } catch (error) { log('主动聊天：喂事件失败', error?.message ?? error); }
             const { ended } = trackTurnEvent(frame.sessionId, frame.event);
             if (ended) {
               // reserved2 无行动兜底：普通唤醒回合若既没发消息、也没 mark_read / set_wake_config，
@@ -12397,16 +12595,20 @@ async function main() {
   startSnowlumaWatch();
   startConsoleServer();
 
+  // 主动聊天的调度器（默认 dry-run，不会真的发东西）
+  proactiveEngine.start();
   await pumpMux();
 }
 
 process.on('SIGINT', () => {
   log('退出中…');
+  try { proactiveEngine.stop(); proactiveStore.close(); } catch {}
   saveState();
   releaseLock();
   process.exit(0);
 });
 process.on('SIGTERM', () => {
+  try { proactiveEngine.stop(); proactiveStore.close(); } catch {}
   saveState();
   releaseLock();
   process.exit(0);
@@ -12433,6 +12635,7 @@ process.on('uncaughtException', (error) => {
 process.on('exit', () => {
   // 先把 sqlite 句柄放了：WAL 模式留着没意义，而且 Windows 上句柄不放会挡住删库/搬家。
   try { globalThis.__closeHistoryStore?.(); } catch {}
+  try { proactiveEngine.stop(); proactiveStore.close(); } catch {}
   releaseLock();
 });
 

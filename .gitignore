@@ -90,3 +90,6 @@ audio/
 /roles/大肥鱼.md
 /roles/肥鱼.md
 /scripts/push-when-online.sh
+
+# Local scratch (patch scripts, probes)
+/room/

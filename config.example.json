@@ -264,6 +264,11 @@
       "gifFrames": 6,
       "gifTile": 240,
       "normalizeTimeoutMs": 25000
+    },
+    "proactiveEngine": {
+      "enabled": false,
+      "dryRun": true,
+      "policy": {}
     }
   },
   "webSearch": {
