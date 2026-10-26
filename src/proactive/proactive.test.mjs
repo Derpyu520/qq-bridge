@@ -524,3 +524,57 @@ test('生成失败会把额度还回去，并留在 retry_wait', async () => {
     assert.equal(trigger.state, 'retry_wait');
   });
 });
+
+test('normalizePolicy 把开口概率收敛到 0–1，歪值不抛错', () => {
+  assert.equal(normalizePolicy({ sendProbability: 0.35 }).sendProbability, 0.35);
+  assert.equal(normalizePolicy({ sendProbability: 2.5 }).sendProbability, 1);
+  assert.equal(normalizePolicy({ sendProbability: -1 }).sendProbability, 0);
+  assert.equal(normalizePolicy({ sendProbability: '一串中文' }).sendProbability, DEFAULT_POLICY.sendProbability);
+  assert.equal(normalizePolicy({ sendProbability: 1 }).sendProbability, 1);
+  assert.equal(normalizePolicy({}).sendProbability, DEFAULT_POLICY.sendProbability);
+});
+
+test('开口概率 0：判定通过也不调 AI，不花额度', async () => {
+  let generateCalls = 0;
+  await withFixture({ dryRun: false }, async ({ store, now }) => {
+    const engine = createProactiveEngine({
+      store,
+      now,
+      config: { enabled: true, dryRun: false, policy: { ...DEFAULT_POLICY, quietHours: NO_QUIET, sendProbability: 0 } },
+      timeZone: 'Asia/Shanghai',
+      generate: async () => { generateCalls += 1; return { text: '在吗' }; },
+    });
+    store.upsertScope({ userId: 'u1', dshSessionId: 's1', qqTargetId: '1001' });
+    createTopicManager({ store, now }).record({ userId: 'u1', summary: '问她面试', followUpAt: now() - 1000 });
+    const report = await engine.tick();
+    // 判定这一层是放行的，死在抽签上
+    assert.equal(report.candidates, 1);
+    assert.equal(report.skippedProb, 1);
+    assert.equal(report.generated, 0);
+    assert.equal(generateCalls, 0);
+    assert.equal(store.getState('u1').dailyCount, 0);
+    assert.ok(store.getState('u1').lastProactiveAt == null || store.getState('u1').lastProactiveAt === 0);
+  });
+});
+
+test('开口概率 0.5：抽不中不开口，抽中了照常发', async () => {
+  for (const [roll, expectGenerated] of [[0.9, 0], [0.1, 1]]) {
+    let generateCalls = 0;
+    await withFixture({ dryRun: false }, async ({ store, now }) => {
+      const engine = createProactiveEngine({
+        store,
+        now,
+        config: { enabled: true, dryRun: false, policy: { ...DEFAULT_POLICY, quietHours: NO_QUIET, sendProbability: 0.5 } },
+        timeZone: 'Asia/Shanghai',
+        random: () => roll,
+        generate: async () => { generateCalls += 1; return { text: '在吗' }; },
+      });
+      store.upsertScope({ userId: 'u1', dshSessionId: 's1', qqTargetId: '1001' });
+      createTopicManager({ store, now }).record({ userId: 'u1', summary: '问她面试', followUpAt: now() - 1000 });
+      const report = await engine.tick();
+      assert.equal(report.generated, expectGenerated, 'roll=' + roll);
+      assert.equal(generateCalls, expectGenerated, 'roll=' + roll);
+      assert.equal(report.skippedProb, expectGenerated === 0 ? 1 : 0, 'roll=' + roll);
+    });
+  }
+});

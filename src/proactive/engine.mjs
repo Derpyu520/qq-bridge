@@ -80,6 +80,8 @@ export function createProactiveEngine(deps = {}) {
 
   const now = deps.now ?? Date.now;
   const idFactory = deps.idFactory ?? randomUUID;
+  // 抽签用的随机源。测试要可预测，所以留了注入点。
+  const random = typeof deps.random === 'function' ? deps.random : Math.random;
   const timeZone = deps.timeZone || 'Asia/Shanghai';
 
   let config = {
@@ -140,7 +142,7 @@ export function createProactiveEngine(deps = {}) {
     // 上一轮（或上一个进程）生成完却没投出去的，先补上再说
     await drainDeliveries();
     const startedAt = now();
-    const result = { at: startedAt, skipped: null, userIds: 0, candidates: 0, merged: 0, suppressed: 0, generated: 0, calls: 0, details: [] };
+    const result = { at: startedAt, skipped: null, userIds: 0, candidates: 0, merged: 0, suppressed: 0, generated: 0, calls: 0, skippedProb: 0, details: [] };
     try {
       topics.sweep();
       triggers.releaseStale();
@@ -235,7 +237,21 @@ export function createProactiveEngine(deps = {}) {
           continue;
         }
 
-        // 4) 生成 → outbox → 投递（阶段 3 接上）
+        // 4) 概率抽签：分数够了，不等于这一次就要开口。
+        //    sendProbability=1 时这里整段跳过（老行为一个字节都不变）；
+        //    中间值每次机会独立抽一次，抽不中不花额度、不动配额，下次 tick 再抽。
+        const chance = Number.isFinite(policy.sendProbability) ? policy.sendProbability : 1;
+        if (chance < 1 && (chance <= 0 || random() >= chance)) {
+          triggers.transition(claimed.id, 'retry_wait', { score: verdict.score, note: BLOCK.probability });
+          detail.decision = 'skip';
+          detail.blocked = [BLOCK.probability];
+          result.skippedProb += 1;
+          rememberReport(detail);
+          result.details.push(detail);
+          continue;
+        }
+
+        // 5) 生成 → outbox → 投递（阶段 3 接上）
         triggers.transition(claimed.id, 'generating', { score: verdict.score });
         const quotaDay = dayKeyOf(startedAt, timeZone);
         // 省 token 第 1 条：硬性调用预算。消息额度是「发出去几条」，

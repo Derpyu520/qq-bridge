@@ -26,6 +26,12 @@ export const DEFAULT_POLICY = Object.freeze({
   /** 上下文按需加载：生成时只带最近几条相关消息（0 = 一条都不带）。 */
   contextMessages: 3,
   quietHours: Object.freeze({ start: '23:00', end: '08:00' }),
+  /**
+   * 每次判定通过后，真正开口的概率（0–1），面板上有滑块可以直接拖。
+   * 1 = 分数够了就发（老行为）；0 = 只看不开口；中间值让每一次机会自己抽签，
+   * 抽不中不花任何额度，下次 tick 再抽。这是「她今天话多不多」的旋钮。
+   */
+  sendProbability: 1,
   scoreThreshold: 55,
 });
 
@@ -53,6 +59,8 @@ export const BLOCK = Object.freeze({
   noTarget: 'target-missing',
   busy: 'conversation-busy',
   callLimit: 'call-limit',
+  /** 这次抽签没中（sendProbability 拦截），不是错误。 */
+  probability: 'probability-skip',
 });
 
 /** 把 'HH:mm' 解析成一天里的第几分钟；非法返回 null。 */
@@ -212,6 +220,11 @@ export function normalizePolicy(raw = {}, base = DEFAULT_POLICY) {
     if (!Number.isFinite(n)) return fallback;
     return Math.min(max, Math.max(min, Math.floor(n)));
   };
+  const pickFloat = (value, fallback, { min = 0, max = 1 } = {}) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(max, Math.max(min, n));
+  };
   const quiet = raw.quietHours && typeof raw.quietHours === 'object'
     ? {
       start: parseClock(raw.quietHours.start) == null ? base.quietHours.start : raw.quietHours.start,
@@ -233,5 +246,7 @@ export function normalizePolicy(raw = {}, base = DEFAULT_POLICY) {
     contextMessages: pickInt(raw.contextMessages, base.contextMessages, { min: 0, max: 50 }),
     quietHours: quiet,
     scoreThreshold: pickInt(raw.scoreThreshold, base.scoreThreshold, { min: 0, max: 1000 }),
+    // 0–1，不取整。写歪了（负数、字符串、2.5）按上下界收敛，不抛错。
+    sendProbability: pickFloat(raw.sendProbability, base.sendProbability, { min: 0, max: 1 }),
   };
 }
