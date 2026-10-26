@@ -7223,18 +7223,26 @@ async function main() {
             releaseLock();
             // 接力进程延迟 1.5s 再起来（BRIDGE_RESTART_DELAY_MS），
             // 免得和正在退出的本进程抢锁文件/控制台端口，被判成「已有实例」后 exit 2。
+            let handoff = null;
             try {
-              const child = spawn(process.execPath, process.argv.slice(1), {
+              handoff = spawn(process.execPath, process.argv.slice(1), {
                 cwd: process.cwd(),
                 detached: true,
                 stdio: 'ignore',
                 env: { ...process.env, BRIDGE_RESTART_DELAY_MS: '1500' },
               });
-              child.unref();
-              log(`控制台：已拉起接力进程 pid=${child.pid ?? '?'}，当前实例退出`);
+              handoff.on('error', (error) => { log(`控制台：接力进程启动失败：${error?.message ?? error}`); });
+              handoff.unref();
             } catch (error) {
-              log(`控制台：接力进程拉起失败，本实例退出后需要手动启动：${error?.message ?? error}`);
+              log(`控制台：接力进程拉起失败：${error?.message ?? error}`);
             }
+            // spawn 的错误是异步的：没有 pid 说明没真的拉起来。
+            // 这种情况下宁可「不重启」也不能退出——退了就再没人接手，3100 直接消失。
+            if (!handoff?.pid) {
+              log('控制台：接力进程没有起来，放弃重启，本实例继续运行（检查 node 路径或权限）');
+              return;
+            }
+            log(`控制台：已拉起接力进程 pid=${handoff.pid}，当前实例退出`);
             setTimeout(() => process.exit(0), 300);
           }, 500);
           return;
