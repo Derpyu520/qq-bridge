@@ -89,3 +89,4 @@ audio/
 # 个人人格卡（角色文件是用户内容，这两份只属于我）
 /roles/大肥鱼.md
 /roles/肥鱼.md
+/scripts/push-when-online.sh
