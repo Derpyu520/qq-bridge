@@ -26,6 +26,8 @@ import * as mediaDims from '../src/media-dims.js';
 import * as sendPacing from '../src/qq-send-pacing.js';
 import * as roleCard from '../src/role-card.js';
 import * as snowlumaConn from '../src/snowluma-conn.js';
+import * as accessRules from '../src/access-rules.js';
+import * as slangEntry from '../src/slang-entry.js';
 import { unwrap, createTurnCollector } from '../src/dsh-client.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -149,6 +151,7 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
       'forward.js', 'slang-learner.js', 'sticker-lib.js', 'model-prices.js', 'token-ledger.js',
       'send-voice-lib.js', 'preset-prompt.js', 'state-acl.mjs', 'dsh-client.js',
       'qq-text-split.js', 'media-dims.js', 'qq-send-pacing.js', 'role-card.js', 'snowluma-conn.js',
+      'access-rules.js', 'slang-entry.js',
       // qq-model-view.js 走另一条路：源码被摘掉 export 后在 VM 里执行（见下面的 modelViewSource）。
       'qq-model-view.js',
     ]);
@@ -234,6 +237,7 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     // role-card / snowluma-conn 之前一直没注入：落在 VM 里就是 "not defined"，
     // 只是因为没测试走到那条路径才没被发现。补上，别等下次踩。
     ...roleCard, ...snowlumaConn,
+    ...accessRules, ...slangEntry,
     // 桥接的出图出口会调归一化（体积/动图抽帧）：VM 里必须能拿到这几个函数。
     normalizeImageForModel: mediaNormalize.normalizeImageForModel,
     sniffImage: mediaNormalize.sniffImage,

@@ -13,6 +13,8 @@ import crypto from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import yaml from 'js-yaml';
 import { extractPresetPrefix, presetPromptBlockers, presetPromptWarnings, renderPresetPromptYaml } from './preset-prompt.js';
+import { allowed, modeAllowed } from './access-rules.js';
+import { publicSlangEntry } from './slang-entry.js';
 import { getImageDimensions } from './media-dims.js';
 import { clampGapV2, computeGapsV2, randInt } from './qq-send-pacing.js';
 import { GEN1_ROLE_LINE_RE, parseRoleSections, roleCharStats, roleSectionReport, selectRoleText } from './role-card.js';
@@ -1440,17 +1442,6 @@ function extractMediaFromSegments(segments) {
   return media;
 }
 
-function allowed(kind, id, cfg) {
-  // OneBot 事件里的 id 可能是数字也可能是字符串（int64 序列化差异），统一转字符串比较。
-  // 配置字段兼容单数（group/private）与复数（groups/privates）两种写法。
-  const s = String(id);
-  const denyList = cfg.deny[kind] ?? cfg.deny[kind + 's'] ?? [];
-  if (denyList.map(String).includes(s)) return false;
-  const allowList = cfg.allow[kind] ?? cfg.allow[kind + 's'] ?? [];
-  if (allowList.length > 0) return allowList.map(String).includes(s);
-  return cfg.allowAllWhenEmpty;
-}
-
 // 二代会话 key 规范化：只接受 group:正整数 / private:正整数，并去掉前导零，避免同一会话出现多个别名。
 function canonicalV2Key(key) {
   const m = /^(group|private):(\d+)$/.exec(String(key ?? '').trim());
@@ -2410,21 +2401,6 @@ async function main() {
   // 其中 text 是提交该词条的那个会话里的消息片段、key 是那个会话的名字。
   // 黑话库是全群共享的，带上 evidence 就等于让 A 群的 AI 读到 B 群的会话名和原话。
   // 控制台要证据走 `GET /api/slang`（原始条目，含 evidence，仅控制台可达）。
-  function publicSlangEntry(e) {
-    return {
-      id: e?.id ?? '',
-      content: e?.content ?? '',
-      meaning: e?.meaning ?? '',
-      usage: e?.usage ?? '',
-      example: e?.example ?? '',
-      risk: e?.risk ?? '',
-      status: e?.status ?? SLANG_STATUS.CANDIDATE,
-      source: e?.source ?? 'ai',
-      count: Number(e?.count) || 0,
-      updatedAt: e?.updatedAt ?? ''
-    };
-  }
-
   // 已确认黑话的公开列表（按出现次数排序，最多 injectMax 条）。
   function confirmedSlangListV2() {
     const max = Math.max(1, Math.min(30, Number(cfg.slang?.injectMax) || 8));
@@ -2760,15 +2736,6 @@ async function main() {
   }
 
   /** 当前模式是否允许该会话进入 */
-  function modeAllowed(key, kind, id, cfg, mode) {
-    if (mode === 'closed-agent') {
-      // 封闭 agent 模式：仅 owner 私聊
-      return key === `private:${String(cfg.ownerQQ ?? '')}`;
-    }
-    // chat / reserved / reserved2（仿真模式，暂同 chat 白名单）
-    return allowed(kind, id, cfg);
-  }
-
   /**
    * 解析一个 preset 名。
    *
