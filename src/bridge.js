@@ -11204,7 +11204,18 @@ globalThis.__closeProactive = () => { try { proactiveEngine.stop(); proactiveSto
       }
       return { reason: item.reason, action: 'timer' };
     }
-    const stillRelevant = Array.isArray(st.unread) && st.unread.some((m) => m && Number(m.seq) >= Number(item.seq));
+    // 只认「暂存的那条消息本身还在未读里」。
+    // 原来写的是 >=，意思是只要未读里还有任何一条比它新的消息，就判它「还相关」——
+    // 于是回合结束、更新消息进来之后，早就处理过的那条会被当成积压再补发一次
+    // （实测 01:34:02 重投了 01:27 的 private@seq84，白白多跑一轮回合）。
+    // 未读数组里已读项会被移除，所以精确匹配就等于「还没处理过」。
+    // 另外兜一道水位：seq 不高于 readThroughSeq 的一律算已处理。
+    const seqNum = Number(item.seq);
+    const readThrough = Number(st.readThroughSeq ?? 0);
+    const stillRelevant = Number.isFinite(seqNum)
+      && seqNum > (Number.isFinite(readThrough) ? readThrough : 0)
+      && Array.isArray(st.unread)
+      && st.unread.some((m) => m && Number(m.seq) === seqNum);
     if (stillRelevant) {
       log(`[reserved2] ${key} 补发繁忙期间积压的唤醒：${item.reason}@seq${item.seq}`);
       scheduleWakeV2(key, item.reason);
