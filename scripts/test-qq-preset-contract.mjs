@@ -50,7 +50,7 @@ test('one closing action can acknowledge the read watermark after the full obser
   assert.match(prefix, /qq_mark_read\(throughSeq=/);
   assert.match(prefix, /qq_set_wake_config\(config=[^)]*throughSeq=/);
   assert.match(prefix, /不需先 mark_read/);
-  assert.match(prefix, /qq_wait_for_messages\(timeoutMs=300000\)/);
+  assert.match(prefix, /qq_wait_for_messages\(timeoutMs=300000(, quietMs=\d+)?\)/);
   assert.match(prefix, /短等待不能代替/);
   assert.match(prefix, /preSleepWaitRemainingMs[^。]*继续等待/);
   assert.match(prefix, /若你参与回复[^。]*重新观察/);
@@ -58,7 +58,7 @@ test('one closing action can acknowledge the read watermark after the full obser
 
 test('pre-reply quiet checks, waiting for replies and pre-sleep observation have distinct instructions', () => {
   assert.match(prefix, /先理解并处理当前消息/);
-  assert.match(prefix, /【首答前】[^\n]*qq_wait_for_messages\(purpose="reply", quietMs=10000\)/);
+  assert.match(prefix, /【首答前】[^\n]*qq_wait_for_messages\(purpose="reply", quietMs=3000\)/);
   assert.match(prefix, /读取和思考花掉的时间也算，已安静足够就立即返回/);
   assert.match(prefix, /不要再重开一次普通长等待/);
   assert.match(prefix, /预算到但 quiet=false 不等于对方说完/);

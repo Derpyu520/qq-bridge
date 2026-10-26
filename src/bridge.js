@@ -799,7 +799,7 @@ function loadConfig() {
         recommendedQuestion: true,
         recommendedPoke: true,
         recommendedHint: '如果你要潜水，推荐先调用 qq_wait_for_messages(timeoutMs=300000) 完成一次沉睡前观察：5 分钟内没人说话就可以设置下一次唤醒并沉睡；若期间有人发新消息，先查看 newMessages，判断不需要你参与可直接沉睡，若参与了则下次想睡需再等观察窗口。潜水时长推荐 5~120 分钟，普通消息概率 0.05；@/名字/关键词/提问唤醒建议保持开启。需要等特定某人/某几人时，可额外设置 triggers.speakerIds。',
-        batchWindowMs: 8000,
+        batchWindowMs: 1200,
         maxWakePerMinute: 1,
         maxWakePerHour: 12,
         noActionLimit: 3,
@@ -2414,6 +2414,10 @@ async function main() {
    * **还活着**的回合。过期只是不再判忙：collector 本身保留，真回复照常 flush，只是允许新唤醒排队。
    */
   const TURN_BUSY_LEASE_MS = 15 * 60 * 1000;
+  // 快照里恢复出来的"断线时仍在跑"的回合，只保留一小段宽限就解除忙标记：
+  // 它的 turn/end 若真会到，几十秒内就到；等不到说明那回合已经死了（DSH 重启/工具长挂），
+  // 继续按满租约判忙会让会话在每次桥接重启后卡 15 分钟，所有 @ 只能排队 —— 那才是真正的延迟来源。
+  const RESTORED_TURN_GRACE_MS = 45 * 1000;
   const turnLeaseNoted = new Set(); // 租约过期的日志去重（每个 session 只记一次）
   const pendingWakeLeaseTimers = new Map(); // key -> timeout：防止 accepted 但无 turn/end 的唤醒把 key 永久标记为 busy
   const wakeConfigUpdatedKeys = new Set();
@@ -2532,7 +2536,9 @@ async function main() {
     // 恢复出来的回合也必须带起始时间，否则租约对它无从生效 —— 这正是
     // 「DSH 重启后忙标记永不复位」的那条路径（issue #19）。不知道真实起点时按现在算：
     // 活着的回合会在 turn/end 清掉；真丢了的回合最多再忙一个租约期就自动解除。
-    if (!v2TurnStartAt.has(sessionId)) v2TurnStartAt.set(sessionId, Date.now());
+    if (!v2TurnStartAt.has(sessionId)) {
+      v2TurnStartAt.set(sessionId, Date.now() - (TURN_BUSY_LEASE_MS - RESTORED_TURN_GRACE_MS));
+    }
     log(`重连后恢复了进行中的回合（${sessionId}，turn ${[...open].join(',')}）`);
   }
 
@@ -4860,9 +4866,13 @@ async function main() {
               poke: normalizeTriggerBool('poke', current.triggers.poke === true),
               keywords: nextKeywords
             },
+            // 全局 wake.batchWindowMs 是唯一权威值：AI 不显式传该字段时跟随全局，
+            // 不再沿用会话里的旧值（否则旧值会被永久钉死，改全局也不生效）。
             batchWindowMs: Number.isFinite(Number(input.batchWindowMs)) && Number(input.batchWindowMs) >= 1000
               ? Math.min(3600000, Math.round(Number(input.batchWindowMs)))
-              : current.batchWindowMs
+              : (Number(cfg.socialV2?.wake?.batchWindowMs) >= 1000
+                ? Math.min(3600000, Math.round(Number(cfg.socialV2.wake.batchWindowMs)))
+                : current.batchWindowMs)
           };
           // 从 active 切回 diving 时，若 AI 没显式保留 anyMessage，则清除，避免“潜水=每条都唤醒”的语义矛盾。
           if (next.mode === 'diving' && !('anyMessage' in inputTriggers)) {
@@ -8291,7 +8301,7 @@ async function main() {
         anyMessage: defaultMode === 'active',
         probability: Math.min(1, Math.max(0, Number(w.recommendedProbability) || 0))
       },
-      batchWindowMs: Math.max(1000, Number(w.batchWindowMs) || 8000),
+      batchWindowMs: Math.max(1000, Number(w.batchWindowMs) || 1200),
       lastWakeAt: 0,
       wakeCount: 0,
       noActionCount: 0,
@@ -10628,7 +10638,7 @@ async function main() {
       st.sleepTimer = null;
     }
     st.pendingWakeReason = reason;
-    const batchMs = Math.max(1000, Number(st.wakeConfig?.batchWindowMs) || 8000);
+    const batchMs = Math.max(1000, Number(st.wakeConfig?.batchWindowMs) || 1200);
     st.pendingWakeTimer = setTimeout(() => {
       st.pendingWakeTimer = null;
       const finalReason = st.pendingWakeReason || reason;
