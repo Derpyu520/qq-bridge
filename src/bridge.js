@@ -7768,6 +7768,8 @@ async function main() {
 
   // 内部复盘（夜间整理）期间禁止往 QQ 发消息：整理不是任务，别在凌晨突然说话。
   const suppressSendsUntil = new Map();
+  // 工具参数 JSON 非法时的重试计数（5 分钟内最多重试一次，防止死循环刷 token）。
+  const jsonRetryState = new Map();
   function sendsSuppressed(kind, id) {
     const until = suppressSendsUntil.get(`${kind}:${id}`) || 0;
     return until > Date.now();
@@ -12145,11 +12147,39 @@ async function main() {
                   await sendToQQ(key, '⚠️ 这个 QQ 会话用的工作目录已经不存在了（项目被移动过），已自动重置会话；麻烦再发一次刚才的消息。');
                   continue;
                 }
+                // 模型偶尔会把工具参数写成非法 JSON（实测：messages 的值漏了引号，
+                // 直接写成 messages: 酸辣粉，顺便说100抽算体面了）。这是模型侧的问题，
+                // 但只报错不补救会让这一轮回复直接消失——所以发一次「格式纠错」让它重试。
+                if (/tool input is invalid JSON/i.test(String(msg))) {
+                  const nowTs = Date.now();
+                  const prev = jsonRetryState.get(key);
+                  const count = prev && nowTs - prev.at < 5 * 60 * 1000 ? prev.count + 1 : 1;
+                  jsonRetryState.set(key, { count, at: nowTs });
+                  if (count <= 1) {
+                    log(`↻ ${key} 工具参数不是合法 JSON，发一次纠正提示重试（第 ${count} 次）`);
+                    appendActivity(`${key} 工具参数 JSON 非法，已自动重试一次`);
+                    const fix = '【格式纠错】你刚才那次工具调用的参数不是合法 JSON（文字值漏了引号）。请重新调用一次同一个工具：所有字符串都要用英文双引号包起来，多条消息写成数组，例如 {"messages": ["酸辣粉", "算体面了"]}。不要把中文直接当值。';
+                    try {
+                      await deliverPrompt(key, fix, { wakeReason: 'formatRetry' });
+                    } catch (error) {
+                      log(`↻ ${key} 纠正提示投递失败：${error?.message ?? error}`);
+                    }
+                    continue;
+                  }
+                  log(`↻ ${key} 连续 ${count} 次 JSON 非法，放弃重试`);
+                }
                 const safeMsg = shouldAuditKey(key) && SENSITIVE_RE.test(msg) ? '（含敏感信息，已隐藏）' : msg.slice(0, 500);
                 // 以前这里只发 QQ、不写日志：出问题时 bridge.log 里什么都没有，排查只能靠猜（PR #24）。
                 log(`⚠️ agent 处理出错 (${key})：${safeMsg}`);
                 appendActivity(`${key} agent 处理出错：${safeMsg.slice(0, 80)}`);
-                await sendToQQ(key, `⚠️ agent 处理出错：${safeMsg}`);
+                if (key.startsWith('group:')) {
+                  // 群里的报错只进日志/私聊，不要往群里刷「agent 处理出错」。
+                  if (cfg.ownerQQ) {
+                    try { await sendToQQ(`private:${cfg.ownerQQ}`, `⚠️ 群 ${key} 处理出错：${safeMsg}`); } catch {}
+                  }
+                } else {
+                  await sendToQQ(key, `⚠️ agent 处理出错：${safeMsg}`);
+                }
                 if (isFarewell) {
                   const st = socialState(key);
                   if (st.phase === 'exiting') {
