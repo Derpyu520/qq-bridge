@@ -468,10 +468,24 @@ function backupPresetFile(name) {
 }
 
 // state/backups/ 是手工备份的落脚处（改 config、改 bridge.js 前先拷一份）。
-// 没人清就一直涨，按「同一个原件只留最近 KEEP 份」收：分组键取 `.bak` 之前那截文件名，
-// 所以 `config.json.bak-port-003611` 和 `config.json.bak-wake-limit-...` 算同一组。
+// 没人清就一直涨，按「同一个原件只留最近 KEEP 份」收。
+//
+// 2026-10-26 统一了命名：`<原名>.<YYYYMMDD-HHmmss>.bak`（scripts/backup-state.mjs 负责写）。
+// 分组规则因此只有一条：去掉结尾的 `.bak`，再去掉结尾的时间戳。
+//   新：config.json.20261026-131500.bak     → config.json
+//   旧：config.json.bak-wake-limit-1792...  → config.json（截到第一个 .bak）
+// 两种都认，因为老备份还在盘上，认不完就不能删。
 const STATE_BACKUP_KEEP = 3;
 const STATE_BACKUP_MAX_AGE_DAYS = 7;
+const STATE_BACKUP_STAMP_RE = /^\d{8}-\d{6}(?:-[0-9a-z-]+)?$/;
+function stateBackupGroupKey(file) {
+    let base = file;
+    if (base.endsWith('.bak')) base = base.slice(0, -4);
+    else if (base.includes('.bak')) base = base.slice(0, base.indexOf('.bak'));
+    const dot = base.lastIndexOf('.');
+    if (dot > 0 && STATE_BACKUP_STAMP_RE.test(base.slice(dot + 1))) base = base.slice(0, dot);
+    return base;
+}
 function pruneStateBackups(keep = STATE_BACKUP_KEEP) {
   const dir = path.join(STATE_DIR, 'backups');
   let entries;
@@ -483,7 +497,7 @@ function pruneStateBackups(keep = STATE_BACKUP_KEEP) {
   const cutoff = Date.now() - STATE_BACKUP_MAX_AGE_DAYS * 24 * 3600 * 1000;
   const groups = new Map();
   for (const file of entries) {
-    const base = file.slice(0, file.indexOf('.bak'));
+    const base = stateBackupGroupKey(file);
     let mtime = 0;
     try { mtime = fs.statSync(path.join(dir, file)).mtimeMs; } catch {}
     if (!groups.has(base)) groups.set(base, []);
