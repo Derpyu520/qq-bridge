@@ -5070,7 +5070,7 @@ async function main() {
             atomicWriteJson(configFile, file);
             cfg.socialV2 = file.socialV2;
             const applied = proactiveEngine.configure(patch);
-            const report = body.forceTick === true ? await proactiveEngine.tick() : null;
+            const report = body.forceTick === true ? await proactiveEngine.tick({ forceBusy: body.forceBusy === true }) : null;
             sendJson({ ok: true, config: applied, report });
             return;
           }
@@ -8496,11 +8496,13 @@ async function main() {
    * （模型端的稳定前缀更容易命中缓存），也让人能不读代码就整段换掉
    * （`socialV2.proactiveEngine.prompt.rules`）。
    */
-  const PROACTIVE_RULES = String(cfg.socialV2?.proactiveEngine?.prompt?.rules ?? '').trim() || [
+  // 每次生成现读一遍 cfg：面板改完提示词，不必重启桥就生效。
+  const PROACTIVE_DEFAULT_RULES = [
     '这不是她发来的消息，是你自己突然想找她说话。',
     '要求：只说一两句，像人突然想起来才说的那种。别解释你为什么联系她，别复述上面这些信息。',
     '如果你觉得现在真的没什么可说，就只回 [SILENT]，我当作这一轮没发生。',
   ].join('\n');
+  const proactiveRules = () => String(cfg.socialV2?.proactiveEngine?.prompt?.rules ?? '').trim() || PROACTIVE_DEFAULT_RULES;
 
   /**
    * 主动联系的提示词。
@@ -8523,7 +8525,7 @@ async function main() {
       }
     }
     if (topic?.summary) lines.push(`你心里记着的事：${topic.summary}`);
-    lines.push(`时机分：${score}`, PROACTIVE_RULES);
+    lines.push(`时机分：${score}`, proactiveRules());
     return lines.join('\n');
   }
 
@@ -8532,10 +8534,11 @@ async function main() {
    * 注意任务书的红线：这是「调用 AI 拿回复」，不是「写入会话记录」——
    * DSH 没有写助手消息的接口，这里走的就是正常的一轮 prompt。
    */
-  async function proactiveGenerate({ userId, sessionId, topic, score, context }) {
+  async function proactiveGenerate({ userId, sessionId, topic, score, context, forceBusy }) {
     const key = convKey('private', userId);
     if (!sessionId) return { ok: false, error: '没有会话' };
-    if (isConversationBusyV2(key, getSocialV2State(key))) return { ok: false, error: '会话正忙' };
+    // forceBusy 是脚本强制测试用的旁路：引擎那边已经放过，这里再拦就白放了。
+    if (forceBusy !== true && isConversationBusyV2(key, getSocialV2State(key))) return { ok: false, error: '会话正忙' };
     proactiveSilenceTurn(sessionId);
     const waiter = proactiveEngine.expectTurn(sessionId, PROACTIVE_TURN_TIMEOUT_MS);
     try {
@@ -8554,7 +8557,9 @@ async function main() {
     const turn = await waiter;
     if (!turn?.ok) return { ok: false, error: turn?.error ?? '没等到回复', usage: turn?.usage ?? null };
     const plain = mdToPlain(turn.text).trim();
-    if (!plain || isSilentMarker(plain)) return { ok: false, error: '她选择不说' };
+    // 这两种要分开报：空回复多半是没等到回合，[SILENT] 是她真的决定不说。
+    if (!plain) return { ok: false, error: `她这轮没说话（原文 ${JSON.stringify(turn.text ?? '')}）` };
+    if (isSilentMarker(plain)) return { ok: false, error: '她选择不说（[SILENT]）' };
     return { ok: true, text: plain, usage: turn.usage ?? null };
   }
 
@@ -8565,10 +8570,13 @@ async function main() {
     if (!bot) return { ok: false, error: 'QQ 协议端未连接' };
     const id = Number(targetId);
     if (!Number.isFinite(id) || id <= 0) return { ok: false, error: `QQ 目标不合法：${targetId}` };
-    if (!Array.isArray(cfg.allow?.private) || !cfg.allow.private.includes(id)) {
+    if (!Array.isArray(cfg.allow?.private) || !cfg.allow.private.includes(String(id))) {
       return { ok: false, error: `QQ ${id} 不在 allow.private 里` };
     }
     try {
+      // 这个作用域里没有这个守卫的声明 —— 少了这一行，投递会抛
+      // ReferenceError: assertSendAllowed is not defined，消息卡在 retry_wait 永远发不出去。
+      const assertSendAllowed = captureSendGuard(`private:${id}`);
       assertSendAllowed();
       await withTimeout(bot.sendPrivateMessage(id, text(escapeCqText(body))), SEND_TIMEOUT_MS, `主动聊天发送 private:${id}`);
       return { ok: true };

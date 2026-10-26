@@ -53,7 +53,9 @@ function createTurnWaiter() {
       }
       if (event.type === 'turn/end') {
         if (!started) return null;
-        return { reason: event.data?.reason, text, usage };
+        // ok 必须显式给：调用方用 `turn.ok` 判断这一轮有没有拿到话，
+        // 少了它就会把「收到了回复」当成「没等到回复」。
+        return { ok: true, reason: event.data?.reason, text, usage };
       }
       return null;
     },
@@ -101,6 +103,11 @@ export function createProactiveEngine(deps = {}) {
   let lastTick = null;
   let inFlight = false;
   const waiting = new Map(); // sessionId -> 我们正等着的那一轮
+  // 会话里当前有几个回合在跑。主动聊天复用的是用户的会话：要回复的时候
+  // 用户自己那一轮可能正说到一半，它的 turn/end 会被我们当成「自己的回复」——
+  // 2026-10-26 20:49 就这样把用户那句「等这次跑完。」当成主动消息发了出去。
+  // 有活性回合时，等回复要多跳过那一轮的收尾。
+  const activeTurns = new Map(); // sessionId -> number
   let timer = null;
   let lastError = null;
 
@@ -132,7 +139,7 @@ export function createProactiveEngine(deps = {}) {
    *
    * 注意 §3：这里**不许**出现任何 sessions.prompt 调用。
    */
-  async function tick() {
+  async function tick(options = {}) {
     if (inFlight) return { skipped: 'in-flight' };
     if (!config.enabled) {
       lastTick = { at: now(), skipped: 'disabled', userIds: 0, candidates: 0, suppressed: 0 };
@@ -189,7 +196,8 @@ export function createProactiveEngine(deps = {}) {
           now: startedAt,
           timeZone,
           policy,
-          busy: deps.isBusy ? deps.isBusy(userId, scope.dshSessionId) === true : false,
+          // 强制测试用：跳过「会话正忙」这道门槛，其余门槛仍然照判。
+          busy: options.forceBusy === true ? false : (deps.isBusy ? deps.isBusy(userId, scope.dshSessionId) === true : false),
         });
 
         const detail = {
@@ -292,6 +300,8 @@ export function createProactiveEngine(deps = {}) {
             score: verdict.score,
             context: Array.isArray(recent) ? recent : [],
             contextLimit: policy.contextMessages,
+            // 强制测试：让 generate 那边也知道这次是「别管忙不忙」的。
+            forceBusy: options.forceBusy === true,
           });
           if (!generated || typeof generated.text !== 'string' || !generated.text.trim()) {
             // 失败也花了钱：调用次数照记，token 用量有就记没有就 0。
@@ -380,8 +390,23 @@ export function createProactiveEngine(deps = {}) {
    * 复用的是用户已有的会话，我们不拥有它，只能被动截胡自己发起的那一次。
    */
   function observe(sessionId, event) {
+    const type = event?.type ?? event?.kind ?? '?';
+    if (type === 'turn/start') activeTurns.set(sessionId, (activeTurns.get(sessionId) ?? 0) + 1);
+    else if (type === 'turn/end') activeTurns.set(sessionId, Math.max(0, (activeTurns.get(sessionId) ?? 0) - 1));
+
     const slot = waiting.get(sessionId);
     if (!slot) return false;
+    // 开始等之前就在跑的那一轮，它的 turn/start 我们根本没看见（那时还没建 waiting），
+    // 所以不能等它产出 ended，只能按 turn/end 计数把它整个跳过。
+    if (type === 'turn/end' && slot.skip > 0) {
+      slot.skip -= 1;
+      slot.collector = createTurnWaiter();
+      return false;
+    }
+    // 记账：超时要能分清「一条事件都没来」和「有事件但这一轮没结束」，
+    // 否则只报一句「等 DSH 回复超时」，下一次还得从头查。
+    slot.events = (slot.events ?? 0) + 1;
+    slot.lastType = type;
     const ended = slot.collector.push(event);
     if (!ended) return true;
     clearTimeout(slot.timer);
@@ -403,12 +428,18 @@ export function createProactiveEngine(deps = {}) {
       prev.reject(new Error('上一轮还没结束就又要了一轮'));
     }
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      // 开始等的时候，会话里可能已经有用户自己的一轮在跑：那一轮的收尾必须跳过，
+      // 否则拿到的就是用户刚说的话，不是我们这次 prompt 的回复。
+      const skip = (activeTurns.get(sessionId) ?? 0) > 0 ? 1 : 0;
+      const slot = { collector: createTurnWaiter(), resolve, reject, timer: null, events: 0, lastType: null, skip };
+      slot.timer = setTimeout(() => {
         waiting.delete(sessionId);
-        reject(new Error('等 DSH 回复超时'));
+        const seen = slot.events ?? 0;
+        const tail = seen ? `最后一个事件 ${slot.lastType}` : '一条会话事件都没收到';
+        reject(new Error(`等 DSH 回复超时（${Math.round(timeoutMs / 1000)}s 内 ${seen} 个事件，${tail}）`));
       }, timeoutMs);
-      timer.unref?.();
-      waiting.set(sessionId, { collector: createTurnWaiter(), resolve, reject, timer });
+      slot.timer.unref?.();
+      waiting.set(sessionId, slot);
     });
   }
 
