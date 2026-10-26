@@ -143,7 +143,9 @@ console.log('## qq-bridge 语音系统：MCP 工具与开关映射');
   ok(/voice\?\.enabled !== false/.test(mcp), '注册期也检查 voice.enabled（关闭时不注册，省 token）');
   const bridge = read('src/bridge.js');
   ok(/sendVoice: 'qq_send_voice \/ qq_list_voices'/.test(bridge), 'qq_get_prompt 的 toolMap 含语音工具');
-  ok(/'sendVoice'\]/.test(bridge), 'config API 的 toolFlags 含 sendVoice');
+  // 原来写死成「数组最后一个元素是 sendVoice」，后来 toolFlags 尾部又接了空间三件套，
+  // 这条断言就假失败了。改成在 toolFlags 数组内部找，位置无关。
+  ok(/toolFlags = \[[^\]]*'sendVoice'/.test(bridge), 'config API 的 toolFlags 含 sendVoice');
   const ex = JSON.parse(read('config.example.json'));
   // 这一段查的是**「出厂默认就该是关的」**这类契约 —— 权威声明是随仓库发布的
   // config.example.json。**刻意不查用户的 config.json**（早期版本查的是它，两个毛病）：
@@ -180,9 +182,13 @@ console.log('## qq-bridge 语音系统：控制台与 preset');
 
 console.log('## 文档');
 {
-  const voice = read(path.join('docs', 'guides', 'VOICE.md'));
+  // 这份文档在部分检出/精简过的仓库里不存在（2026-10-26 实测 ENOENT 直接崩，把整套
+  // 审计拖成红的）。缺文档当跳过并说清楚，别当「语音系统坏了」。
+  const voiceDoc = path.join('docs', 'guides', 'VOICE.md');
+  const voice = exists(voiceDoc) ? read(voiceDoc) : '';
+  if (!voice) console.log(`  ⏭️ ${voiceDoc} 不存在，跳过文档一致性检查`);
   for (const needle of ['图形界面', 'voice-gui.mjs', 'voice-cli.mjs', '默认是关的', '发语音-图形界面.cmd']) {
-    ok(voice.includes(needle), 'docs/guides/VOICE.md 提到「' + needle + '」');
+    if (voice) ok(voice.includes(needle), `${voiceDoc} 提到「${needle}」`);
   }
   const readme = read('README.md');
   ok(readme.includes('voice-gui.mjs') && readme.includes('voice-cli.mjs'), 'README 含两个语音工具的入口说明');

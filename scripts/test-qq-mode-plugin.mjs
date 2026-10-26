@@ -24,6 +24,11 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const PLUGIN_DIR = path.join(ROOT, 'plugins', 'qq-mode-console');
 const NS = 'qq-mode';
 
+// schemastery 里带 meta.volatile 的字段，resolve 出来的不是原始值，而是一个
+// 只有 get() 的包装对象（源码 Schema.resolve：volatile 分支 createVolatile(value)）。
+// 所以断言前必须解包，否则永远拿到 {} / 个对象，看起来像"默认值丢了"。
+const unwrap = (v) => (v && typeof v.get === 'function' ? v.get() : v);
+
 const mod = await import(pathToFileURL(path.join(PLUGIN_DIR, 'lib', 'index.js')).href);
 const patchText = fs.readFileSync(path.join(PLUGIN_DIR, 'cordis.patch.yml'), 'utf8');
 const source = fs.readFileSync(path.join(PLUGIN_DIR, 'lib', 'index.js'), 'utf8');
@@ -45,7 +50,7 @@ test('cordis.patch.yml 的 entry id 恰好等于命名空间名', () => {
 
 test('Config 是可用的 schemastery schema，且带 volatile 字段', () => {
   const resolved = mod.Config({});
-  assert.equal(resolved.mode, 'reserved2', 'Config 默认 mode 应为 reserved2');
+  assert.equal(unwrap(resolved.mode), 'reserved2', 'Config 默认 mode 应为 reserved2');
 
   // ③ volatile 标记。注意 schemastery 的 toJSON() 是**引用表**形状：
   //    顶层可能是 { uid, refs: { '<uid>': <node> } }，真正的 dict/字段在 refs 里，
@@ -67,7 +72,7 @@ test('Config 是可用的 schemastery schema，且带 volatile 字段', () => {
 
 test('schema 接受全部规范/历史 mode 拼写，拒绝非法值', () => {
   for (const mode of ['chat', 'closed-agent', 'reserved', 'reserved2', 'simulation']) {
-    assert.equal(mod.Config({ mode }).mode, mode, `${mode} 应被接受`);
+    assert.equal(unwrap(mod.Config({ mode }).mode), mode, `${mode} 应被接受`);
   }
   assert.throws(() => mod.Config({ mode: 'bogus' }), '非法 mode 必须被拒绝');
 });

@@ -213,7 +213,9 @@ console.log('## 控制台契约');
   const html = fs.readFileSync(path.join(ROOT, 'public', 'console.html'), 'utf8');
   const bridgeSrc = fs.readFileSync(path.join(ROOT, 'src', 'bridge.js'), 'utf8');
   ok(html.includes('data-v2-tool="sendVoice"'), '控制台有 sendVoice 工具开关');
-  ok(bridgeSrc.includes("'sendVoice']"), 'config API 的 toolFlags 含 sendVoice');
+  // 原断言写死「sendVoice 是数组最后一个元素」，toolFlags 尾部接了空间三件套后
+  // 就变成假失败。改成在 toolFlags 数组内部找，位置无关。
+  ok(/toolFlags = \[[^\]]*'sendVoice'/.test(bridgeSrc), 'config API 的 toolFlags 含 sendVoice');
   const uniq = (a) => [...new Set(a)].sort();
   const views = uniq([...html.matchAll(/data-view="([a-z0-9-]+)"/g)].map((m) => m[1]));
   const pages = uniq([...html.matchAll(/data-page="([a-z0-9-]+)"/g)].map((m) => m[1]));
