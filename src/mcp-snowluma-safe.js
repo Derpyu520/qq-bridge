@@ -1157,11 +1157,16 @@ if (cfg.socialV2?.tools?.getImages !== false) {
         const content = [];
         const textParts = [];
         for (const img of images) {
+          const label = `[${img.kind === 'face' ? '表情' : '图片'}${img.index ?? ''}${img.text ? ' ' + img.text : ''}]`;
+          // 桥接会顺手给每张图配一段文字描述（它自己有视觉外挂）。有就一起带上：
+          // 当前模型没有视觉输入时，这一段是唯一能读到画面的东西，否则只看到一个 [图片]。
+          const descLine = img?.desc ? `
+  画面：${img.desc}` : '';
           if (img?.data && img?.mimeType) {
-            textParts.push(`[${img.kind === 'face' ? '表情' : '图片'}${img.index ?? ''}${img.text ? ' ' + img.text : ''}]`);
+            textParts.push(label + descLine);
             content.push({ type: 'image', mimeType: img.mimeType, data: img.data });
           } else {
-            textParts.push(`[${img.kind === 'face' ? '表情' : '图片'}${img.index ?? ''}${img.text ? ' ' + img.text : '（获取失败）'}]`);
+            textParts.push(label + descLine + (descLine ? '' : '（获取失败）'));
           }
         }
         if (textParts.length) {

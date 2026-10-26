@@ -7034,7 +7034,26 @@ async function main() {
           }
           try {
             const images = await fetchMediaData(media);
-            sendJson({ ok: true, messageId, media, images });
+            // 顺手给每张图配一段文字描述：本会话的模型如果是无视觉的那一版，
+            // 光给 base64 等于什么都没给（返回里只有「[图片]」）。
+            // describeImageV2 自己有按 URL 的缓存，重复取同一张图几乎不花钱；
+            // 总超时卡在 VISION_DESC_BUDGET_MS，超了就只给图不给描述，别把工具拖死。
+            const VISION_DESC_BUDGET_MS = 15000;
+            const describeAll = Promise.all(images.map(async (img) => {
+              if (!img || img.kind === 'face') return img;
+              const u = String(img.url || img.sourceUrl || '').trim();
+              if (!u || !u.startsWith('http')) return img;
+              try {
+                const dataUrl = img.data && img.mimeType ? `data:${img.mimeType};base64,${img.data}` : '';
+                const d = await describeImageV2(u, { dataUrl });
+                return d ? { ...img, desc: d } : img;
+              } catch { return img; }
+            }));
+            const described = await Promise.race([
+              describeAll,
+              new Promise((resolve) => setTimeout(() => resolve(images), VISION_DESC_BUDGET_MS))
+            ]);
+            sendJson({ ok: true, messageId, media, images: described });
           } catch (error) {
             log(`图片查询失败 ${key} ${messageId}: ${error?.message ?? error}`);
             sendJson({ ok: false, error: `图片查询失败：${error?.message ?? error}` }, 500);
@@ -10224,7 +10243,7 @@ async function main() {
     } catch { return ''; }
   }
 
-  async function describeImageV2(url) {
+  async function describeImageV2(url, opts = {}) {
     const v = cfg.socialV2?.vision ?? {};
     if (v.enabled === false) return '';
     const u = String(url || '').trim();
@@ -10248,7 +10267,10 @@ async function main() {
             role: 'user',
             content: [
               { type: 'text', text: '用一两句中文说清这张图：画面是什么；图里有文字就原样抄出来；如果是表情包或梗图，点明梗在哪。不要客套话。补充背景：如果画的是蓝白配色的鲸鱼少女（蓝白渐变长发、蓝瞳、鲸鱼尾、女仆装、围裙上有鲸鱼图案），那就是「大肥鱼」——本机 AI 助手的形象，别往别的动漫/游戏角色上靠；只有确实画的是那位角色时才说角色名。' },
-              { type: 'image_url', image_url: { url: u } },
+              // 百炼那边下载 QQ 的图片链接经常 400（Failed to download multimodal content：
+      // 链接带时效、或要特定 referer）。本地已经拿到 base64 时就直接喂 data URL，
+      // 不让它去下载 —— 这条是 qq_get_message_images 看不到画面的真凶。
+      { type: 'image_url', image_url: { url: opts.dataUrl || u } },
             ],
           }],
         }),
