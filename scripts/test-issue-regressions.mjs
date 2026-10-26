@@ -116,7 +116,9 @@ await test('#29 唤醒 prompt 必须写明机器人自己的昵称与 QQ 号', a
 
     h.setSelfIdentity('', '');
     assert.equal(h.selfIdentityTextV2(), '', '身份未知时不注入空行（不能写「你的昵称是（）」）');
-    assert.doesNotMatch(h.buildWakePromptV2(KEY, 'timeout'), /【你的身份】/);
+    // 只认身份那一句：prompt 里还可能带「我的记忆」，我自己的文字里就写过【你的身份】这几个字，
+    // 拿标题去断言会误伤（2026-10-26 实测踩到）。
+    assert.doesNotMatch(h.buildWakePromptV2(KEY, 'timeout'), /你在 QQ 上的昵称是/);
   } finally { await h.close(); }
 });
 

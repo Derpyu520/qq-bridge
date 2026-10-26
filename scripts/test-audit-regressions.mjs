@@ -289,7 +289,7 @@ await test('R9 memory-update 只编辑已有条目，不写穿 Object.prototype'
 });
 
 // ── R10. wait 租约按归一化 key 记账 ─────────────────────────────────────────
-await test('R10 group:0456 与 group:456 共用同一份 wait 租约', async () => {
+await test('R10 group:0456 与 group:456 共用同一份 wait 租约（并发等待是接管，不是 429）', async () => {
   const h = await bridgeHarness({ config: { socialV2: { wait: { minMs: 300, maxMs: 800, defaultQuietMs: 0, minQuietAfterNewMs: 0 } } } });
   try {
     h.setMode('reserved2');
@@ -302,7 +302,10 @@ await test('R10 group:0456 与 group:456 共用同一份 wait 租约', async () 
       const second = await call(port, '/api/socialV2/wait', {
         method: 'POST', token, body: { key: 'group:456', purpose: 'messages', timeoutMs: 300 }
       });
-      assert.equal(second.status, 429, '同一会话的第二个并发等待必须被租约挡住');
+      // 2026-10-26 改的行为：同一会话的第二个等待**接管**租约（旧等待继续跑自己的，stamp 不匹配不误删），
+      // 只有并发等待总数超过 8 个才回 429。原来这里断言 429 —— MCP 客户端 60s 先超时、
+      // 桥这边 5 分钟还在跑时，429 会把沉睡前观察这条唯一通路堵死，所以换成了接管。
+      assert.equal(second.status, 200, `同一会话的第二个等待应接管租约而不是 429：${second.body}`);
       const first = await firstPending;
       assert.equal(first.status, 200, first.body);
       // 第一个结束后租约释放，可再次等待

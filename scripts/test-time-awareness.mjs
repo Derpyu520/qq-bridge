@@ -104,9 +104,9 @@ await test('40 分钟前的消息：提示词给出 ago 并明确标记「旧账
   await withBridge(async (h) => {
     append(h, '晚上开黑吗', { ageMs: 40 * MIN });
     const prompt = h.buildWakePromptV2(KEY, 'atMention@seq1');
-    assert.match(prompt, /40m 之前发的/, '最新一条的年龄要写进提示词');
+    assert.match(prompt, /40m 前/, '最新一条的年龄要写进提示词');
     assert.match(prompt, /旧账/, '超过 staleChatMinutes 必须打「旧账」警告');
-    assert.match(prompt, /不要用秒回语气/, '要给出可执行的替代动作');
+    assert.match(prompt, /别用秒回语气/, '要给出可执行的替代动作');
     assert.match(prompt, /触发这条是 40m 前发的/, '唤醒原因那条的年龄也要写清楚');
   });
 });
@@ -115,8 +115,8 @@ await test('超过 staleSilentMinutes：规则要求默认不回、直接收尾'
   await withBridge(async (h) => {
     append(h, '有人吗', { ageMs: 5 * 60 * MIN });
     const prompt = h.buildWakePromptV2(KEY, 'keyword:大肥鱼@seq1');
-    assert.match(prompt, /5h 之前发的/);
-    assert.match(prompt, /默认不回，直接 qq_mark_read 收尾/);
+    assert.match(prompt, /最新一条来自「[^」]*」，5h 前/);
+    assert.match(prompt, /超过 120 分钟默认不回/);
     assert.match(prompt, /超过 120 分钟/, '默认阈值应写进警告里');
   });
 });
@@ -132,7 +132,7 @@ await test('阈值可由 config 调整（staleChatMinutes / staleSilentMinutes�
     append(h, '刚刚那条', { ageMs: 12 * MIN });
     const prompt = h.buildWakePromptV2(KEY, 'atMention@seq1');
     assert.doesNotMatch(prompt, /旧账/);
-    assert.match(prompt, /60 分钟以内：正常接/);
+    assert.match(prompt, /60 分钟以内当实时接/);
   }, { wake: { staleChatMinutes: 60 } });
   // silentMinutes 低于 chatMinutes 时必须被抬平：否则中间档会写成自相矛盾的「60～60 分钟」
   await withBridge(async (h) => {

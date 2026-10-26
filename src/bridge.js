@@ -467,6 +467,43 @@ function backupPresetFile(name) {
   return dest;
 }
 
+// state/backups/ 是手工备份的落脚处（改 config、改 bridge.js 前先拷一份）。
+// 没人清就一直涨，按「同一个原件只留最近 KEEP 份」收：分组键取 `.bak` 之前那截文件名，
+// 所以 `config.json.bak-port-003611` 和 `config.json.bak-wake-limit-...` 算同一组。
+const STATE_BACKUP_KEEP = 3;
+const STATE_BACKUP_MAX_AGE_DAYS = 7;
+function pruneStateBackups(keep = STATE_BACKUP_KEEP) {
+  const dir = path.join(STATE_DIR, 'backups');
+  let entries;
+  try {
+    entries = fs.readdirSync(dir).filter((f) => f.includes('.bak'));
+  } catch {
+    return [];  // 目录不存在＝还没备份过，不是错误
+  }
+  const cutoff = Date.now() - STATE_BACKUP_MAX_AGE_DAYS * 24 * 3600 * 1000;
+  const groups = new Map();
+  for (const file of entries) {
+    const base = file.slice(0, file.indexOf('.bak'));
+    let mtime = 0;
+    try { mtime = fs.statSync(path.join(dir, file)).mtimeMs; } catch {}
+    if (!groups.has(base)) groups.set(base, []);
+    groups.get(base).push({ file, mtime });
+  }
+  const removed = [];
+  for (const list of groups.values()) {
+    list.sort((a, b) => b.mtime - a.mtime);  // 新的在前
+    // 两条同时满足才删：超出保留份数，且已经放够久（刚备份完的那份不会被立刻清掉）
+    for (const stale of list.slice(Math.max(0, keep))) {
+      if (stale.mtime > cutoff) continue;
+      try {
+        fs.rmSync(path.join(dir, stale.file));
+        removed.push(stale.file);
+      } catch {}
+    }
+  }
+  return removed;
+}
+
 function listPresetBackups(name) {
   try {
     const prefix = presetBackupPrefix(name) + '.';
@@ -1410,6 +1447,11 @@ async function main() {
   hardenStateDirAcl();
   acquireLock();
   loadState();
+  // 手工备份只留最近几份，免得 state/backups 一直涨（保留条数见 STATE_BACKUP_KEEP）
+  {
+    const pruned = pruneStateBackups();
+    if (pruned.length) log(`🧹 旧备份清掉 ${pruned.length} 份（每类只留最近 ${STATE_BACKUP_KEEP} 份）：${pruned.join('、')}`);
+  }
 
   // ── 群聊黑话/网络用语学习（slang） ──────────────────────────────────────
   let slangEntries = [];

@@ -162,7 +162,10 @@ await test('积压超过上限时从最老开始给，并标记 partial', async 
 
 // ── 5. 收尾闸门的状态直接告诉模型（别让它靠猜，更别用短等待去凑）─────────────
 await test('短等待不算沉睡前观察：canSleepNow=false 且 hint 给出正确的 timeoutMs', async () => {
-  await withBridge(async ({ request }) => {
+  await withBridge(async ({ request, append }) => {
+    // 先来一条来信：闸门对「从没收到过消息」的会话直接放行（10-25 夜里补的，不然私聊每次收尾白卡 5 分钟），
+    // 不先 append 就测不到「刚说过话不能立刻收尾」这一条。
+    append('刚说过话');
     // 沉睡前观察默认要 180s；这里故意用 300ms 的短等待去"凑"，闸门不该认
     const result = await request('wait', { body: { purpose: 'messages', timeoutMs: 300, quietMs: 0, minNewMessages: 1 } });
     assert.equal(result.status, 200);
