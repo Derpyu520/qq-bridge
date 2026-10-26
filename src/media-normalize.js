@@ -1,6 +1,6 @@
 // 媒体归一化：把「QQ 给我们的原始图片」压成「DSH 与模型真能吃下的形状」。
 //
-// ── 为什么需要这一层（2026-10-18 审计结论，见 docs/audits/AUDIT_2026-10-18_MEDIA_AND_WATERMARK.md）
+// ── 为什么需要这一层（媒体层审计结论）
 //
 // ① 体积悬崖：DSH 的 MCP 图片入口会用正则校验 base64
 //    （dsh-mcp-client 的 CANONICAL_BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:…)?$/）。

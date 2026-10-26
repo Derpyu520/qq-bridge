@@ -53,13 +53,13 @@ export const QQMODE_NAMESPACE = 'qq-mode';
  * 但仓库里的静态测试会用它验证非法 mode 被拒绝，故保留。
  */
 export const QqModeSchema = z.object({
-  // `simulation` 是规范名（QSH_PLAN.md §2.1），`chat`/`reserved`/`reserved2` 是历史拼写。
+  // `simulation` 是规范名（设计文档 §2.1），`chat`/`reserved`/`reserved2` 是历史拼写。
   // 两者都必须能被**存进设置**：桥接在输入侧把它们归一到同一个内部值（见 bridge.js 的
   // MODE_INPUT_ALIASES），但这里如果只列历史名，用户在 DSH 设置里写 `simulation` 会被
   // schema 直接拒掉，而 schema 校验失败会把整个命名空间一起打掉 —— 连 ownerQQ 都读不到，
   // 桥接只能回退本地 mode.json 且**没有任何提示**。默认值保持 `reserved2`（不改变现有用户行为）。
   mode: z.union([
-    z.const('chat'), z.const('closed-agent'), z.const('reserved'), z.const('reserved2'), z.const('simulation')
+    z.const('chat'), z.const('closed-agent'), z.const('reserved'), z.const('reserved2'), z.const('reserved3'), z.const('simulation')
   ]).default('reserved2'),
   ownerQQ: z.string().description('管理员 QQ（ownerQQ）；留空表示不通过 DSH 设置覆盖 config.json'),
 });
@@ -94,7 +94,7 @@ export const QqModeSchema = z.object({
  */
 export const Config = z.object({
   mode: z.union([
-    z.const('chat'), z.const('closed-agent'), z.const('reserved'), z.const('reserved2'), z.const('simulation')
+    z.const('chat'), z.const('closed-agent'), z.const('reserved'), z.const('reserved2'), z.const('reserved3'), z.const('simulation')
   ]).default('reserved2').extra('volatile', true),
   ownerQQ: z.string().description('管理员 QQ（ownerQQ）；留空表示不通过 DSH 设置覆盖 config.json').extra('volatile', true),
 });

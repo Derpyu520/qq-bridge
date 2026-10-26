@@ -1512,6 +1512,11 @@ tr:last-child td {
   border-color:var(--accent-border-active);
   background:var(--accent-soft-bg)
 }
+/* 正在编辑的那张卡：和「默认」的 .active 区分开（默认是绿色 pill，这里是描边） */
+.persona-item.editing {
+  border-color:var(--accent-border-active);
+  box-shadow:0 0 0 1px var(--accent-border-active) inset
+}
 .persona-item-head {
   display:flex;
   align-items:center;
@@ -1539,6 +1544,49 @@ tr:last-child td {
 .persona-badge.warn {
   background:var(--warn-bg);
   color:var(--warn-fg)
+}
+/* 按会话人格：行容器直接复用 .persona-item 的边框 / 圆角 / 底色，只改成水平排布 */
+.role-assign-list {
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  margin:10px 0 4px;
+  max-height:360px;
+  overflow:auto
+}
+.role-assign-row {
+  flex-direction:row;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:10px
+}
+.role-assign-row select {
+  flex:1 1 200px;
+  width:auto
+}
+.role-assign-row code {
+  font-size:12px
+}
+.role-assign-row .pill {
+  flex:0 0 auto
+}
+.role-assign-add {
+  display:flex;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:10px;
+  margin-top:12px;
+  padding:12px 14px;
+  border:1px dashed var(--border-dashed);
+  border-radius:11px
+}
+.role-assign-add>select,
+.role-assign-add>input {
+  flex:1 1 130px;
+  width:auto
+}
+.role-assign-add .meta {
+  margin-top:0
 }
 .layer-heading {
   display:flex;
@@ -1769,6 +1817,7 @@ button:active:not(:disabled) {
       <button data-view="persona" class="nav-item"><span class="nav-icon" aria-hidden="true">◉</span>人格与角色</button>
       <div class="nav-label">聊天行为</div>
       <button data-view="social-v2" class="nav-item"><span class="nav-icon" aria-hidden="true">◈</span>二代仿真<span class="nav-note">V2</span></button>
+      <button data-view="social-v3" class="nav-item"><span class="nav-icon" aria-hidden="true">◈</span>三代仿真<span class="nav-note">V3</span></button>
       <button data-view="social-v1" class="nav-item"><span class="nav-icon" aria-hidden="true">◇</span>一代仿真<span class="nav-note">V1</span></button>
       <button data-view="slang" class="nav-item"><span class="nav-icon" aria-hidden="true">▤</span>黑话词库</button>
       <div class="nav-label">管理</div>
@@ -1804,6 +1853,7 @@ button:active:not(:disabled) {
         <button data-mode="closed-agent" aria-pressed="false"><span class="mode-indicator" aria-hidden="true"></span><strong>封闭 Agent</strong><small>仅管理员，完整工具</small></button>
         <button data-mode="reserved" aria-pressed="false"><span class="mode-indicator" aria-hidden="true"></span><strong>一代仿真</strong><small>按策略自然参与群聊</small></button>
         <button data-mode="reserved2" aria-pressed="false"><span class="mode-indicator" aria-hidden="true"></span><strong>二代仿真</strong><small>自主阅读、发言与潜水</small></button>
+        <button data-mode="reserved3" aria-pressed="false"><span class="mode-indicator" aria-hidden="true"></span><strong>三代仿真</strong><small>人物卡、判断、时间与互动</small></button>
       </div>
       <div class="row" style="margin-top:12px">
         <label style="flex:1;margin:0">封闭 Agent 使用的 DSH 预设</label>
@@ -1825,7 +1875,7 @@ button:active:not(:disabled) {
     </section>
 <section id="section-persona" data-page="persona" class="card span-all">
       <h2>人格与角色</h2>
-      <div class="meta">当前人格：<span id="roleText">-</span> ｜ 状态：<span id="roleModeText">-</span></div>
+      <div class="meta">默认人格：<span id="roleText">-</span> ｜ 状态：<span id="roleModeText">-</span> ｜ 会话例外：<span id="roleAssignTop">-</span></div>
 
       <div class="layer-note">
         <strong>两层提示词的分工</strong>
@@ -1838,6 +1888,40 @@ button:active:not(:disabled) {
 
       <h3>人格列表 <span class="meta" id="roleListHint"></span></h3>
       <div id="roleList" class="persona-list">加载中…</div>
+
+      <h3>人格分配 <span class="meta" id="roleAssignHint">默认人格作用于所有未单独指定的会话</span></h3>
+      <details class="settings-group" open>
+        <summary>默认人格（未单独指定的群 / 私聊）</summary>
+        <div class="settings-content">
+          <div class="row" style="margin-top:10px">
+            <input type="text" id="roleInput" list="roleNameOptions" placeholder="选择已有角色或输入新角色名">
+            <datalist id="roleNameOptions"></datalist>
+            <button id="roleSet">设置</button>
+            <button id="roleClear">清除</button>
+          </div>
+          <div class="meta" id="roleDefaultMeta">未单独指定的会话都使用这个默认人格；新建 / 改名人格在下方「编辑人格提示词」里。清除默认人格后，未指定的会话不再扮演，下面已指定的会话不受影响。</div>
+        </div>
+      </details>
+
+      <details class="settings-group" open>
+        <summary>按会话指定人格 <span class="meta" id="roleAssignCount"></span></summary>
+        <div class="settings-content">
+          <div class="meta" id="roleAssignBackend"></div>
+          <div id="roleAssignList" class="role-assign-list">加载中…</div>
+          <div class="role-assign-add">
+            <select id="roleAssignKind" aria-label="会话类型">
+              <option value="group">群</option>
+              <option value="private">私聊</option>
+            </select>
+            <input type="text" id="roleAssignTarget" list="roleAssignOptions" placeholder="群号 / QQ 号">
+            <datalist id="roleAssignOptions"></datalist>
+            <select id="roleAssignRole" aria-label="要应用的人格"></select>
+            <button id="roleAssignAdd" class="small">添加</button>
+            <span class="meta" id="roleAssignMsg"></span>
+          </div>
+          <div class="meta">某一行下拉选「继承默认」即可删除该条例外；不在白名单的会话会标灰，但配置保留。</div>
+        </div>
+      </details>
 
       <details class="settings-group" open>
         <summary>编辑人格提示词</summary>
@@ -1864,22 +1948,11 @@ button:active:not(:disabled) {
         </div>
       </details>
 
-      <details class="settings-group">
-        <summary>切换当前启用的人格</summary>
-        <div class="settings-content">
-          <div class="row" style="margin-top:10px">
-            <input type="text" id="roleInput" placeholder="选择已有角色或输入新角色名">
-            <button id="roleSet">设置</button>
-            <button id="roleClear">清除</button>
-          </div>
-          <div class="meta">清空当前人格后，AI 只按「仿真提示词」行动，不扮演任何角色。</div>
-        </div>
-      </details>
-
       <h3 class="layer-heading">仿真提示词（预设内置）<span class="meta" id="simPromptStatus">加载中…</span></h3>
       <div class="row" style="margin-bottom:8px">
         <label style="flex:0 0 auto">仿真代次</label>
         <select id="simPromptPreset" style="flex:0 1 280px">
+          <option value="qq-chat-v3">三代仿真（reserved3 · qq-chat-v3）</option>
           <option value="qq-chat-v2">二代仿真（reserved2 · qq-chat-v2）</option>
           <option value="qq-chat">一代仿真（reserved · qq-chat）</option>
         </select>
@@ -2005,6 +2078,7 @@ button:active:not(:disabled) {
       <div class="row" style="margin-top:10px">
         <label style="flex:1">启用二代模式</label><input type="checkbox" id="v2Enabled" style="width:auto">
         <label style="flex:1">agentPreset</label><input type="text" id="v2AgentPreset" placeholder="qq-chat-v2" style="max-width:200px">
+        <label style="flex:1" hidden>三代 preset</label><input type="text" id="v2Gen3Preset" placeholder="qq-chat-v3" hidden style="max-width:200px">
       </div>
       <div class="row" style="margin-top:6px">
         <label style="flex:1">提供推荐值给 AI</label><input type="checkbox" id="v2ProvideRecommendations" style="width:auto">
@@ -2023,6 +2097,19 @@ button:active:not(:disabled) {
         <label class="v2-tool-item"><input type="checkbox" data-v2-tool="getPrompt"> <span><b>qq_get_prompt</b><span class="meta">查看角色卡、推荐值、可用工具、当前唤醒配置</span></span></label>
         <label class="v2-tool-item"><input type="checkbox" data-v2-tool="getUnread"> <span><b>qq_get_unread_messages</b><span class="meta">查看未读消息，不自动标记已读</span></span></label>
         <label class="v2-tool-item"><input type="checkbox" data-v2-tool="getRecent"> <span><b>qq_get_recent_messages</b><span class="meta">查看最近消息，支持 offset 扩大范围</span></span></label>
+        <label class="v2-tool-item"><input type="checkbox" data-v2-tool="getContext"> <span><b>qq_context</b><span class="meta">一次取齐摘要/快照/记忆/唤醒/限额，减少重复读工具</span></span></label>
+        <label class="v2-tool-item"><input type="checkbox" data-v2-tool="person"> <span><b>qq_person_get / qq_person_note</b><span class="meta">查看和记录群友的人物卡、边界与互动</span></span></label>
+        <label class="v2-tool-item"><input type="checkbox" data-v2-tool="sendImage"> <span><b>qq_send_image</b><span class="meta">从媒体库发图片（只认 media/ 下的文件名）</span></span></label>
+        <label class="v2-tool-item"><input type="checkbox" data-v2-tool="react"> <span><b>qq_react</b><span class="meta">给最近消息加 QQ 表情回应</span></span></label>
+        <label class="v2-tool-item"><input type="checkbox" data-v2-tool="transcribeVoice"> <span><b>qq_transcribe_voice</b><span class="meta">语音消息转文字</span></span></label>
+        <label class="v2-tool-item"><input type="checkbox" data-v2-tool="ocr"> <span><b>qq_ocr_image</b><span class="meta">对图片/表情做 OCR</span></span></label>
+        <label class="v2-tool-item"><input type="checkbox" data-v2-tool="recall"> <span><b>qq_recall</b><span class="meta">撤回机器人自己刚发的消息</span></span></label>
+        <label class="v2-tool-item"><input type="checkbox" data-v2-tool="searchHistory"> <span><b>qq_search_history</b><span class="meta">在最近消息里按关键词搜索</span></span></label>
+        <label class="v2-tool-item"><input type="checkbox" data-v2-tool="readDocument"> <span><b>qq_read_document</b><span class="meta">读取聊天文件（需管理员开启文档阅读）</span></span></label>
+        <label class="v2-tool-item"><input type="checkbox" data-v2-tool="groupSign"> <span><b>qq_group_sign</b><span class="meta">群签到（默认关，每天一次）</span></span></label>
+        <label class="v2-tool-item"><input type="checkbox" data-v2-tool="like"> <span><b>qq_like</b><span class="meta">点赞（默认关，每人每天一次）</span></span></label>
+        <label class="v2-tool-item"><input type="checkbox" data-v2-tool="shareCard"> <span><b>qq_share_card</b><span class="meta">图文分享卡片（默认关）</span></span></label>
+        <label class="v2-tool-item"><input type="checkbox" data-v2-tool="revise"> <span><b>qq_revise_message</b><span class="meta">撤回自己刚发的消息并重发改口文本</span></span></label>
         <label class="v2-tool-item"><input type="checkbox" data-v2-tool="socialState"> <span><b>qq_social_state</b><span class="meta">查看当前 WakeConfig、未读数、上次唤醒原因等</span></span></label>
         <label class="v2-tool-item"><input type="checkbox" data-v2-tool="sendGroup"> <span><b>qq_send_group_message</b><span class="meta">向指定群发送一条纯文本消息</span></span></label>
         <label class="v2-tool-item"><input type="checkbox" data-v2-tool="sendPrivate"> <span><b>qq_send_private_message</b><span class="meta">向指定好友发送一条纯文本消息</span></span></label>
@@ -2046,13 +2133,55 @@ button:active:not(:disabled) {
         <label class="v2-tool-item"><input type="checkbox" data-v2-tool="getStickerImage"> <span><b>qq_get_sticker_image</b><span class="meta">看图理解没有备注的收藏表情</span></span></label>
         <label class="v2-tool-item"><input type="checkbox" data-v2-tool="sendSticker"> <span><b>qq_send_sticker</b><span class="meta">发送收藏表情（一条消息只能一张，不能带文字）</span></span></label>
         <label class="v2-tool-item"><input type="checkbox" data-v2-tool="collectSticker"> <span><b>qq_collect_sticker</b><span class="meta">AI 偶尔收藏别人发的表情并写简短备注</span></span></label>
+        <label class="v2-tool-item"><input type="checkbox" data-v2-tool="deleteSticker"> <span><b>qq_delete_sticker</b><span class="meta">删除自己收藏的表情（不可恢复；默认只应管理员要求，有频率上限）</span></span></label>
         <label class="v2-tool-item"><input type="checkbox" data-v2-tool="getSelfImage"> <span><b>qq_get_self_image</b><span class="meta">查看自己的默认 Q 版形象图片</span></span></label>
+        <label class="v2-tool-item"><input type="checkbox" data-v2-tool="listAssets"> <span><b>qq_list_assets</b><span class="meta">列出 assets 头像目录里的图片（仅管理员私聊；不递归、不读内容）</span></span></label>
+        <label class="v2-tool-item"><input type="checkbox" data-v2-tool="viewAsset"> <span><b>qq_view_asset</b><span class="meta">按外观挑头像时看图（仅管理员私聊；单张 ≤2MB、每分钟限 10 张）</span></span></label>
         <label class="v2-tool-item"><input type="checkbox" data-v2-tool="stickerNote"> <span><b>qq_sticker_note</b><span class="meta">给表情记录本地含义/标签/用法</span></span></label>
         <label class="v2-tool-item"><input type="checkbox" data-v2-tool="setStickerRemark"> <span><b>qq_set_sticker_remark</b><span class="meta">修改 QQ 官方表情备注（默认禁用，慎用）</span></span></label>
         <label class="v2-tool-item"><input type="checkbox" data-v2-tool="sendVoice"> <span><b>qq_send_voice / qq_list_voices</b><span class="meta">发送语音条（只能发语音库里的音频；偶然而为的强表达）</span></span></label>
+        <label class="v2-tool-item"><input type="checkbox" data-v2-tool="getUserProfile"> <span><b>qq_get_user_profile</b><span class="meta">看别人的 QQ 资料并看懂头像（只能查本会话/本群的人、私聊对端或 owner 指定的人）</span></span></label>
+        <label class="v2-tool-item"><input type="checkbox" data-v2-tool="qzoneRead"> <span><b>qq_qzone_read</b><span class="meta">读自己/好友的 QQ 空间动态（只读，和资料查询共用配额）</span></span></label>
+        <label class="v2-tool-item"><input type="checkbox" data-v2-tool="qzonePost"> <span><b>qq_qzone_post</b><span class="meta">发 QQ 空间说说（公开广播；他人要求会先发确认卡给管理员）</span></span></label>
       </div>
       <div class="meta" style="margin-top:6px">二代黑话学习：AI 可用 <code>qq_slang_submit</code> 提交陌生词，也可由桥接自动提取；管理员在「黑话词库」页面筛选确认后，词条会自动写入黑话提示词并注入 <code>qq_get_prompt</code> 与后续唤醒。</div>
 
+      </div></details>
+<details class="settings-group"><summary>QQ 资料与空间（默认开启）</summary><div class="settings-content">
+      <div class="meta" style="margin-bottom:8px">
+        AI 能看别人的 QQ 资料/头像、读空间动态、发说说。资料只回白名单字段（昵称/备注/性别/年龄/签名/等级/Q 龄/在线），
+        头像以图像形式交给模型；发说说走管理员动作队列：<b>owner 本人要求直连，其他人要求会先发确认卡到你的私聊</b>，
+        另有每小时/每天上限与「同样内容不重复发」。
+      </div>
+      <div class="row">
+        <label style="flex:1">启用 QQ 资料/头像</label><input type="checkbox" id="v2ProfileEnabled" style="width:auto">
+        <label style="flex:1">资料缓存（分钟）</label><input type="number" id="v2ProfileCacheMin" min="1" max="1440" style="width:90px">
+        <label style="flex:1">每会话 10 分钟最多查几次</label><input type="number" id="v2ProfileMaxPer10Min" min="1" max="100" style="width:90px">
+      </div>
+      <div class="row">
+        <label style="flex:1">启用 QQ 空间</label><input type="checkbox" id="v2QzoneEnabled" style="width:auto">
+        <label style="flex:1">允许发说说</label><input type="checkbox" id="v2QzonePostEnabled" style="width:auto">
+        <label style="flex:1">发完回读校验</label><input type="checkbox" id="v2QzoneVerify" style="width:auto">
+      </div>
+      <div class="row">
+        <label style="flex:1">说说正文上限（字）</label><input type="number" id="v2QzoneMaxChars" min="1" max="2000" style="width:90px">
+        <label style="flex:1">最多配图（张）</label><input type="number" id="v2QzoneMaxImages" min="0" max="9" style="width:90px">
+        <label style="flex:1">默认可见范围</label>
+        <select id="v2QzoneDefaultRight" style="width:150px">
+          <option value="1">所有人可见</option>
+          <option value="4">好友可见</option>
+          <option value="64">仅自己可见</option>
+        </select>
+      </div>
+      <div class="row">
+        <label style="flex:1">每小时最多发几条</label><input type="number" id="v2QzoneMaxHour" min="0" max="20" style="width:90px">
+        <label style="flex:1">每天最多发几条</label><input type="number" id="v2QzoneMaxDay" min="0" max="50" style="width:90px">
+        <label style="flex:1">两条之间至少隔（分钟）</label><input type="number" id="v2QzoneMinIntervalMin" min="0" max="1440" style="width:90px">
+      </div>
+      <div class="meta" style="margin-top:6px">
+        配图只接受媒体库 <code>media/</code> 里的文件名（不接受 URL/路径/base64）；「资料查询 + 空间读取」共用同一个每会话配额。
+        权限档位在「访问与安全 → 机器人自主操作」里设（默认「仅应要求」）。
+      </div>
       </div></details>
 <details class="settings-group"><summary>语音库与语音发送（调试）</summary><div class="settings-content">
       <div class="meta" style="margin-bottom:8px">
@@ -2111,6 +2240,10 @@ button:active:not(:disabled) {
         <label style="flex:1">每小时最多唤醒</label><input type="number" id="v2MaxWakeHour" min="0" style="width:90px">
       </div>
       <div class="row">
+        <label style="flex:1">每 2 小时最多唤醒</label><input type="number" id="v2MaxWake2h" min="0" style="width:90px">
+        <label style="flex:1">每日最多唤醒</label><input type="number" id="v2MaxWakeDay" min="0" style="width:90px">
+      </div>
+      <div class="row">
         <label style="flex:1">合并窗口（毫秒）</label><input type="number" id="v2BatchWindowMs" min="1000" step="500" style="width:100px">
         <label style="flex:1">无行动兜底次数</label><input type="number" id="v2NoActionLimit" min="1" style="width:80px">
         <label style="flex:1">唤醒收尾提醒次数</label><input type="number" id="v2MaxWakeConfigReminders" min="1" style="width:80px">
@@ -2118,7 +2251,7 @@ button:active:not(:disabled) {
       <div class="row">
         <label style="flex:1">启用沉睡前强制等待</label><input type="checkbox" id="v2PreSleepWaitEnabled" style="width:auto">
         <label style="flex:1">沉睡前强制等待（分）</label><input type="number" id="v2PreSleepWaitMin" min="0" step="1" style="width:80px">
-        <span class="meta" style="flex:2">AI 设置潜水/下一次唤醒前，默认必须先等够这个观察窗口；0 表示不限制。</span>
+        <span class="meta" style="flex:2">AI 设置潜水/下一次唤醒前，必须先等够这个观察窗口（0 按 5 分钟处理）；要关闭请取消左边勾选。</span>
       </div>
 
       </div></details>
@@ -2144,6 +2277,10 @@ button:active:not(:disabled) {
         <label style="flex:1">每小时最多发送</label><input type="number" id="v2MaxSendHour" min="0" style="width:80px">
       </div>
       <div class="row">
+        <label style="flex:1">每 2 小时最多发送</label><input type="number" id="v2MaxSend2h" min="0" style="width:80px">
+        <label style="flex:1">每日最多发送</label><input type="number" id="v2MaxSendDay" min="0" style="width:80px">
+      </div>
+      <div class="row">
         <label style="flex:1">单条最大字符</label><input type="number" id="v2MaxMsgChars" min="1" style="width:80px">
       </div>
       <div class="row">
@@ -2154,6 +2291,37 @@ button:active:not(:disabled) {
       <label>发送推荐提示（给 AI 看的文字）</label>
       <textarea id="v2SendHint" rows="2" placeholder="例如：普通闲聊建议一次 1~3 条，条间 1~3 秒…"></textarea>
 
+      </div></details>
+<details class="settings-group"><summary>全局限额（跨会话）</summary><div class="settings-content">
+      <div class="meta" style="margin-bottom:8px">跨所有群/私聊汇总的硬上限，防止多个会话叠加把成本或风控打爆。0 表示不限；每 2 小时为滑动窗口，每日按本地 00:00 重置。</div>
+      <div class="row">
+        <label style="flex:1">全局每 2 小时最多发送</label><input type="number" id="v2GlobalSend2h" min="0" style="width:90px">
+        <label style="flex:1">全局每日最多发送</label><input type="number" id="v2GlobalSendDay" min="0" style="width:90px">
+      </div>
+      <div class="row">
+        <label style="flex:1">全局每 2 小时最多唤醒</label><input type="number" id="v2GlobalWake2h" min="0" style="width:90px">
+        <label style="flex:1">全局每日最多唤醒</label><input type="number" id="v2GlobalWakeDay" min="0" style="width:90px">
+      </div>
+      </div></details>
+<details class="settings-group"><summary>回复判断与时间模型</summary><div class="settings-content">
+      <div class="row">
+        <label style="flex:1">social @ 延迟（秒）</label><input type="number" id="v2SocialMentionDelaySec" min="0" max="300" style="width:90px">
+        <label style="flex:1">高压阈值</label><input type="number" id="v2HighPressure" min="0" max="1" step="0.05" style="width:80px">
+        <label style="flex:1">中压阈值</label><input type="number" id="v2MediumPressure" min="0" max="1" step="0.05" style="width:80px">
+      </div>
+      <div class="row">
+        <label style="flex:1">启用首条延迟</label><input type="checkbox" id="v2TimingEnabled" style="width:auto">
+        <label style="flex:1">最小延迟（毫秒）</label><input type="number" id="v2TimingMinMs" min="0" style="width:90px">
+        <label style="flex:1">最大延迟（毫秒）</label><input type="number" id="v2TimingMaxMs" min="0" style="width:90px">
+        <label style="flex:1">私聊显示正在输入</label><input type="checkbox" id="v2TypingIndicator" style="width:auto">
+      </div>
+      <div class="row">
+        <input type="text" id="v2DecisionKey" placeholder="决策日志：可留空看全部，或 group:123" style="flex:1">
+        <button id="v2DecisionLoad" class="small">加载决策日志</button>
+        <span class="meta" id="v2DecisionMsg"></span>
+      </div>
+      <pre id="v2DecisionOutput">（空）</pre>
+      <div class="meta">social @ 会先合批再等这个窗口；首条延迟在发送前生效，按字数、owner、时段和随机抖动计算。0 表示不延迟。</div>
       </div></details>
 <details class="settings-group"><summary>等待工具参数（qq_wait_for_messages）</summary><div class="settings-content">
       <div class="row">
@@ -2205,6 +2373,24 @@ button:active:not(:disabled) {
         <label style="flex:1">收藏备注最大字数</label><input type="number" id="v2StickerCollectRemarkMax" min="1" max="50" style="width:80px">
         <span class="meta" style="flex:2">AI 收藏别人表情时写的简短备注长度上限。</span>
       </div>
+      <div class="row">
+        <label style="flex:1">AI 删除表情</label><input type="checkbox" id="v2StickerDeleteEnabled" style="width:auto">
+        <label style="flex:1">每分钟最多删</label><input type="number" id="v2StickerDeletePerMin" min="0" style="width:80px">
+        <label style="flex:1">每小时最多删</label><input type="number" id="v2StickerDeletePerHour" min="0" style="width:80px">
+        <label style="flex:1">每天最多删</label><input type="number" id="v2StickerDeletePerDay" min="0" style="width:80px">
+      </div>
+      <div class="meta" style="margin-top:4px">删除是<b>不可恢复</b>的（除非有人再发同一张图）。实际能否删还受「访问与安全 → 机器人自主操作 → 删除自己收藏的表情」档位约束（默认「仅应要求」）。</div>
+      <div class="row">
+        <label style="flex:1">发送频率档位</label>
+        <select id="v2StickerSendMode" style="width:190px">
+          <option value="off">不发表情</option>
+          <option value="low">少量（约 8~12 轮一张）</option>
+          <option value="normal">适中（约 3~5 轮一张）</option>
+          <option value="high">较多（约 1~2 轮一张）</option>
+          <option value="persona">完全根据人设来</option>
+        </select>
+      </div>
+      <div class="meta" style="margin-top:4px">档位同时写进提示词并作为桥接硬上限：off / low / normal / high = 每 10 分钟 0 / 2 / 6 / 15 张（最小间隔 0 / 45 / 3 / 1 秒）；<b>完全根据人设来</b>不设档位上限，只受总发送限额约束，由人格卡与当下语境决定节奏。</div>
 
       </div></details>
 <details class="settings-group"><summary>上下文参数（recent / unread / contextWindow）</summary><div class="settings-content">
@@ -2213,7 +2399,86 @@ button:active:not(:disabled) {
         <label style="flex:1">未读上限</label><input type="number" id="v2ContextUnreadLimit" min="1" style="width:80px">
         <label style="flex:1">上下文窗口</label><input type="number" id="v2ContextWindow" min="1" style="width:80px">
       </div>
+      <div class="row">
+        <label style="flex:1">唤醒时内联消息</label><input type="checkbox" id="v2ContextInlineWake" style="width:auto">
+        <label style="flex:1">唤醒消息条数上限</label><input type="number" id="v2ContextWakeLimit" min="1" max="100" style="width:80px">
+      </div>
+      <div class="row">
+        <label style="flex:1">唤醒附带最近消息</label><input type="number" id="v2ContextWakeRecent" min="0" max="20" style="width:80px">
+        <label style="flex:1">唤醒消息最大字符</label><input type="number" id="v2ContextWakeChars" min="500" max="20000" style="width:100px">
+      </div>
+      <div class="row">
+        <label style="flex:1">启用摘要</label><input type="checkbox" id="v2ContextDigestEnabled" style="width:auto">
+        <label style="flex:1">摘要窗口（分钟）</label><input type="number" id="v2ContextDigestWindowMin" min="30" max="1440" style="width:90px">
+        <label style="flex:1">摘要最大字符</label><input type="number" id="v2ContextDigestMaxChars" min="200" max="2000" style="width:90px">
+      </div>
+      <div class="row">
+        <label style="flex:1">每 N 条异步摘要</label><input type="number" id="v2ContextDigestEveryMessages" min="1" max="500" style="width:80px">
+        <label style="flex:1">最长间隔（分钟）</label><input type="number" id="v2ContextDigestEveryMin" min="1" max="1440" style="width:90px">
+        <label style="flex:1">LLM 摘要最大字符</label><input type="number" id="v2ContextDigestSummaryChars" min="100" max="1000" style="width:90px">
+        <label style="flex:1">重置 recap 最大字符</label><input type="number" id="v2ContextDigestRecapChars" min="100" max="1500" style="width:90px">
+      </div>
+      <div class="row">
+        <label style="flex:1">唤醒 prompt 最大字符</label><input type="number" id="v2ContextMaxWakeChars" min="2000" max="30000" style="width:100px">
+        <span class="meta" style="flex:2">超出时按“摘要 → 记忆 → 参与度 → 时间感”顺序裁剪，保住安全规则与工具协议。</span>
+      </div>
+      <div class="meta">摘要优先用异步 LLM（每 N 条或最长间隔触发）；失败时自动回退到规则摘要（时间窗、参与者、话题、@/提问、最后一条）。</div>
 
+      </div></details>
+<details class="settings-group"><summary>图片/表情媒体上限</summary><div class="settings-content">
+      <div class="row">
+        <label style="flex:1">单条消息总字节（MB）</label><input type="number" id="v2MediaMaxBytesMb" min="1" step="1" style="width:90px">
+        <label style="flex:1">单张像素（MP）</label><input type="number" id="v2MediaMaxPixelsMp" min="1" step="1" style="width:90px">
+        <label style="flex:1">单条最多图片数</label><input type="number" id="v2MediaMaxCount" min="1" style="width:80px">
+      </div>
+      <div class="row">
+        <label style="flex:1">图片媒体库（只读）</label><input type="text" id="v2MediaDir" readonly style="flex:1">
+      </div>
+      <div class="meta">超过上限的图片/表情会被拒绝或降级处理；默认 8MB / 64MP / 5 张。</div>
+      </div></details>
+<details class="settings-group"><summary>文档阅读（管理员权限）</summary><div class="settings-content">
+      <div class="row">
+        <label style="flex:1">启用文档阅读</label><input type="checkbox" id="v2DocEnabled" style="width:auto">
+        <label style="flex:1">允许读取历史文件</label><input type="checkbox" id="v2DocAllowHistory" style="width:auto">
+      </div>
+      <div class="row">
+        <label style="flex:1">最大文件（MB）</label><input type="number" id="v2DocMaxMb" min="1" max="50" style="width:80px">
+        <label style="flex:1">最多页数</label><input type="number" id="v2DocMaxPages" min="1" max="300" style="width:80px">
+        <label style="flex:1">最多字符</label><input type="number" id="v2DocMaxChars" min="500" max="100000" style="width:100px">
+        <label style="flex:1">每 10 分钟最多</label><input type="number" id="v2DocMaxPer10Min" min="1" max="50" style="width:80px">
+      </div>
+      <div class="meta">支持 txt/md/PDF 文字层/DOCX/XLSX。默认关闭；「允许读取历史文件」开启后，AI 才能读不在最近缓存里的旧文件。扫描版 PDF 需 OCR，不在支持范围；文档内容按不可信数据处理，不执行宏/外链。</div>
+      </div></details>
+<details class="settings-group"><summary>语音发送（开关、频率、音量）</summary><div class="settings-content">
+      <div class="row">
+        <label style="flex:1">启用语音发送</label><input type="checkbox" id="v2VoiceEnabled" style="width:auto">
+        <label style="flex:1">允许绝对路径</label><input type="checkbox" id="v2VoiceAllowAbsolute" style="width:auto">
+        <label style="flex:1">发送后回读校验</label><input type="checkbox" id="v2VoiceAutoReadback" style="width:auto">
+      </div>
+      <div class="row">
+        <label style="flex:1">最长时长（秒）</label><input type="number" id="v2VoiceMaxSeconds" min="1" style="width:80px">
+        <label style="flex:1">最大体积（MB）</label><input type="number" id="v2VoiceMaxBytesMb" min="1" style="width:80px">
+        <label style="flex:1">默认音量</label><input type="number" id="v2VoiceDefaultVolume" min="0.1" max="4" step="0.1" style="width:80px">
+      </div>
+      <div class="row">
+        <label style="flex:1">每分钟最多</label><input type="number" id="v2VoiceMaxMin" min="0" style="width:70px">
+        <label style="flex:1">每小时最多</label><input type="number" id="v2VoiceMaxHour" min="0" style="width:70px">
+        <label style="flex:1">每 2 小时最多</label><input type="number" id="v2VoiceMax2h" min="0" style="width:70px">
+        <label style="flex:1">每日最多</label><input type="number" id="v2VoiceMaxDay" min="0" style="width:70px">
+      </div>
+      <div class="row">
+        <label style="flex:1">响度</label>
+        <select id="v2VoiceLoudness" style="width:100px">
+          <option value="quiet">quiet</option>
+          <option value="normal">normal</option>
+          <option value="loud">loud</option>
+        </select>
+        <label style="flex:1">语音库目录（只读）</label><input type="text" id="v2VoiceDir" readonly style="flex:1">
+      </div>
+      <div class="row">
+        <label style="flex:1">ffmpeg 路径（只读）</label><input type="text" id="v2VoiceFfmpegPath" readonly style="flex:1">
+      </div>
+      <div class="meta">语音库目录与 ffmpeg 路径属于本机路径，网页只读展示；要改请编辑 config.json。语音额度与文本额度独立计数。</div>
       </div></details>
 <details class="settings-group"><summary>反馈工具参数（qq_report_feedback）</summary><div class="settings-content">
       <div class="row">
@@ -2239,12 +2504,28 @@ button:active:not(:disabled) {
       </div></details>
 <details class="settings-group"><summary>轻量记忆（activeTopics / pendingThoughts / memberImpressions）</summary><div class="settings-content">
       <div class="row">
+        <select id="v2MemoryKeyType" style="width:90px"><option value="group">群聊</option><option value="private">私聊</option></select>
+        <select id="v2MemoryKeyTarget" style="max-width:200px"><option value="">选择群号/QQ</option></select>
         <input type="text" id="v2MemoryKey" placeholder="group:123456789" style="flex:1">
         <button id="v2MemoryLoad" class="small">加载记忆</button>
         <button id="v2MemoryClearAll" class="small danger">清空全部</button>
         <span class="meta" id="v2MemoryMsg"></span>
       </div>
       <div id="v2MemoryOutput" class="tool-log-table">（空）</div>
+      <div class="row" style="margin-top:8px">
+        <input type="text" id="v2PersonUser" placeholder="QQ号（人物卡）" style="width:150px">
+        <select id="v2PersonCategory" style="width:110px">
+          <option value="fact">事实/偏好</option>
+          <option value="boundary">边界/雷区</option>
+          <option value="episode">具体互动</option>
+          <option value="alias">称呼</option>
+        </select>
+        <input type="text" id="v2PersonText" placeholder="要记的内容（≤200字）" style="flex:1">
+        <button id="v2PersonAdd" class="small">添加人物备注</button>
+        <button id="v2PersonForget" class="small danger">删除这条备注</button>
+        <button id="v2PersonLoad" class="small">刷新人物卡</button>
+      </div>
+      <div id="v2PersonOutput" class="tool-log-table">（空）</div>
 
       </div></details>
 <details class="settings-group"><summary>唤醒状态（AI 当前设置的下一次唤醒条件/倒计时）</summary><div class="settings-content">
@@ -2262,6 +2543,9 @@ button:active:not(:disabled) {
         之后不会重复注入（那时它已经在会话上下文里了）；AI 读不到也改不了这份设置。
         如果 AI 已经在这个会话里首次唤醒过，需要重置该会话（「会话映射」里重置，或「重置二代状态」）后，下一次首次唤醒才会带上它。
         留空保存等于删除；只写环境背景，别写指令式的要求（那是人格卡/仿真提示词的事）。
+      </div>
+      <div class="row">
+        <label style="flex:1">初始提示词上限（字符）</label><input type="number" id="v2InitialPromptMaxChars" min="100" max="8000" style="width:100px">
       </div>
       <div class="row">
         <input type="text" id="v2InitPromptKey" placeholder="group:123456789（可从「白名单会话快速选择」带过来）" style="flex:1" aria-label="初始提示词的会话 key">
@@ -2302,6 +2586,7 @@ button:active:not(:disabled) {
       <div class="meta" style="margin-top:4px">修改上面任意推荐/默认参数后，必须点这个按钮才会持久化；保存后会自动应用到仍使用默认唤醒配置的会话，重启后仍然保留。</div>
 
       </div></section>
+<section id="section-social-v3" data-page="social-v3" class="card span-all"><h2>三代仿真模式（reserved3）控制台</h2></section>
 <section id="section-slang" data-page="slang" class="card span-all">
       <h2>群聊黑话 / 网络用语库</h2>
       <div class="meta">DSH 会从群聊中自动提取疑似黑话候选；二代仿真模式下 AI 也可用 <code>qq_slang_submit</code> 主动提交陌生词。候选可批量送 DSH 深度联网研究，研究结果回到控制台由你删改修正后转正；确认后的词条会写入“黑话提示词”，注入一代/二代 AI 的聊天上下文，成为 AI 可查询和使用的记忆。</div>
@@ -2434,6 +2719,9 @@ button:active:not(:disabled) {
         <tr><td>qq_slang_submit</td><td>AI 提交陌生词/黑话给管理员筛选</td></tr>
       </table>
       <div class="meta" style="margin-top:10px">二代仿真模式工具：qq_get_prompt / qq_get_unread_messages / qq_get_recent_messages / qq_social_state / qq_send_burst / qq_send_message / qq_wait_for_messages / qq_set_wake_config / qq_mark_read / qq_memory_* / qq_slang_query / qq_slang_submit 等。</div>
+      <div class="meta" style="margin-top:6px">管理员动作 <code>qq_admin</code>（改群名片 / 群名 / 群头像 / QQ 资料 / 头像）：管理员私聊里直接执行，其它会话只会生成确认卡发到管理员私聊。动作白名单、待确认与审计见 <code>config.json</code> 的 <code>adminOps</code> 与 <code>state/admin-ops.json</code>。</div>
+      <div class="meta" style="margin-top:6px">QQ 资料 / 空间（默认开启）：<code>qq_get_user_profile</code>（看资料并看懂头像；只能查本会话/本群出现过的人、私聊对端或管理员指定的人）、<code>qq_qzone_read</code>（读自己的说说 / 好友动态）、<code>qq_qzone_post</code>（发说说，走管理员动作队列：管理员要求直连，其他人要求先确认）。</div>
+      <div class="meta" style="margin-top:6px">表情包管理：<code>qq_list_stickers</code> / <code>qq_get_sticker_image</code> / <code>qq_sticker_note</code> / <code>qq_collect_sticker</code> / <code>qq_send_sticker</code>（发送频率分「不发表情 / 少量 / 适中 / 较多 / 完全根据人设来」五档，见「表情包参数」），以及 <code>qq_delete_sticker</code>（删除自己收藏的表情；不可恢复，默认「仅应要求」，有每分钟/每小时/每天上限）。</div>
     </section>
 <section id="section-whitelist" data-page="access" class="card span-all">
       <h2>白名单 / 管理员</h2>
@@ -2451,6 +2739,16 @@ button:active:not(:disabled) {
       <div class="row" style="margin-top:10px">
         <button id="wlSave">保存白名单</button>
         <span class="meta">保存后立即生效并写入 config.json</span>
+      </div>
+    </section>
+<section id="section-bot-perms" data-page="access" class="card span-all">
+      <h2>机器人自主操作</h2>
+      <div class="meta">按 AI 的<b>自主程度</b>分三档。<b>不开放</b> = 没有这个能力，调用一律拒绝（不发确认卡）；<b>仅应要求</b> = 只有你本人（ownerQQ，按发消息的 QQ 号识别，不看是哪个会话）刚说过话时才直接做，其他人要求会发确认卡给你；<b>人设自主</b> = 它自己判断，可以主动发起，也可以小概率按人设驳回你的要求（概率写在人格卡「行为合同」的「反驳主人」里，没写就是 5%）。</div>
+      <div id="botPermsMigrated" class="meta" style="display:none;margin-top:8px"></div>
+      <div id="botPermsList" class="meta" style="margin-top:10px">加载中…</div>
+      <div class="row" style="margin-top:10px">
+        <button id="botPermsSave">保存自主权限</button>
+        <span class="meta" id="botPermsMsg">保存后立即生效并写入 config.json；「人设自主」档需要 AI 侧协议支持（重启 DSH 后生效）</span>
       </div>
     </section>
 <section id="section-silent" data-page="overview" class="card">
@@ -2497,6 +2795,14 @@ button:active:not(:disabled) {
         <div class="meta" id="snowlumaWarnDiag">最近一个上游事件包：<b id="snowlumaWarnPkt">unknown</b>；SnowLuma 自评接收链路 good=<b id="snowlumaWarnGood">unknown</b>。</div>
         <div class="meta" style="margin:4px 0">这是 <b>SnowLuma 自己那边</b>的问题：它的 <code>[Hook]</code> 没能从 QQ 客户端取到数据，所以桥接的 WebSocket 连上了却始终没有内容可收。桥接没有原生 / 注入组件，也不改 SnowLuma，一条上游事件包都不会替你凭空造出来。</div>
         <div class="meta">排查：打开 SnowLuma 的 <code>logs/snowluma-*.log</code>，搜 <code>[Hook]</code>，看有没有 <code>receive path stale</code> / <code>process enumeration timed out</code> 这类行；顺带考虑<b>升级 SnowLuma</b>（新版运行时对 hook 的兜底更好）。桥接这边不用重启。</div>
+      </div>
+      <div id="gatewayEgressWarn" style="display:none;margin-top:10px;padding:8px 10px;border-left:3px solid var(--warn,#d08700);background:rgba(208,135,0,.08)">
+        <b id="gatewayEgressTitle">⚠️ SnowLuma 内置状态命令仍在开启</b>
+        <div class="meta" style="margin:4px 0">群里的 <code>#sl</code> 由 SnowLuma 自己直接回复，<b>不经过桥接</b>的白名单/静默/敏感信息审计；内容包含版本、平台/架构和运行时长。</div>
+        <div class="meta" id="gatewayEgressFiles" style="margin:4px 0"></div>
+        <div class="meta">处理：打开 SnowLuma WebUI <code>http://127.0.0.1:5099</code> → 配置 → 关闭 <code>statusCommand</code>；或停 SnowLuma 后把 <code>config/onebot*.json</code> 里的 <code>"enabled"</code> 改成 <code>false</code> 再启动。</div>
+        <button id="gatewayEgressRecheck" class="small">重新检测</button>
+        <span class="meta" id="gatewayEgressMsg"></span>
       </div>
     </section>
 <section id="section-token" data-page="access" class="card">
@@ -2653,7 +2959,8 @@ async function api(path, method, body, _retried = 0) {
   const headers = body ? {'content-type':'application/json'} : {};
   const token = localStorage.getItem('consoleToken');
   if (token) headers['x-console-token'] = token;
-  const res = await fetch(path, { method: method || 'GET', headers, body: body ? JSON.stringify(body) : undefined });
+  const res = await fetch(path, { method: method || 'GET', headers, body: body ? JSON.stringify(body) : undefined }).catch(() => null);
+  if (!res) throw new Error('连不上桥接控制台（桥接可能已退出或正在重启）');
   if (res.status === 401) {
     if (_retried >= 2) {
       localStorage.removeItem('consoleToken');
@@ -2729,8 +3036,10 @@ async function refresh() {
     document.querySelectorAll('#modeRow button').forEach(b => (b.classList.toggle('active', b.dataset.mode === s.mode), b.setAttribute('aria-pressed', String(b.dataset.mode === s.mode))));
     document.getElementById('roleText').textContent = s.role || '无';
     document.getElementById('roleModeText').textContent = s.roleMode === 'silent' ? '静默' : '正常';
-    const modeLabel = s.mode === 'reserved' ? '一代仿真模式' : s.mode === 'reserved2' ? '二代仿真模式' : s.mode === 'closed-agent' ? '封闭 Agent' : '聊天模式';
+    document.getElementById('roleAssignTop').textContent = Number.isFinite(Number(s.roleAssignments)) ? String(s.roleAssignments) : '—';
+    const modeLabel = s.mode === 'reserved' ? '一代仿真模式' : s.mode === 'reserved2' ? '二代仿真模式' : s.mode === 'reserved3' ? '三代仿真模式' : s.mode === 'closed-agent' ? '封闭 Agent' : '聊天模式';
     updateOverview(s, modeLabel);
+    renderGatewayEgress(s.snowlumaEgress);
     document.getElementById('activity').textContent = s.activity || '（空）';
     const presetSel = document.getElementById('closedPreset');
     if (presetSel && document.activeElement !== presetSel) presetSel.value = s.closedAgentPreset || '';
@@ -2780,6 +3089,14 @@ async function saveMode(mode) {
 let roleEditorState = { mode: 'new', name: '' };
 let roleCache = [];
 let roleInjectMax = 6000;
+// 按会话人格：null = 桥接还是旧版（没重启），此时绝不能发 {role,key}
+// —— 旧后端会把 key 忽略掉，当成「改默认人格」，反而改错全局配置。
+let roleAssignments = null;
+let roleRolesLoaded = false;
+let roleCurrent = null;
+let roleNames = [];
+let roleSessions = [];
+let roleWhitelist = { groups: [], private: [], ownerQQ: null };
 
 function setRoleMsg(text, ok) {
   const el = document.getElementById('roleCreateMsg');
@@ -2812,7 +3129,14 @@ function updateRoleEditorWarnings() {
 
 async function openRoleForEdit(name) {
   setRoleMsg('读取中…');
-  const res = await api('/api/roles/content?name=' + encodeURIComponent(name));
+  let res;
+  try {
+    res = await api('/api/roles/content?name=' + encodeURIComponent(name));
+  } catch (error) {
+    // api() 在断连 / 401 时会抛错；不接住就会变成「点了没反应」的静默失败。
+    setRoleMsg('载入失败：' + (error?.message ?? error), false);
+    return;
+  }
   if (!res.ok) { setRoleMsg(res.error || '读取失败', false); return; }
   document.getElementById('newRoleName').value = name;
   document.getElementById('newRoleContent').value = res.content;
@@ -2820,6 +3144,12 @@ async function openRoleForEdit(name) {
   renderRoleEditor();
   updateRoleEditorWarnings();
   setRoleMsg(`已载入「${name}」（${res.chars} 字符）`, true);
+  // 点卡片后必须让编辑区有可见反馈：高亮当前卡 + 把编辑区滚进视口（否则内容填在屏幕外，看起来像没反应）。
+  const cards = [...document.querySelectorAll('#roleList .persona-item')];
+  for (const card of cards) card.classList.toggle('editing', card.querySelector('strong')?.textContent === name);
+  const meta = document.getElementById('roleEditorMeta');
+  meta.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  document.getElementById('newRoleContent').focus({ preventScroll: true });
 }
 
 function resetRoleForm() {
@@ -2840,6 +3170,20 @@ async function refreshRoles() {
       if (input && document.activeElement !== input) input.value = String(roleInjectMax);
     }
     const names = Array.isArray(r.roles) ? r.roles : [];
+    roleNames = names;
+    roleCurrent = r.current ?? null;
+    // 旧桥接没有 assignments 字段：保留 null，界面给出「请重启桥接」而不是误发写入。
+    roleAssignments = r.assignments && typeof r.assignments === 'object' && !Array.isArray(r.assignments) ? r.assignments : null;
+    roleRolesLoaded = true;
+    const roleNameList = document.getElementById('roleNameOptions');
+    if (roleNameList) {
+      roleNameList.replaceChildren();
+      for (const name of names) {
+        const opt = document.createElement('option');
+        opt.value = name;
+        roleNameList.appendChild(opt);
+      }
+    }
     roleCache = Array.isArray(r.summaries) && r.summaries.length === names.length
       ? r.summaries
       : names.map((name) => ({ name, chars: 0, bytes: 0, excerpt: '', truncated: false }));
@@ -2864,7 +3208,8 @@ async function refreshRoles() {
       if (role.name === r.current) {
         const badge = document.createElement('span');
         badge.className = 'persona-badge';
-        badge.textContent = '启用中';
+        badge.textContent = '默认';
+        badge.title = '未单独指定人格的会话都使用这个默认人格';
         head.appendChild(badge);
       }
       if (role.truncated) {
@@ -2886,18 +3231,200 @@ async function refreshRoles() {
       const injection = split
         ? `按模式注入：二代 ${role.injectedV2} / 一代 ${role.injectedV1} 字符`
         : `注入 ${role.injectedV2 ?? role.chars} 字符`;
-      meta.textContent = `共 ${role.chars} 字符 · ${injection}${role.excerpt ? ' · ' + role.excerpt : ''}`;
+      const usedBy = roleAssignments ? Object.values(roleAssignments).filter((v) => v === role.name).length : 0;
+      meta.textContent = `共 ${role.chars} 字符 · ${injection}${usedBy ? ` · ${usedBy} 个会话使用` : ''}${role.excerpt ? ' · ' + role.excerpt : ''}`;
       item.append(head, meta);
       item.addEventListener('click', () => openRoleForEdit(role.name));
       box.appendChild(item);
     }
     const hint = document.getElementById('roleListHint');
     if (hint) hint.textContent = roleCache.length ? `共 ${roleCache.length} 个 · 点任意一个载入编辑` : '';
+    renderRoleAssign();
     renderRoleEditor();
   } catch (error) {
     document.getElementById('roleList').textContent = '加载失败：' + (error?.message ?? error);
   }
 }
+
+// ── 按会话人格 ──────────────────────────────────────────────────────────────
+// 数据来自 /api/roles 的 assignments（{"group:123":"猫娘"}）；写入复用 /api/role + key。
+function setRoleAssignMsg(text, ok) {
+  const el = document.getElementById('roleAssignMsg');
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = ok === undefined ? 'meta' : (ok ? 'meta ok' : 'meta err');
+}
+
+function renderRoleAssign() {
+  const box = document.getElementById('roleAssignList');
+  if (!box) return;
+  const countEl = document.getElementById('roleAssignCount');
+  const backendEl = document.getElementById('roleAssignBackend');
+  const addBtn = document.getElementById('roleAssignAdd');
+  const addRoleSel = document.getElementById('roleAssignRole');
+  const addKind = document.getElementById('roleAssignKind');
+  const addTarget = document.getElementById('roleAssignTarget');
+  if (!roleRolesLoaded) { box.textContent = '加载中…'; return; }
+  if (!roleAssignments) {
+    // 页面已是新版、桥接还是旧版：旧后端会忽略 key、把请求当成「改默认人格」，
+    // 所以这里直接锁死写入，只提示重启。
+    box.replaceChildren();
+    const warn = document.createElement('div');
+    warn.className = 'empty-state';
+    warn.innerHTML = '<strong>需要重启桥接</strong><p>当前桥接还没有「按会话人格」接口。请重启 qq-bridge 后刷新本页。</p>';
+    box.appendChild(warn);
+    if (backendEl) { backendEl.textContent = '⚠️ 桥接仍在运行旧代码：重启后才可保存按会话人格。'; backendEl.className = 'meta err'; }
+    if (countEl) countEl.textContent = '';
+    for (const el of [addBtn, addKind, addTarget, addRoleSel]) if (el) el.disabled = true;
+    return;
+  }
+  if (backendEl) { backendEl.textContent = ''; backendEl.className = 'meta'; }
+  for (const el of [addBtn, addKind, addTarget, addRoleSel]) if (el) el.disabled = false;
+  const total = Object.keys(roleAssignments).length;
+  if (countEl) countEl.textContent = total ? `（${total}）` : '';
+  // 新增行的人格下拉
+  if (addRoleSel) {
+    addRoleSel.replaceChildren();
+    for (const name of roleNames) {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      addRoleSel.appendChild(opt);
+    }
+    if (!roleNames.length) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = '（先创建一个人格）';
+      addRoleSel.appendChild(opt);
+    }
+  }
+  // 号码联想：现有会话 + 白名单
+  const dl = document.getElementById('roleAssignOptions');
+  if (dl) {
+    dl.replaceChildren();
+    const seen = new Set();
+    const addOption = (id, label) => {
+      const s = String(id);
+      if (seen.has(s)) return;
+      seen.add(s);
+      const opt = document.createElement('option');
+      opt.value = s;
+      opt.label = label;
+      dl.appendChild(opt);
+    };
+    for (const key of roleSessions) {
+      const m = /^(group|private):(\d+)$/.exec(String(key));
+      if (!m) continue;
+      addOption(m[2], m[1] === 'group' ? '群（已有会话）' : '私聊（已有会话）');
+    }
+    for (const id of roleWhitelist.groups || []) addOption(id, '群（白名单）');
+    for (const id of roleWhitelist.private || []) addOption(id, '私聊（白名单）');
+  }
+  // 行列表：群在前、按号码排序，避免每次刷新顺序乱跳
+  const entries = Object.entries(roleAssignments).sort((a, b) => {
+    const ak = a[0].startsWith('group:') ? 0 : 1;
+    const bk = b[0].startsWith('group:') ? 0 : 1;
+    const an = Number(a[0].slice(a[0].indexOf(':') + 1)) || 0;
+    const bn = Number(b[0].slice(b[0].indexOf(':') + 1)) || 0;
+    return ak - bk || an - bn;
+  });
+  box.replaceChildren();
+  if (!entries.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.innerHTML = '<strong>还没有会话例外</strong><p>所有群和私聊都使用默认人格。用下面的输入框添加一条。</p>';
+    box.appendChild(empty);
+  }
+  const whitelistKnown = (roleWhitelist.groups || []).length + (roleWhitelist.private || []).length > 0;
+  for (const [key, roleName] of entries) {
+    const isPrivate = key.startsWith('private:');
+    const id = key.slice(key.indexOf(':') + 1);
+    const row = document.createElement('div');
+    row.className = 'persona-item role-assign-row';
+    const pill = document.createElement('span');
+    pill.className = 'pill ' + (isPrivate ? 'b' : 'g');
+    pill.textContent = isPrivate ? '私聊' : '群';
+    const codeEl = document.createElement('code');
+    codeEl.textContent = id;
+    codeEl.title = key;
+    row.append(pill, codeEl);
+    if (isPrivate && roleWhitelist.ownerQQ != null && String(roleWhitelist.ownerQQ) === id) {
+      const owner = document.createElement('span');
+      owner.className = 'pill r';
+      owner.textContent = '管理员';
+      row.appendChild(owner);
+    }
+    const inWhitelist = isPrivate
+      ? (roleWhitelist.private || []).map(String).includes(id)
+      : (roleWhitelist.groups || []).map(String).includes(id);
+    if (whitelistKnown && !inWhitelist) {
+      const warn = document.createElement('span');
+      warn.className = 'pill r';
+      warn.textContent = '未在白名单';
+      warn.title = '配置已保存，但该会话当前不在白名单，不会生效';
+      row.appendChild(warn);
+    }
+    const sel = document.createElement('select');
+    sel.setAttribute('aria-label', `${key} 的人格`);
+    const inherit = document.createElement('option');
+    inherit.value = '__inherit__';
+    inherit.textContent = `继承默认（${roleCurrent || '无'}）`;
+    sel.appendChild(inherit);
+    for (const name of roleNames) {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      sel.appendChild(opt);
+    }
+    // 手改 state 或删卡后可能留下悬空人格名：显式列出来，避免下拉静默显示成「继承默认」。
+    if (roleName && !roleNames.includes(roleName)) {
+      const opt = document.createElement('option');
+      opt.value = roleName;
+      opt.textContent = `${roleName}（不存在）`;
+      sel.appendChild(opt);
+    }
+    sel.value = roleName || '__inherit__';
+    sel.addEventListener('change', async () => {
+      sel.disabled = true;
+      const chosen = sel.value === '__inherit__' ? null : sel.value;
+      const r = await api('/api/role', 'POST', { role: chosen, key });
+      sel.disabled = false;
+      if (r.ok) {
+        if (r.assignments) roleAssignments = r.assignments;
+        if (r.warning) showConsoleToast(r.warning);
+        else showConsoleToast(chosen ? `已把 ${key} 设为人格「${chosen}」` : `已让 ${key} 继承默认人格`);
+        refreshRoles();
+      } else {
+        alert(r.error || '保存失败');
+        renderRoleAssign();
+      }
+    });
+    row.appendChild(sel);
+    box.appendChild(row);
+  }
+}
+
+document.getElementById('roleAssignAdd').addEventListener('click', async () => {
+  let type = document.getElementById('roleAssignKind').value === 'private' ? 'private' : 'group';
+  let raw = document.getElementById('roleAssignTarget').value.trim();
+  // 允许直接粘贴 group:123 / private:456，省得再选类型
+  const m = /^(group|private):(\d+)$/.exec(raw);
+  if (m) { type = m[1]; raw = m[2]; }
+  if (!/^\d+$/.test(raw) || Number(raw) <= 0) { setRoleAssignMsg('请填写群号或 QQ 号（正整数）', false); return; }
+  const role = document.getElementById('roleAssignRole').value;
+  if (!role) { setRoleAssignMsg('请先创建一个人格', false); return; }
+  const key = `${type}:${Number(raw)}`;
+  const btn = document.getElementById('roleAssignAdd');
+  btn.disabled = true;
+  const r = await api('/api/role', 'POST', { role, key });
+  btn.disabled = false;
+  if (!r.ok) { setRoleAssignMsg(r.error || '添加失败', false); return; }
+  if (r.assignments) roleAssignments = r.assignments;
+  document.getElementById('roleAssignTarget').value = '';
+  setRoleAssignMsg(`已添加 ${key} → ${role}`, true);
+  if (r.warning) showConsoleToast(r.warning); else showConsoleToast('已保存会话人格');
+  refreshRoles();
+});
 
 // ── 仿真提示词（预设内置，需重启 DSH 生效）──────────────────────────────────
 let simPromptOriginal = '';
@@ -2986,28 +3513,78 @@ async function refreshWhitelist() {
     document.getElementById('ownerQQ').value = w.ownerQQ != null ? String(w.ownerQQ) : '';
     document.getElementById('dnGroups').value = (w.deny.groups || []).join(', ');
     document.getElementById('dnPrivate').value = (w.deny.private || []).join(', ');
+    const nextWhitelist = { groups: w.allow.groups || [], private: w.allow.private || [], ownerQQ: w.ownerQQ ?? null };
+    // 只有数据真的变了才重绘：refreshSessions 每 3 秒轮询一次，无条件重绘会打断正在选人格的用户。
+    if (JSON.stringify(nextWhitelist) !== JSON.stringify(roleWhitelist)) {
+      roleWhitelist = nextWhitelist;
+      renderRoleAssign();
+    }
   } catch {}
 }
 
 async function refreshSessions() {
+  // 每 3 秒轮询一次；正在编辑「主动概率调整 / 概率唤醒」时不要重绘，否则输入框会被冲掉。
+  if (document.activeElement?.dataset?.proactiveKey || document.activeElement?.dataset?.wakeprobKey) return;
   try {
-    const s = await api('/api/sessions');
+    const [s, socialStates] = await Promise.all([
+      api('/api/sessions'),
+      api('/api/socialV2/states').catch(() => ({ conversations: [] }))
+    ]);
+    const wakeByKey = {};
+    for (const c of (socialStates.conversations || [])) wakeByKey[c.key] = c.wakeConfig || {};
+    const nextSessions = (s.sessions || []).map((x) => x.key);
+    if (nextSessions.join('\n') !== roleSessions.join('\n')) {
+      roleSessions = nextSessions;
+      renderRoleAssign();
+    }
     const box = document.getElementById('sessionList');
     document.getElementById('metricSessions').textContent = s.sessions.length;
     if (!s.sessions.length) { box.innerHTML = '<div class="empty-state"><strong>还没有会话</strong><p>白名单中的群或好友发来消息后，会话会显示在这里。</p></div>'; return; }
-    let html = '<table><tr><th>QQ 会话</th><th>DSH 会话 ID</th><th>类型</th><th></th></tr>';
+    let html = '<table><tr><th>QQ 会话</th><th>DSH 会话 ID</th><th>类型</th><th>概率唤醒</th><th>主动概率调整</th><th></th></tr>';
     for (const x of s.sessions) {
       const isP = x.key.startsWith('private:');
       const type = isP ? '<span class="pill b">私聊</span>' : '<span class="pill g">群</span>';
       const ownerTag = x.owner ? ' <span class="pill r">管理员</span>' : '';
-      html += `<tr><td>${esc(x.key)}${ownerTag}</td><td><code>${esc(x.sessionId)}</code></td><td>${type}</td><td><button class="small" data-reset-key="${esc(x.key)}">清除上下文</button></td></tr>`;
+      const deltaPct = Math.round((Number(x.proactiveDelta) || 0) * 100);
+      const wakeTr = (wakeByKey[x.key] || {}).triggers || {};
+      const wakePct = Math.round((Number(wakeTr.probability) || 0) * 100);
+      const wakeHint = wakeTr.anyMessage ? '每条消息都醒（anyMessage）' : '普通消息随机唤醒概率';
+      html += `<tr><td>${esc(x.key)}${ownerTag}</td><td><code>${esc(x.sessionId)}</code></td><td>${type}</td>`
+        + `<td><input type="number" min="0" max="100" step="5" value="${wakePct}" data-wakeprob-key="${esc(x.key)}" style="width:70px" title="${esc(wakeHint)}"> %</td>`
+        + `<td><input type="number" min="-100" max="100" step="5" value="${deltaPct}" data-proactive-key="${esc(x.key)}" style="width:76px"> %</td>`
+        + `<td><button class="small" data-reset-key="${esc(x.key)}">清除上下文</button></td></tr>`;
     }
-    box.innerHTML = html + '</table>';
+    box.innerHTML = html + '</table>'
+      + '<div class="meta" style="margin-top:8px">概率唤醒：有人说话时，每条普通消息按这个百分比随机把它叫醒（8 秒窗口内的多条合并成一次），每个会话独立，0% 就是不会被随机叫醒。'
+      + '主动概率调整：在全局基础概率上加减（−100%~+100%），只影响「整场安静时它自己冒泡」的判定。两者互不影响，但共用 2 小时/每日的发送配额。</div>';
     box.querySelectorAll('[data-reset-key]').forEach(btn => btn.addEventListener('click', async () => {
       if (!confirm('确定清除该会话的上下文？下次消息将开新会话。')) return;
       const r = await api('/api/session/reset', 'POST', { key: btn.dataset.resetKey });
       alert(r.ok ? '✅ 已清除上下文' : ('❌ ' + (r.error || '失败')));
       refreshSessions();
+    }));
+    box.querySelectorAll('[data-wakeprob-key]').forEach(inp => inp.addEventListener('change', async () => {
+      const key = inp.dataset.wakeprobKey;
+      const pct = Math.max(0, Math.min(100, Math.round(Number(inp.value) || 0)));
+      inp.value = pct;
+      // 带上该会话现有的 triggers，避免只提交 probability 时把 anyMessage 等清掉。
+      const triggers = JSON.parse(JSON.stringify((wakeByKey[key] || {}).triggers || {}));
+      triggers.probability = pct / 100;
+      const r = await api('/api/socialV2/wake-config', 'POST', { key, config: { triggers } });
+      if (!r.ok) { alert('❌ ' + (r.error || '保存失败')); refreshSessions(); return; }
+      const saved = Math.round((Number(r.wakeConfig?.triggers?.probability) || 0) * 100);
+      inp.value = saved;
+      inp.title = `概率唤醒：每条普通消息 ${saved}% 的概率叫醒它`;
+    }));
+    box.querySelectorAll('[data-proactive-key]').forEach(inp => inp.addEventListener('change', async () => {
+      const key = inp.dataset.proactiveKey;
+      const pct = Math.max(-100, Math.min(100, Math.round(Number(inp.value) || 0)));
+      inp.value = pct;
+      const r = await api('/api/socialV2/proactive', 'POST', { key, delta: pct / 100 });
+      if (!r.ok) { alert('❌ ' + (r.error || '保存失败')); refreshSessions(); return; }
+      const saved = Math.round((Number(r.proactiveDelta) || 0) * 100);
+      inp.value = saved;
+      inp.title = `最终概率 = 全局基础 ${saved > 0 ? '+' : ''}${saved}%`;
     }));
   } catch {}
 }
@@ -3042,10 +3619,20 @@ document.getElementById('closedPreset').addEventListener('change', async () => {
   await saveMode(mode);
 });
 document.getElementById('roleSet').addEventListener('click', async () => {
-  const r = await api('/api/role', 'POST', { role: document.getElementById('roleInput').value.trim() });
-  if (r.ok) refreshRoles(); else alert(r.error || '设置失败');
+  const name = document.getElementById('roleInput').value.trim();
+  const r = await api('/api/role', 'POST', { role: name });
+  if (r.ok) { showConsoleToast(`默认人格已设为「${name}」`); refreshRoles(); refresh(); }
+  else alert(r.error || '设置失败');
 });
-document.getElementById('roleClear').addEventListener('click', async () => { await api('/api/role', 'POST', { role: null }); refreshRoles(); refresh(); });
+document.getElementById('roleClear').addEventListener('click', async () => {
+  // 只清默认人格，保留按会话指定的例外（/role off 才是彻底清空）。
+  const extras = roleAssignments ? Object.keys(roleAssignments).length : 0;
+  const r = await api('/api/role', 'POST', { role: null });
+  if (!r.ok) { alert(r.error || '清除失败'); return; }
+  showConsoleToast(extras ? `已清除默认人格（${extras} 个会话例外保留）` : '已清除默认人格');
+  refreshRoles();
+  refresh();
+});
 document.getElementById('roleCreate').addEventListener('click', async () => {
   const name = document.getElementById('newRoleName').value.trim();
   const content = document.getElementById('newRoleContent').value.trim();
@@ -3086,7 +3673,8 @@ document.getElementById('roleDelete').addEventListener('click', async () => {
   const r = await api('/api/roles/delete', 'POST', { name });
   if (!r.ok) { setRoleMsg('❌ ' + (r.error || '删除失败'), false); return; }
   resetRoleForm();
-  setRoleMsg(r.clearedCurrent ? `已删除「${name}」，并清除了当前启用的人格` : `已删除「${name}」`, true);
+  const clearedExtra = Number(r.assignmentsCleared) > 0 ? `，并清理 ${r.assignmentsCleared} 个会话例外` : '';
+  setRoleMsg(r.clearedCurrent ? `已删除「${name}」，并清除了默认人格${clearedExtra}` : `已删除「${name}」${clearedExtra}`, true);
   refreshRoles();
   refresh();
 });
@@ -3163,6 +3751,98 @@ document.getElementById('wlSave').addEventListener('click', async () => {
   });
   if (r.ok) { refreshWhitelist(); refresh(); alert('白名单已保存并生效'); }
   else alert(r.error || '保存失败');
+});
+// ── 机器人自主操作权限（三档：不开放 / 仅应要求 / 人设自主）──────────────────
+const BOT_SCOPE_LABELS = { none: '不开放', request: '仅应要求', persona: '人设自主' };
+const BOT_SCOPE_RANK = { none: 0, request: 1, persona: 2 };
+const BOT_PERM_MODEL = 2;
+async function refreshBotPerms() {
+  const box = document.getElementById('botPermsList');
+  if (!box) return;
+  try {
+    const r = await api('/api/bot-perms');
+    // 新页面 + 旧桥接进程：旧的 /api/bot-perms 只认 off/owner/all。与其让用户看到
+    // 「值只能是 off / owner / all」这种像填错值一样的报错，不如直接说是进程没重启。
+    if (r.permModel !== BOT_PERM_MODEL) {
+      box.className = 'meta err';
+      box.textContent = '⚠️ 桥接进程还是旧版本（自主权限模型 v1）：页面已经是新的，但 3100 端口上跑的还是旧代码。'
+        + '先运行仓库根目录的 restart.bat 重启桥接，再刷新本页；保存按钮已暂时禁用。';
+      const save = document.getElementById('botPermsSave');
+      if (save) save.disabled = true;
+      return;
+    }
+    const save = document.getElementById('botPermsSave');
+    if (save) save.disabled = false;
+    const rows = r.rows || [];
+    const unlocked = new Set(r.unlocked || []);
+    const migrated = document.getElementById('botPermsMigrated');
+    if (migrated) {
+      if (Array.isArray(r.migrated) && r.migrated.length) {
+        migrated.style.display = '';
+        migrated.textContent = `⚠️ 已按新语义迁移旧配置（off→不开放、owner→仅应要求、all→人设自主），涉及 ${r.migrated.length} 项。点一次「保存自主权限」就写回新值；注意第 1 档现在是「没有这个能力」（不再发确认卡），第 3 档可以自主发起、也可能驳回你。`;
+      } else {
+        migrated.style.display = 'none';
+        migrated.textContent = '';
+      }
+    }
+    let lastGroup = '';
+    let html = '';
+    for (const row of rows) {
+      if (row.group !== lastGroup) {
+        html += `<div style="margin-top:10px;font-weight:600">${esc(row.group)}</div>`;
+        lastGroup = row.group;
+      }
+      const capped = !!row.maxScope && row.maxScope !== 'persona';
+      const locked = capped && !unlocked.has(row.key);
+      const options = ['none', 'request', 'persona'].map((s) => {
+        const blocked = locked && BOT_SCOPE_RANK[s] > BOT_SCOPE_RANK[row.maxScope];
+        return `<option value="${s}"${row.scope === s ? ' selected' : ''}${blocked ? ' disabled' : ''}>${BOT_SCOPE_LABELS[s]}</option>`;
+      }).join('');
+      html += `<div class="row" style="align-items:center;gap:10px;margin-top:4px">`
+        + `<span style="flex:1 1 240px">${esc(row.label)}<span data-bot-lock="${esc(row.key)}">${capped ? (locked ? ' 🔒' : ' 🔓') : ''}</span><span class="meta" style="display:block">${esc(row.hint || '')}</span></span>`
+        + `<select data-bot-perm="${esc(row.key)}" style="flex:0 0 140px">${options}</select>`
+        + (capped ? `<label class="meta" style="flex:0 0 auto"><input type="checkbox" data-bot-unlock="${esc(row.key)}"${unlocked.has(row.key) ? ' checked' : ''}> 解除封顶</label>` : '')
+        + `</div>`;
+    }
+    box.className = '';
+    box.innerHTML = html;
+    // 勾/取消「解除封顶」时立即放开/收回高一档的选项，不必先保存。
+    box.querySelectorAll('[data-bot-unlock]').forEach((el) => {
+      el.addEventListener('change', () => {
+        const key = el.dataset.botUnlock;
+        const row = rows.find((x) => x.key === key);
+        const select = box.querySelector(`[data-bot-perm="${key}"]`);
+        if (!row || !select) return;
+        [...select.options].forEach((opt) => {
+          opt.disabled = !el.checked && BOT_SCOPE_RANK[opt.value] > BOT_SCOPE_RANK[row.maxScope];
+        });
+        if (!el.checked && BOT_SCOPE_RANK[select.value] > BOT_SCOPE_RANK[row.maxScope]) select.value = row.maxScope;
+        const icon = box.querySelector(`[data-bot-lock="${key}"]`);
+        if (icon) icon.textContent = el.checked ? ' 🔓' : ' 🔒';
+      });
+    });
+  } catch (error) {
+    box.textContent = '读取失败：' + (error?.message ?? error);
+  }
+}
+document.getElementById('botPermsSave').addEventListener('click', async () => {
+  const scope = {};
+  document.querySelectorAll('[data-bot-perm]').forEach((el) => { scope[el.dataset.botPerm] = el.value; });
+  const unlocked = [...document.querySelectorAll('[data-bot-unlock]')].filter((el) => el.checked).map((el) => el.dataset.botUnlock);
+  const r = await api('/api/bot-perms', 'POST', { scope, unlocked });
+  const msg = document.getElementById('botPermsMsg');
+  if (r.ok) {
+    const clamped = Array.isArray(r.clamped) ? r.clamped : [];
+    msg.textContent = clamped.length
+      ? `✅ 已保存；${clamped.length} 项受封顶限制未生效（先勾「解除封顶」）：${clamped.join('、')}`
+      : '✅ 已保存并生效';
+    msg.className = 'meta ok';
+    refreshBotPerms();
+  } else {
+    const err = String(r.error || '保存失败');
+    msg.textContent = '❌ ' + err + (/旧值|只能是/.test(err) ? '（桥接可能还是旧进程：运行 restart.bat 后刷新本页）' : '');
+    msg.className = 'meta err';
+  }
 });
 document.getElementById('tsSend').addEventListener('click', async () => {
   const r = await api('/api/test-send', 'POST', {
@@ -3263,15 +3943,17 @@ async function sendVoiceFromConsole() {
 }
 
 // ── 二代仿真模式（reserved2）配置 ─────────────────────────────────────────
-async function loadV2Config() {
-  try {
-    const r = await api('/api/socialV2/config');
-    const c = r.config || {};
+function fillV2Form(c) {
     document.getElementById('v2Enabled').checked = c.enabled !== false;
     document.getElementById('v2AgentPreset').value = c.agentPreset || '';
+    document.getElementById('v2Gen3Preset').value = c.gen3Preset || 'qq-chat-v3';
     document.getElementById('v2ProvideRecommendations').checked = c.provideRecommendations !== false;
+    const defaultOffTools = new Set(['setStickerRemark', 'sendVoice', 'groupSign', 'like', 'shareCard']);
     document.querySelectorAll('[data-v2-tool]').forEach(el => {
-      el.checked = (c.tools && c.tools[el.dataset.v2Tool] !== false);
+      const flag = el.dataset.v2Tool;
+      el.checked = (c.tools && c.tools[flag] !== undefined)
+        ? c.tools[flag] !== false
+        : !defaultOffTools.has(flag);
     });
     const w = c.wake || {};
     document.getElementById('v2WakeDefaultMode').value = w.defaultMode === 'active' ? 'active' : 'diving';
@@ -3289,6 +3971,8 @@ async function loadV2Config() {
     document.getElementById('v2SleepMaxMs').value = Math.round((w.sleepMaxMs || 0) / 1000);
     document.getElementById('v2MaxWakeMin').value = w.maxWakePerMinute ?? 1;
     document.getElementById('v2MaxWakeHour').value = w.maxWakePerHour ?? 12;
+    document.getElementById('v2MaxWake2h').value = w.maxWakePer2Hours ?? 10;
+    document.getElementById('v2MaxWakeDay').value = w.maxWakePerDay ?? 30;
     document.getElementById('v2BatchWindowMs').value = w.batchWindowMs ?? 8000;
     document.getElementById('v2NoActionLimit').value = w.noActionLimit ?? 3;
     document.getElementById('v2MaxWakeConfigReminders').value = w.maxWakeConfigReminders ?? 2;
@@ -3304,11 +3988,27 @@ async function loadV2Config() {
     document.getElementById('v2LongGapMax').value = s.longGapMaxMs ?? 10000;
     document.getElementById('v2MaxSendMin').value = s.maxSendPerMinute ?? 8;
     document.getElementById('v2MaxSendHour').value = s.maxSendPerHour ?? 60;
+    document.getElementById('v2MaxSend2h').value = s.maxSendPer2Hours ?? 30;
+    document.getElementById('v2MaxSendDay').value = s.maxSendPerDay ?? 120;
     document.getElementById('v2MaxMsgChars').value = s.maxMessageChars ?? 500;
     document.getElementById('v2MaxGapMs').value = s.maxGapMs ?? 10000;
     document.getElementById('v2GapBaseMs').value = s.gapBaseMs ?? 800;
     document.getElementById('v2GapPerCharMs').value = s.gapPerCharMs ?? 20;
     document.getElementById('v2SendHint').value = s.recommendedHint || '';
+    const gq = (c.quota && c.quota.global) || {};
+    document.getElementById('v2GlobalSend2h').value = gq.maxSendPer2Hours ?? 120;
+    document.getElementById('v2GlobalSendDay').value = gq.maxSendPerDay ?? 500;
+    document.getElementById('v2GlobalWake2h').value = gq.maxWakePer2Hours ?? 30;
+    document.getElementById('v2GlobalWakeDay').value = gq.maxWakePerDay ?? 100;
+    const dec = c.decision || {};
+    document.getElementById('v2SocialMentionDelaySec').value = Math.round((dec.socialMentionDelayMs ?? 30000) / 1000);
+    document.getElementById('v2HighPressure').value = dec.highPressure ?? 0.6;
+    document.getElementById('v2MediumPressure').value = dec.mediumPressure ?? 0.35;
+    const tim = c.timing || {};
+    document.getElementById('v2TimingEnabled').checked = tim.enabled !== false;
+    document.getElementById('v2TimingMinMs').value = tim.minDelayMs ?? 600;
+    document.getElementById('v2TimingMaxMs').value = tim.maxDelayMs ?? 3000;
+    document.getElementById('v2TypingIndicator').checked = tim.typingIndicator !== false;
     const wt = c.wait || {};
     document.getElementById('v2WaitDefaultMs').value = wt.defaultMs ?? 30000;
     document.getElementById('v2WaitMinMs').value = wt.minMs ?? 5000;
@@ -3333,22 +4033,90 @@ async function loadV2Config() {
     document.getElementById('v2StickerCollectPerMin').value = stkCollect.maxPerMinute ?? 2;
     document.getElementById('v2StickerCollectPerHour').value = stkCollect.maxPerHour ?? 10;
     document.getElementById('v2StickerCollectRemarkMax').value = stkCollect.maxRemarkChars ?? 20;
+    const stkDelete = stk.delete || {};
+    document.getElementById('v2StickerDeleteEnabled').checked = stkDelete.enabled !== false;
+    document.getElementById('v2StickerDeletePerMin').value = stkDelete.maxPerMinute ?? 1;
+    document.getElementById('v2StickerDeletePerHour').value = stkDelete.maxPerHour ?? 5;
+    document.getElementById('v2StickerDeletePerDay').value = stkDelete.maxPerDay ?? 20;
+    const stkSend = stk.send || {};
+    document.getElementById('v2StickerSendMode').value = ['off', 'low', 'normal', 'high', 'persona'].includes(stkSend.mode) ? stkSend.mode : 'normal';
     const ctx = c.context || {};
     document.getElementById('v2ContextRecentLimit').value = ctx.recentLimit ?? 100;
     document.getElementById('v2ContextUnreadLimit').value = ctx.unreadLimit ?? 30;
     document.getElementById('v2ContextWindow').value = ctx.contextWindow ?? 20;
+    document.getElementById('v2ContextInlineWake').checked = ctx.inlineWakeMessages !== false;
+    document.getElementById('v2ContextWakeLimit').value = ctx.wakeMessageLimit ?? 12;
+    document.getElementById('v2ContextWakeRecent').value = ctx.wakeRecentLimit ?? 4;
+    document.getElementById('v2ContextWakeChars').value = ctx.wakeMaxChars ?? 6000;
+    document.getElementById('v2ContextDigestEnabled').checked = ctx.digestEnabled !== false;
+    document.getElementById('v2ContextDigestWindowMin').value = Math.round((ctx.digestWindowMs ?? 6 * 60 * 60 * 1000) / 60000);
+    document.getElementById('v2ContextDigestMaxChars').value = ctx.digestMaxChars ?? 600;
+    document.getElementById('v2ContextDigestEveryMessages').value = ctx.digestEveryMessages ?? 20;
+    document.getElementById('v2ContextDigestEveryMin').value = Math.round((ctx.digestEveryMs ?? 10 * 60 * 1000) / 60000);
+    document.getElementById('v2ContextDigestSummaryChars').value = ctx.digestSummaryMaxChars ?? 500;
+    document.getElementById('v2ContextDigestRecapChars').value = ctx.digestRecapMaxChars ?? 800;
+    document.getElementById('v2ContextMaxWakeChars').value = ctx.maxWakePromptChars ?? 12000;
+    const media = c.media || {};
+    document.getElementById('v2MediaMaxBytesMb').value = Math.round((media.maxBytes ?? 8 * 1024 * 1024) / 1024 / 1024);
+    document.getElementById('v2MediaMaxPixelsMp').value = Math.round((media.maxPixels ?? 64000000) / 1000000);
+    document.getElementById('v2MediaMaxCount').value = media.maxCount ?? 5;
+    document.getElementById('v2MediaDir').value = media.dir || 'media';
+    const doc = c.document || {};
+    document.getElementById('v2DocEnabled').checked = doc.enabled === true;
+    document.getElementById('v2DocAllowHistory').checked = doc.allowHistory === true;
+    document.getElementById('v2DocMaxMb').value = Math.round((doc.maxBytes ?? 10 * 1024 * 1024) / 1024 / 1024);
+    document.getElementById('v2DocMaxPages').value = doc.maxPages ?? 50;
+    document.getElementById('v2DocMaxChars').value = doc.maxChars ?? 20000;
+    document.getElementById('v2DocMaxPer10Min').value = doc.maxPer10Min ?? 5;
+    const voice = c.voice || {};
+    document.getElementById('v2VoiceEnabled').checked = voice.enabled === true;
+    document.getElementById('v2VoiceAllowAbsolute').checked = voice.allowAbsolutePath === true;
+    document.getElementById('v2VoiceAutoReadback').checked = voice.autoReadback !== false;
+    document.getElementById('v2VoiceMaxSeconds').value = voice.maxSeconds ?? 300;
+    document.getElementById('v2VoiceMaxBytesMb').value = Math.round((voice.maxBytes ?? 20 * 1024 * 1024) / 1024 / 1024);
+    document.getElementById('v2VoiceDefaultVolume').value = voice.defaultVolume ?? 1;
+    document.getElementById('v2VoiceMaxMin').value = voice.maxPerMinute ?? 2;
+    document.getElementById('v2VoiceMaxHour').value = voice.maxPerHour ?? 10;
+    document.getElementById('v2VoiceMax2h').value = voice.maxPer2Hours ?? 4;
+    document.getElementById('v2VoiceMaxDay').value = voice.maxPerDay ?? 20;
+    document.getElementById('v2VoiceLoudness').value = voice.loudness || 'normal';
+    document.getElementById('v2VoiceDir').value = voice.dir || 'audio';
+    document.getElementById('v2VoiceFfmpegPath').value = voice.ffmpegPath || '';
+    document.getElementById('v2InitialPromptMaxChars').value = c.initialPromptMaxChars ?? 2000;
     const fb = c.feedback || {};
     document.getElementById('v2FeedbackMaxLength').value = fb.maxLength ?? 500;
     document.getElementById('v2FeedbackNotifyOwner').checked = fb.notifyOwnerOnError === true;
+    const pf = c.profile || {};
+    document.getElementById('v2ProfileEnabled').checked = pf.enabled !== false;
+    document.getElementById('v2ProfileCacheMin').value = Math.round((Number(pf.cacheTtlMs) || 600000) / 60000);
+    document.getElementById('v2ProfileMaxPer10Min').value = pf.maxPer10Min ?? 10;
+    const qz = c.qzone || {};
+    const qzp = qz.post || {};
+    document.getElementById('v2QzoneEnabled').checked = qz.enabled !== false;
+    document.getElementById('v2QzonePostEnabled').checked = qzp.enabled !== false;
+    document.getElementById('v2QzoneVerify').checked = qzp.verify !== false;
+    document.getElementById('v2QzoneMaxChars').value = qzp.maxContentChars ?? 1000;
+    document.getElementById('v2QzoneMaxImages').value = qzp.maxImages ?? 9;
+    document.getElementById('v2QzoneDefaultRight').value = String(qzp.defaultUgcRight ?? 1);
+    document.getElementById('v2QzoneMaxHour').value = qzp.maxPerHour ?? 2;
+    document.getElementById('v2QzoneMaxDay').value = qzp.maxPerDay ?? 6;
+    document.getElementById('v2QzoneMinIntervalMin').value = Math.round((Number(qzp.minIntervalMs) || 300000) / 60000);
+}
+
+async function loadV2Config() {
+  try {
+    const r = await api('/api/socialV2/config');
+    fillV2Form(r.config || {});
   } catch {}
 }
 
-async function saveV2Config() {
+function collectV2ConfigBody() {
   const tools = {};
   document.querySelectorAll('[data-v2-tool]').forEach(el => { tools[el.dataset.v2Tool] = el.checked; });
   const body = {
     enabled: document.getElementById('v2Enabled').checked,
     agentPreset: document.getElementById('v2AgentPreset').value.trim(),
+    gen3Preset: document.getElementById('v2Gen3Preset').value.trim() || 'qq-chat-v3',
     provideRecommendations: document.getElementById('v2ProvideRecommendations').checked,
     autoReplyCheckMs: Math.round(Number(document.getElementById('v2AutoReplyCheckSec').value) || 30) * 1000,
     tools,
@@ -3370,6 +4138,8 @@ async function saveV2Config() {
       sleepMaxMs: (Math.round(Number(document.getElementById('v2SleepMaxMs').value) || 0)) * 1000,
       maxWakePerMinute: Math.round(Number(document.getElementById('v2MaxWakeMin').value) || 0),
       maxWakePerHour: Math.round(Number(document.getElementById('v2MaxWakeHour').value) || 0),
+      maxWakePer2Hours: Math.round(Number(document.getElementById('v2MaxWake2h').value) || 0),
+      maxWakePerDay: Math.round(Number(document.getElementById('v2MaxWakeDay').value) || 0),
       batchWindowMs: Math.round(Number(document.getElementById('v2BatchWindowMs').value) || 8000),
       noActionLimit: Math.round(Number(document.getElementById('v2NoActionLimit').value) || 3),
       maxWakeConfigReminders: Math.round(Number(document.getElementById('v2MaxWakeConfigReminders').value) || 2)
@@ -3384,11 +4154,32 @@ async function saveV2Config() {
       longGapMaxMs: Math.round(Number(document.getElementById('v2LongGapMax').value) || 10000),
       maxSendPerMinute: Math.round(Number(document.getElementById('v2MaxSendMin').value) || 0),
       maxSendPerHour: Math.round(Number(document.getElementById('v2MaxSendHour').value) || 0),
+      maxSendPer2Hours: Math.round(Number(document.getElementById('v2MaxSend2h').value) || 0),
+      maxSendPerDay: Math.round(Number(document.getElementById('v2MaxSendDay').value) || 0),
       maxMessageChars: Math.round(Number(document.getElementById('v2MaxMsgChars').value) || 500),
       maxGapMs: Math.round(Number(document.getElementById('v2MaxGapMs').value) || 10000),
       gapBaseMs: Math.round(Number(document.getElementById('v2GapBaseMs').value) || 800),
       gapPerCharMs: Math.round(Number(document.getElementById('v2GapPerCharMs').value) || 20),
       recommendedHint: document.getElementById('v2SendHint').value
+    },
+    quota: {
+      global: {
+        maxSendPer2Hours: Math.round(Number(document.getElementById('v2GlobalSend2h').value) || 0),
+        maxSendPerDay: Math.round(Number(document.getElementById('v2GlobalSendDay').value) || 0),
+        maxWakePer2Hours: Math.round(Number(document.getElementById('v2GlobalWake2h').value) || 0),
+        maxWakePerDay: Math.round(Number(document.getElementById('v2GlobalWakeDay').value) || 0)
+      }
+    },
+    decision: {
+      socialMentionDelayMs: Math.max(0, Math.round(Number(document.getElementById('v2SocialMentionDelaySec').value) || 0)) * 1000,
+      highPressure: Number(document.getElementById('v2HighPressure').value) || 0.6,
+      mediumPressure: Number(document.getElementById('v2MediumPressure').value) || 0.35
+    },
+    timing: {
+      enabled: document.getElementById('v2TimingEnabled').checked,
+      minDelayMs: Math.max(0, Math.round(Number(document.getElementById('v2TimingMinMs').value) || 0)),
+      maxDelayMs: Math.max(0, Math.round(Number(document.getElementById('v2TimingMaxMs').value) || 0)),
+      typingIndicator: document.getElementById('v2TypingIndicator').checked
     },
     wait: {
       defaultMs: Math.round(Number(document.getElementById('v2WaitDefaultMs').value) || 5000),
@@ -3415,23 +4206,356 @@ async function saveV2Config() {
         maxPerMinute: Math.max(0, Math.round(Number(document.getElementById('v2StickerCollectPerMin').value) || 0)),
         maxPerHour: Math.max(0, Math.round(Number(document.getElementById('v2StickerCollectPerHour').value) || 0)),
         maxRemarkChars: Math.min(50, Math.max(1, Math.round(Number(document.getElementById('v2StickerCollectRemarkMax').value) || 20)))
+      },
+      delete: {
+        enabled: document.getElementById('v2StickerDeleteEnabled').checked,
+        maxPerMinute: Math.max(0, Math.round(Number(document.getElementById('v2StickerDeletePerMin').value) || 0)),
+        maxPerHour: Math.max(0, Math.round(Number(document.getElementById('v2StickerDeletePerHour').value) || 0)),
+        maxPerDay: Math.max(0, Math.round(Number(document.getElementById('v2StickerDeletePerDay').value) || 0))
+      },
+      send: {
+        mode: document.getElementById('v2StickerSendMode').value
       }
     },
     context: {
       recentLimit: Math.round(Number(document.getElementById('v2ContextRecentLimit').value) || 100),
       unreadLimit: Math.round(Number(document.getElementById('v2ContextUnreadLimit').value) || 30),
-      contextWindow: Math.round(Number(document.getElementById('v2ContextWindow').value) || 20)
+      contextWindow: Math.round(Number(document.getElementById('v2ContextWindow').value) || 20),
+      inlineWakeMessages: document.getElementById('v2ContextInlineWake').checked,
+      wakeMessageLimit: Math.round(Number(document.getElementById('v2ContextWakeLimit').value) || 12),
+      wakeRecentLimit: Math.round(Number(document.getElementById('v2ContextWakeRecent').value) || 0),
+      wakeMaxChars: Math.round(Number(document.getElementById('v2ContextWakeChars').value) || 6000),
+      digestEnabled: document.getElementById('v2ContextDigestEnabled').checked,
+      digestWindowMs: Math.max(30, Math.round(Number(document.getElementById('v2ContextDigestWindowMin').value) || 360)) * 60000,
+      digestMaxChars: Math.max(200, Math.round(Number(document.getElementById('v2ContextDigestMaxChars').value) || 600)),
+      digestEveryMessages: Math.max(1, Math.round(Number(document.getElementById('v2ContextDigestEveryMessages').value) || 20)),
+      digestEveryMs: Math.max(1, Math.round(Number(document.getElementById('v2ContextDigestEveryMin').value) || 10)) * 60000,
+      digestSummaryMaxChars: Math.max(100, Math.round(Number(document.getElementById('v2ContextDigestSummaryChars').value) || 500)),
+      digestRecapMaxChars: Math.max(100, Math.round(Number(document.getElementById('v2ContextDigestRecapChars').value) || 800)),
+      maxWakePromptChars: Math.max(2000, Math.round(Number(document.getElementById('v2ContextMaxWakeChars').value) || 12000))
+    },
+    media: {
+      maxBytes: Math.max(1, Math.round(Number(document.getElementById('v2MediaMaxBytesMb').value) || 8)) * 1024 * 1024,
+      maxPixels: Math.max(1, Math.round(Number(document.getElementById('v2MediaMaxPixelsMp').value) || 64)) * 1000000,
+      maxCount: Math.max(1, Math.round(Number(document.getElementById('v2MediaMaxCount').value) || 5))
+    },
+    document: {
+      enabled: document.getElementById('v2DocEnabled').checked,
+      allowHistory: document.getElementById('v2DocAllowHistory').checked,
+      maxBytes: Math.max(1, Math.round(Number(document.getElementById('v2DocMaxMb').value) || 10)) * 1024 * 1024,
+      maxPages: Math.max(1, Math.round(Number(document.getElementById('v2DocMaxPages').value) || 50)),
+      maxChars: Math.max(500, Math.round(Number(document.getElementById('v2DocMaxChars').value) || 20000)),
+      maxPer10Min: Math.max(1, Math.round(Number(document.getElementById('v2DocMaxPer10Min').value) || 5))
+    },
+    voice: {
+      enabled: document.getElementById('v2VoiceEnabled').checked,
+      allowAbsolutePath: document.getElementById('v2VoiceAllowAbsolute').checked,
+      autoReadback: document.getElementById('v2VoiceAutoReadback').checked,
+      maxSeconds: Math.max(1, Math.round(Number(document.getElementById('v2VoiceMaxSeconds').value) || 300)),
+      maxBytes: Math.max(1, Math.round(Number(document.getElementById('v2VoiceMaxBytesMb').value) || 20)) * 1024 * 1024,
+      maxPerMinute: Math.round(Number(document.getElementById('v2VoiceMaxMin').value) || 0),
+      maxPerHour: Math.round(Number(document.getElementById('v2VoiceMaxHour').value) || 0),
+      maxPer2Hours: Math.round(Number(document.getElementById('v2VoiceMax2h').value) || 0),
+      maxPerDay: Math.round(Number(document.getElementById('v2VoiceMaxDay').value) || 0),
+      defaultVolume: Number(document.getElementById('v2VoiceDefaultVolume').value) || 1,
+      loudness: document.getElementById('v2VoiceLoudness').value
+    },
+    initialPromptMaxChars: Math.round(Number(document.getElementById('v2InitialPromptMaxChars').value) || 2000),
+    profile: {
+      enabled: document.getElementById('v2ProfileEnabled').checked,
+      cacheTtlMs: Math.max(1, Math.round(Number(document.getElementById('v2ProfileCacheMin').value) || 10)) * 60000,
+      maxPer10Min: Math.max(1, Math.round(Number(document.getElementById('v2ProfileMaxPer10Min').value) || 10))
+    },
+    qzone: {
+      enabled: document.getElementById('v2QzoneEnabled').checked,
+      post: {
+        enabled: document.getElementById('v2QzonePostEnabled').checked,
+        verify: document.getElementById('v2QzoneVerify').checked,
+        maxContentChars: Math.max(1, Math.round(Number(document.getElementById('v2QzoneMaxChars').value) || 1000)),
+        maxImages: Math.max(0, Math.round(Number(document.getElementById('v2QzoneMaxImages').value) || 0)),
+        defaultUgcRight: Number(document.getElementById('v2QzoneDefaultRight').value) || 1,
+        maxPerHour: Math.max(0, Math.round(Number(document.getElementById('v2QzoneMaxHour').value) || 0)),
+        maxPerDay: Math.max(0, Math.round(Number(document.getElementById('v2QzoneMaxDay').value) || 0)),
+        minIntervalMs: Math.max(0, Math.round(Number(document.getElementById('v2QzoneMinIntervalMin').value) || 0)) * 60000
+      }
     },
     feedback: {
       maxLength: Math.round(Number(document.getElementById('v2FeedbackMaxLength').value) || 500),
       notifyOwnerOnError: document.getElementById('v2FeedbackNotifyOwner').checked
     }
   };
+  return body;
+}
+
+async function saveV2Config() {
+  const body = collectV2ConfigBody();
   const r = await api('/api/socialV2/config', 'POST', body);
   const msg = document.getElementById('v2ConfigMsg');
   msg.textContent = r.ok ? '✅ 已保存' : ('❌ ' + (r.error || '失败'));
   msg.className = r.ok ? 'meta ok' : 'meta err';
   if (r.ok) loadV2Config();
+}
+
+// ── 三代仿真独立页面：配置表单从二代页克隆，保存时镜像回 V2 表单 ──────────
+// 后端共用同一套 socialV2 引擎；这里做到“页面独立、入口独立”，不共享 DOM。
+function syncV2ToolsToV3() {
+  document.querySelectorAll('[data-v3-tool]').forEach((el) => {
+    const src = document.querySelector(`[data-v2-tool="${el.dataset.v3Tool}"]`);
+    if (src) el.checked = src.checked;
+  });
+}
+function syncV3ToolsToV2() {
+  document.querySelectorAll('[data-v3-tool]').forEach((el) => {
+    const dst = document.querySelector(`[data-v2-tool="${el.dataset.v3Tool}"]`);
+    if (dst) dst.checked = el.checked;
+  });
+}
+function syncV2ToV3() {
+  const host = document.getElementById('section-social-v3');
+  if (!host || !host.dataset.ready) return;
+  document.querySelectorAll('[id^="v2"]').forEach((src) => {
+    if (!['INPUT', 'SELECT', 'TEXTAREA'].includes(src.tagName)) return;
+    const dst = document.getElementById(`v3${src.id.slice(2)}`);
+    if (!dst) return;
+    if (src.type === 'checkbox' || src.type === 'radio') dst.checked = src.checked;
+    else dst.value = src.value;
+  });
+  syncV2ToolsToV3();
+}
+function syncV3ToV2() {
+  const host = document.getElementById('section-social-v3');
+  if (!host || !host.dataset.ready) return;
+  document.querySelectorAll('[id^="v3"]').forEach((src) => {
+    if (!['INPUT', 'SELECT', 'TEXTAREA'].includes(src.tagName)) return;
+    const dst = document.getElementById(`v2${src.id.slice(2)}`);
+    if (!dst) return;
+    if (src.type === 'checkbox' || src.type === 'radio') dst.checked = src.checked;
+    else dst.value = src.value;
+  });
+  syncV3ToolsToV2();
+}
+function snapshotV2Form() {
+  const values = [];
+  document.querySelectorAll('#section-social-v2 [id^="v2"]').forEach((el) => {
+    if (!['INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName)) return;
+    values.push([el.id, el.type === 'checkbox' || el.type === 'radio' ? el.checked : el.value]);
+  });
+  const tools = [...document.querySelectorAll('[data-v2-tool]')].map((el) => [el.dataset.v2Tool, el.checked]);
+  return { values, tools };
+}
+function restoreV2Form(snapshot) {
+  for (const [id, value] of snapshot.values) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    if (el.type === 'checkbox' || el.type === 'radio') el.checked = value;
+    else el.value = value;
+  }
+  for (const [flag, checked] of snapshot.tools) {
+    const el = document.querySelector(`[data-v2-tool="${flag}"]`);
+    if (el) el.checked = checked;
+  }
+}
+async function loadV3Config() {
+  if (!document.getElementById('section-social-v3')?.dataset.ready) return;
+  const snapshot = snapshotV2Form();
+  try {
+    const r = await api('/api/socialV3/config');
+    if (!r.ok) return;
+    fillV2Form(r.config || {});
+    syncV2ToV3();
+  } finally {
+    restoreV2Form(snapshot);
+  }
+}
+async function saveV3Config() {
+  const snapshot = snapshotV2Form();
+  syncV3ToV2();
+  const full = collectV2ConfigBody();
+  const body = {
+    enabled: full.enabled,
+    gen3Preset: full.gen3Preset,
+    tools: full.tools,
+    timing: full.timing,
+    decision: full.decision,
+    context: full.context,
+    document: full.document
+  };
+  restoreV2Form(snapshot);
+  const r = await api('/api/socialV3/config', 'POST', body);
+  const msg = document.getElementById('v3ConfigMsg');
+  if (msg) {
+    msg.textContent = r.ok ? '✅ 三代参数已保存' : ('❌ ' + (r.error || '失败'));
+    msg.className = r.ok ? 'meta ok' : 'meta err';
+  }
+  if (r.ok) loadV3Config();
+}
+async function refreshKeyPickers() {
+  const configs = [
+    { type: 'v2MemoryKeyType', target: 'v2MemoryKeyTarget', key: 'v2MemoryKey' },
+    { type: 'v3ActionKeyType', target: 'v3ActionKeyTarget', key: 'v3ActionKey' }
+  ];
+  let status = null;
+  let states = null;
+  try {
+    [status, states] = await Promise.all([api('/api/status'), api('/api/socialV2/states')]);
+  } catch { return; }
+  const groups = new Set((status?.allowGroups || []).map(String));
+  const privates = new Set((status?.allowPrivate || []).map(String));
+  if (status?.ownerQQ) privates.add(String(status.ownerQQ));
+  for (const conv of states?.conversations || []) {
+    const m = /^(group|private):(\d+)$/.exec(String(conv.key || ''));
+    if (!m) continue;
+    (m[1] === 'group' ? groups : privates).add(m[2]);
+  }
+  for (const cfg of configs) {
+    const typeEl = document.getElementById(cfg.type);
+    const targetEl = document.getElementById(cfg.target);
+    const keyEl = document.getElementById(cfg.key);
+    if (!typeEl || !targetEl || !keyEl) continue;
+    const fillTargets = () => {
+      const wanted = typeEl.value === 'private' ? privates : groups;
+      const previous = targetEl.value;
+      const first = targetEl.querySelector('option[value=""]');
+      targetEl.replaceChildren(first || new Option('选择群号/QQ', ''));
+      for (const id of [...wanted].sort()) {
+        targetEl.add(new Option((typeEl.value === 'private' ? 'QQ ' : '群 ') + id, id));
+      }
+      if (wanted.has(previous)) targetEl.value = previous;
+    };
+    const apply = () => {
+      if (typeEl.value && targetEl.value) keyEl.value = `${typeEl.value}:${targetEl.value}`;
+    };
+    typeEl.onchange = () => { fillTargets(); apply(); };
+    targetEl.onchange = apply;
+    fillTargets();
+  }
+}
+
+async function loadV3People() {
+  const key = document.getElementById('v3ActionKey').value.trim();
+  const out = document.getElementById('v3ActionOutput');
+  if (!key) { out.textContent = '先填会话 key'; return; }
+  const r = await api('/api/socialV2/people?key=' + encodeURIComponent(key));
+  if (!r.ok) { out.textContent = '加载失败：' + (r.error || ''); return; }
+  const people = Array.isArray(r.people) ? r.people : [];
+  out.textContent = people.length ? people.map((p) => {
+    const name = (p.aliases && p.aliases[0]) || p.userId || p.id || '未知';
+    return `${name}  ${p.userId || p.id || ''}  ${p.relation?.type || 'new'}  熟悉度 ${Math.round(Number(p.relation?.familiarity) || 0)}\n  事实：${(p.facts || []).map((f) => f.text).join('；') || '无'}\n  边界：${(p.boundaries || []).join('；') || '无'}`;
+  }).join('\n\n') : '（还没有人物卡）';
+}
+async function loadV3Decisions() {
+  const key = document.getElementById('v3ActionKey').value.trim();
+  const out = document.getElementById('v3ActionOutput');
+  const r = await api('/api/socialV2/decisions?limit=100' + (key ? '&key=' + encodeURIComponent(key) : ''));
+  if (!r.ok) { out.textContent = '加载失败：' + (r.error || ''); return; }
+  const entries = Array.isArray(r.entries) ? r.entries : [];
+  out.textContent = entries.length ? entries.map((e) => `${e.at}  ${e.kind}  ${e.key}${e.reason ? '  ' + e.reason : ''}${e.pressure ? `  压力 ${e.pressure.level}(${e.pressure.score})` : ''}`).join('\n') : '（还没有决策记录）';
+}
+async function loadV3Memory() {
+  const key = document.getElementById('v3ActionKey').value.trim();
+  const out = document.getElementById('v3ActionOutput');
+  if (!key) { out.textContent = '先填会话 key'; return; }
+  const r = await api('/api/socialV2/memory?key=' + encodeURIComponent(key));
+  if (!r.ok) { out.textContent = '加载失败：' + (r.error || ''); return; }
+  const raw = r.raw || {};
+  const lines = [];
+  for (const t of raw.activeTopics || []) lines.push(`话题：${t.text}${t.pendingQuestion ? `（待追问：${t.pendingQuestion}）` : ''}`);
+  for (const t of raw.pendingThoughts || []) lines.push(`想说：${t.text}`);
+  for (const [name, im] of Object.entries(raw.memberImpressions || {})) lines.push(`印象：${name} — ${(im.traits || []).join('、') || '无'}`);
+  out.textContent = lines.length ? lines.join('\n') : '（轻量记忆为空）';
+}
+async function activateV3Mode() {
+  const out = document.getElementById('v3ActionOutput');
+  const r = await api('/api/mode', 'POST', { mode: 'reserved3', closedAgentPreset: '' });
+  out.textContent = r.ok ? '✅ 已切到三代仿真（reserved3）' : ('❌ ' + (r.error || '切换失败'));
+  if (r.ok) refresh();
+}
+async function activateV2Mode() {
+  const out = document.getElementById('v3ActionOutput');
+  const r = await api('/api/mode', 'POST', { mode: 'reserved2', closedAgentPreset: '' });
+  out.textContent = r.ok ? '✅ 已切回二代仿真（reserved2）' : ('❌ ' + (r.error || '切换失败'));
+  if (r.ok) refresh();
+}
+function initV3Page() {
+  const src = document.getElementById('section-social-v2');
+  const host = document.getElementById('section-social-v3');
+  if (!src || !host || host.dataset.ready) return;
+  const clone = src.cloneNode(true);
+  const dropSummaries = ['语音库与语音发送（调试）', '工具调用日志', '轻量记忆', '唤醒状态', '初始提示词', '白名单会话快速选择', '会话状态查看', '唤醒推荐值', '唤醒硬限制', '发送限制', '全局限额', '等待工具参数', '主动机会参数', '表情包参数', '图片/表情媒体上限', '语音发送（开关', '反馈工具参数'];
+  clone.querySelectorAll('details.settings-group').forEach((group) => {
+    const summary = group.querySelector('summary')?.textContent || '';
+    if (dropSummaries.some((text) => summary.includes(text))) group.remove();
+  });
+  clone.querySelectorAll('[id]').forEach((el) => {
+    if (el.id.startsWith('v2')) el.id = `v3${el.id.slice(2)}`;
+  });
+  clone.querySelectorAll('[data-v2-tool]').forEach((el) => {
+    el.dataset.v3Tool = el.dataset.v2Tool;
+    delete el.dataset.v2Tool;
+  });
+  const title = clone.querySelector('h2');
+  if (title) title.textContent = '三代仿真模式（reserved3）控制台';
+  const walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  for (const node of nodes) {
+    if (node.parentElement?.closest('script,style')) continue;
+    node.nodeValue = node.nodeValue
+      .replaceAll('二代', '三代')
+      .replaceAll('reserved2', 'reserved3')
+      .replaceAll('qq-chat-v2', 'qq-chat-v3');
+  }
+  host.replaceChildren(...clone.childNodes);
+  host.dataset.ready = '1';
+  const note = document.createElement('div');
+  note.className = 'meta';
+  note.textContent = '这是三代独立配置页：保存后立即生效；与二代页面分开，不共用同一块界面。沉睡前观察、发送/唤醒限额等共享项在二代页设置，两代共用。';
+  const titleEl = host.querySelector('h2');
+  if (titleEl) titleEl.after(note); else host.prepend(note);
+  const hero = document.createElement('div');
+  hero.className = 'settings-content';
+  hero.innerHTML = '<div class="row" style="gap:8px;flex-wrap:wrap"><b>三代专属</b><span class="meta">人物卡 · 摘要/qq_context · 回复判断 · 时间/outbox · 文档阅读（默认关，需在下方开启） · 发图/表情/语音转写/OCR</span></div>';
+  note.after(hero);
+  const moveAfter = (label) => {
+    const group = [...host.querySelectorAll('details.settings-group')].find((d) => (d.querySelector('summary')?.textContent || '').includes(label));
+    if (group) hero.after(group);
+  };
+  moveAfter('文档阅读（管理员权限）');
+  moveAfter('回复判断与时间模型');
+  moveAfter('上下文参数（recent / unread / contextWindow）');
+  const v3Agent = host.querySelector('#v3AgentPreset');
+  if (v3Agent) {
+    const row = v3Agent.closest('.row');
+    if (row) row.hidden = true;
+  }
+  const quick = document.createElement('div');
+  quick.className = 'settings-content';
+  quick.innerHTML = `
+    <h3 class="layer-heading">三代速查</h3>
+    <div class="row">
+      <select id="v3ActionKeyType" style="width:90px"><option value="group">群聊</option><option value="private">私聊</option></select>
+      <select id="v3ActionKeyTarget" style="max-width:200px"><option value="">选择群号/QQ</option></select>
+      <input type="text" id="v3ActionKey" placeholder="group:123456789" style="flex:1">
+      <button id="v3ActionPeople" class="small">人物卡</button>
+      <button id="v3ActionDecisions" class="small">决策日志</button>
+      <button id="v3ActionMemory" class="small">轻量记忆</button>
+      <button id="v3ActionMode" class="small">切到三代</button>
+      <button id="v3ActionBack" class="small">切回二代</button>
+    </div>
+    <div class="row">
+      <label style="flex:0 0 auto">三代 preset</label>
+      <input type="text" id="v3Gen3Preset" placeholder="qq-chat-v3" style="flex:0 1 220px">
+    </div>
+    <pre id="v3ActionOutput">（空）</pre>`;
+  titleEl?.after(quick);
+  host.querySelector('#v3ActionPeople')?.addEventListener('click', loadV3People);
+  host.querySelector('#v3ActionDecisions')?.addEventListener('click', loadV3Decisions);
+  host.querySelector('#v3ActionMemory')?.addEventListener('click', loadV3Memory);
+  host.querySelector('#v3ActionMode')?.addEventListener('click', activateV3Mode);
+  host.querySelector('#v3ActionBack')?.addEventListener('click', activateV2Mode);
+  host.querySelectorAll('#v3ConfigSave, #v3ConfigSaveTop').forEach((btn) => btn.addEventListener('click', saveV3Config));
+  void loadV3Config();
+  void refreshKeyPickers();
 }
 
 async function viewV2State() {
@@ -3651,6 +4775,73 @@ document.getElementById('v2MemoryOutput').addEventListener('click', async (ev) =
   msg.className = r.ok ? 'meta ok' : 'meta err';
   if (r.ok) loadV2Memory();
 });
+
+function renderV2People(r) {
+  const box = document.getElementById('v2PersonOutput');
+  if (!r || !r.ok) { box.textContent = '加载失败：' + (r?.error || '未知错误'); return; }
+  const people = Array.isArray(r.people) ? r.people : [];
+  if (!people.length) { box.textContent = '（该会话还没有人物卡）'; return; }
+  box.innerHTML = people.map((p) => {
+    const name = esc((p.aliases && p.aliases[0]) || p.userId || p.id || '未知');
+    const rel = p.relation || {};
+    const facts = (p.facts || []).map((f) => esc(f.text)).join('；') || '暂无事实';
+    const boundaries = (p.boundaries || []).map((b) => esc(b)).join('；') || '暂无边界';
+    return `<div style="padding:6px 0;border-bottom:1px solid var(--border)">
+      <b>${name}</b> <span class="meta">${esc(p.userId || p.id || '')} · ${esc(rel.type || 'new')} · 熟悉度 ${Math.round(Number(rel.familiarity) || 0)} · 互动 ${p.stats?.messages || 0} 次</span>
+      <div class="meta">事实：${facts}</div>
+      <div class="meta">边界：${boundaries}</div>
+    </div>`;
+  }).join('');
+}
+async function loadV2People() {
+  const key = document.getElementById('v2MemoryKey').value.trim();
+  if (!key) return;
+  const r = await api('/api/socialV2/people?key=' + encodeURIComponent(key));
+  renderV2People(r);
+}
+async function addV2PersonNote() {
+  const key = document.getElementById('v2MemoryKey').value.trim();
+  const userId = document.getElementById('v2PersonUser').value.trim();
+  const category = document.getElementById('v2PersonCategory').value;
+  const text = document.getElementById('v2PersonText').value.trim();
+  if (!key || !userId || !text) return;
+  const r = await api('/api/socialV2/person-note', 'POST', { key, userId, category, text });
+  if (r.ok) {
+    document.getElementById('v2PersonText').value = '';
+    await loadV2People();
+  }
+}
+async function forgetV2PersonNote() {
+  const key = document.getElementById('v2MemoryKey').value.trim();
+  const userId = document.getElementById('v2PersonUser').value.trim();
+  const category = document.getElementById('v2PersonCategory').value;
+  const text = document.getElementById('v2PersonText').value.trim();
+  if (!key || !userId || !text) return;
+  const r = await api('/api/socialV2/person-forget', 'POST', { key, userId, category, text });
+  if (r.ok) {
+    document.getElementById('v2PersonText').value = '';
+    await loadV2People();
+  }
+}
+document.getElementById('v2PersonLoad').addEventListener('click', loadV2People);
+document.getElementById('v2PersonAdd').addEventListener('click', addV2PersonNote);
+document.getElementById('v2PersonForget').addEventListener('click', forgetV2PersonNote);
+
+async function loadV2Decisions() {
+  const key = document.getElementById('v2DecisionKey').value.trim();
+  const msg = document.getElementById('v2DecisionMsg');
+  const out = document.getElementById('v2DecisionOutput');
+  const r = await api('/api/socialV2/decisions?limit=200' + (key ? '&key=' + encodeURIComponent(key) : ''));
+  if (!r.ok) { msg.textContent = '❌ ' + (r.error || '加载失败'); return; }
+  const entries = Array.isArray(r.entries) ? r.entries : [];
+  msg.textContent = `${entries.length} 条`;
+  out.textContent = entries.length ? entries.map((e) => {
+    const pressure = e.pressure ? ` 压力 ${e.pressure.level}(${e.pressure.score})` : '';
+    const delay = e.delayMs ? ` delay ${e.delayMs}ms` : '';
+    return `${e.at}  ${e.kind}  ${e.key}${e.reason ? '  ' + e.reason : ''}${pressure}${delay}`;
+  }).join('\n') : '（空）';
+}
+document.getElementById('v2DecisionLoad').addEventListener('click', loadV2Decisions);
 
 function formatWakeStatus(r) {
   if (!r || !r.ok) return '<span class="meta">加载失败</span>';
@@ -4366,6 +5557,24 @@ document.getElementById('slangConfigSave').addEventListener('click', async () =>
   if (r.ok) loadSlangConfig();
 });
 
+function renderGatewayEgress(audit) {
+  const box = document.getElementById('gatewayEgressWarn');
+  if (!box) return;
+  // enabled=false 才是「确认关闭」；null 表示读不到/解析失败，必须继续显示告警。
+  if (!audit || audit.enabled === false) { box.style.display = 'none'; return; }
+  box.style.display = '';
+  const title = document.getElementById('gatewayEgressTitle');
+  const files = document.getElementById('gatewayEgressFiles');
+  if (audit.enabled === true) {
+    title.textContent = '⚠️ SnowLuma 内置状态命令仍在开启';
+    const list = (audit.findings || []).map((f) => `${f.file}（trigger=${f.trigger}，cooldown=${f.cooldownSeconds}s）`);
+    files.textContent = list.join('；') || '检测到开启，但未列出具体文件';
+  } else {
+    title.textContent = '⚠️ 无法检查 SnowLuma 旁路发送';
+    files.textContent = audit.reason || '无法读取 SnowLuma 配置';
+  }
+}
+
 function loadSecurity() {
   api('/api/security').then(r => {
     document.getElementById('secInterceptNotify').checked = r.security?.interceptNotify !== false;
@@ -4396,6 +5605,21 @@ document.getElementById('stateDirReharden').addEventListener('click', async () =
   msg.textContent = r.hardened === true ? '✅ 权限已收紧' : '❌ 仍未收紧（改 ACL 需要管理员权限；请按上面两种做法之一操作后复检）';
   msg.className = r.hardened === true ? 'meta ok' : 'meta err';
   loadSecurity();
+});
+document.getElementById('gatewayEgressRecheck').addEventListener('click', async () => {
+  const msg = document.getElementById('gatewayEgressMsg');
+  msg.textContent = '检测中…';
+  msg.className = 'meta';
+  try {
+    const r = await api('/api/snowluma-egress');
+    renderGatewayEgress(r.audit);
+    if (r.audit?.enabled === false) { showConsoleToast('✅ SnowLuma #sl 已关闭'); return; }
+    msg.textContent = r.audit?.enabled === true ? '❌ 仍开启，请按上面步骤关闭' : `⚠️ 无法确认：${r.audit?.reason || '未知原因'}`;
+    msg.className = 'meta err';
+  } catch (error) {
+    msg.textContent = '检测失败：' + (error?.message ?? error);
+    msg.className = 'meta err';
+  }
 });
 
 async function changeConsoleToken(generate) {
@@ -4428,6 +5652,7 @@ const consolePages = {
   sessions: ['会话与审批', '让每一段对话，都有迹可循。', '查看 QQ 与 DSH 的会话映射，以及等待你回复的审批和提问。'],
   persona: ['人格与角色', '给你的伙伴，一点独特个性。', '选择已有角色，或用自己的语言写下新的性格与表达方式。'],
   'social-v2': ['二代仿真', '自主参与，恰到好处。', '管理 AI 的工具、唤醒与发言节奏。展开需要调整的分组，修改后保存参数。'],
+  'social-v3': ['三代仿真', '人物卡、判断、时间与互动。', '独立的三代参数页；配置入口与二代分开。'],
   'social-v1': ['一代仿真', '为自然对话，设定合适的节奏。', '调整参与概率、活跃周期和分条发送；所有配置项完整保留。'],
   slang: ['黑话词库', '读懂群聊里的，言外之意。', '从候选到确认，让 AI 逐渐熟悉大家的表达习惯。'],
   usage: ['令牌与花费', '每一次思考，都算得清楚。', '实时查看 AI 的 token 消耗与花费，可下钻到每个群、每个好友、每一轮对话。'],
@@ -4462,6 +5687,7 @@ function setConsolePage(page, { updateHash = true, focus = false, target = '' } 
   closeConsoleSearch();
   // 语音库按需加载：进入二代仿真页时才探测（避免每次开控制台都压网关）。
   if (page === 'social-v2' && typeof loadVoiceLibrary === 'function') loadVoiceLibrary();
+  if (page === 'social-v3') { initV3Page(); loadV3Config(); }
   if (focus) {
     document.getElementById('mainContent').focus({ preventScroll: true });
     document.getElementById(target || 'mainContent')?.scrollIntoView({ block: 'start', behavior: 'instant' });
@@ -4488,7 +5714,8 @@ function updateOverview(status, modeLabel) {
   document.getElementById('metricDshHint').textContent = status.dshReady ? '桥接状态已同步' : '请检查 DSH 是否运行';
   renderSnowlumaHealth(status.snowluma);
   document.getElementById('metricMode').textContent = modeLabel.replace('模式', '');
-  document.getElementById('metricRole').textContent = '角色 · ' + (status.role || '默认人格');
+  document.getElementById('metricRole').textContent = '角色 · ' + (status.role || '默认人格')
+    + (Number(status.roleAssignments) > 0 ? ` · ${status.roleAssignments} 个会话例外` : '');
   document.getElementById('accessSummary').textContent = '管理员 ' + (status.ownerQQ || '未设置') + ' · ' + (status.allowGroups || []).length + ' 个白名单群 · ' + (status.allowPrivate || []).length + ' 位白名单好友';
   document.getElementById('lastUpdated').textContent = '状态同步于 ' + new Date().toLocaleTimeString('zh-CN', { hour12: false });
   document.getElementById('connectionAlert').hidden = true;
@@ -4549,7 +5776,8 @@ const searchResults = document.getElementById('searchResults');
 const featureIndex = [];
 document.querySelectorAll('section[data-page]').forEach(section => {
   const page = section.dataset.page;
-  featureIndex.push({ page, label: section.querySelector('h2').textContent, target: section });
+  const heading = section.querySelector('h2');
+  if (heading) featureIndex.push({ page, label: heading.textContent, target: section });
   section.querySelectorAll('details.settings-group>summary,input,textarea,select').forEach(el => {
     let label = el.tagName === 'SUMMARY' ? el.textContent : (el.getAttribute('aria-label') || el.labels?.[0]?.textContent || el.placeholder);
     if (label) featureIndex.push({ page, label: label.trim(), target: el });
@@ -5047,7 +6275,7 @@ document.getElementById('usageClear').addEventListener('click', async () => {
 
 setConsolePage(location.hash.slice(1), { updateHash:false });
 
-refresh(); refreshRoles(); refreshWhitelist(); refreshSessions(); refreshPending(); refreshPresets(); loadSocialForm(); loadV2Config(); refreshV2Activity(); loadV2ToolLog(); loadV2SessionOptions(); refreshSocialStatus(); refreshSlang(); loadSlangConfig(); loadSecurity(); refreshSimPrompt(); refreshDshModel(); refreshUsage(); refreshUsageChart(); refreshUsageRecent();
+refresh(); refreshRoles(); refreshWhitelist(); refreshBotPerms(); refreshSessions(); refreshPending(); refreshPresets(); loadSocialForm(); initV3Page(); loadV2Config(); refreshKeyPickers(); refreshV2Activity(); loadV2ToolLog(); loadV2SessionOptions(); refreshSocialStatus(); refreshSlang(); loadSlangConfig(); loadSecurity(); refreshSimPrompt(); refreshDshModel(); refreshUsage(); refreshUsageChart(); refreshUsageRecent();
 setInterval(() => { refresh(); refreshSessions(); refreshPending(); refreshSocialStatus(); refreshSlang(); }, 3000);
 // 用量看板只在本页可见时轮询：既保证「实时」，又不让其它页白白多打两份接口。
 setInterval(() => { if (currentConsolePage !== 'usage') return; refreshUsage(); refreshUsageChart(); refreshUsageRecent(); }, 3000);

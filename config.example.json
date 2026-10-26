@@ -1,6 +1,7 @@
 {
   "dsh": {
     "baseUrl": "http://127.0.0.1:3080",
+    "autoDiscover": true,
     "provider": "deepseek-official",
     "model": "deepseek-flash",
     "reasoningEffort": "max",
@@ -22,6 +23,41 @@
     "homeDir": ""
   },
   "ownerQQ": null,
+  "adminOps": {
+    "_comment": "管理员动作（改群名片/资料/头像）。owner 私聊直连，其它会话必须由 owner 在私聊回「通过 #编号」才执行。",
+    "enabled": true,
+    "actions": [
+      "setGroupCard",
+      "setQqProfile",
+      "setQqAvatar"
+    ],
+    "confirmTimeoutMs": 600000,
+    "maxPerMinute": 3,
+    "maxPending": 5,
+    "vetoProbability": 0.05,
+    "mediaDir": "assets",
+    "assetView": {
+      "_comment": "qq_list_assets / qq_view_asset：只读预览头像目录，仅 owner 私聊可用。allow 非空时只允许列表里的文件名。",
+      "enabled": true,
+      "allow": []
+    }
+  },
+  "botPerms": {
+    "scope": {
+      "setGroupCard": "none",
+      "setQqNickname": "none",
+      "setQqSignature": "none",
+      "setQqAvatar": "none",
+      "recallOwnMessage": "none",
+      "setOnlineStatus": "none",
+      "crossSessionSend": "request",
+      "crossSessionControl": "request",
+      "crossSessionDelegate": "request",
+      "collectSticker": "persona",
+      "stickerNote": "persona"
+    },
+    "unlocked": []
+  },
   "sessionCwd": "",
   "agentPreset": "qq-chat",
   "workspaceTitle": "QQ 聊天",
@@ -41,8 +77,8 @@
   "consoleToken": "",
   "pricing": {
     "models": {
-      "my-relay-model": {
-        "label": "我的中转模型",
+      "example-relay-model": {
+        "label": "示例中转模型",
         "off": {
           "cacheHit": 0.5,
           "cacheMiss": 3,
@@ -74,7 +110,7 @@
     "mustReplyKeywords": [
       "deepseek",
       "小鲸鱼",
-      "大肥鱼",
+      "<你的机器人昵称>",
       "鲸鱼",
       "d指导",
       "在吗"
@@ -109,11 +145,25 @@
     "enabled": true,
     "autoReplyCheckMs": 30000,
     "agentPreset": "qq-chat-v2",
+    "gen3Preset": "qq-chat-v3",
     "provideRecommendations": true,
     "tools": {
       "getPrompt": true,
       "getUnread": true,
       "getRecent": true,
+      "getContext": true,
+      "person": true,
+      "sendImage": true,
+      "react": true,
+      "transcribeVoice": true,
+      "ocr": true,
+      "recall": true,
+      "searchHistory": true,
+      "readDocument": true,
+      "groupSign": false,
+      "like": false,
+      "shareCard": false,
+      "revise": true,
       "socialState": true,
       "sendGroup": true,
       "sendPrivate": true,
@@ -139,8 +189,12 @@
       "setStickerRemark": false,
       "stickerNote": true,
       "collectSticker": true,
+      "deleteSticker": true,
       "getSelfImage": true,
-      "sendVoice": false
+      "sendVoice": false,
+      "getUserProfile": true,
+      "qzoneRead": true,
+      "qzonePost": true
     },
     "wake": {
       "defaultMode": "diving",
@@ -166,7 +220,7 @@
         "D师傅",
         "d师傅",
         "深度求索",
-        "大肥鱼",
+        "<你的机器人昵称>",
         "鲸鱼",
         "DeepSeek V3",
         "DeepSeek R1",
@@ -180,6 +234,8 @@
       "batchWindowMs": 8000,
       "maxWakePerMinute": 1,
       "maxWakePerHour": 12,
+      "maxWakePer2Hours": 10,
+      "maxWakePerDay": 30,
       "noActionLimit": 3,
       "maxWakeConfigReminders": 2
     },
@@ -193,11 +249,32 @@
       "longGapMaxMs": 10000,
       "maxSendPerMinute": 8,
       "maxSendPerHour": 60,
+      "maxSendPer2Hours": 30,
+      "maxSendPerDay": 120,
       "maxMessageChars": 500,
       "maxGapMs": 10000,
       "gapBaseMs": 800,
       "gapPerCharMs": 20,
       "recommendedHint": "单条消息不要用空格断句，中文短句用逗号/顿号或直接连写；分条时每条都要读起来完整，不要把同一句话拆到两条里；普通闲聊建议一次 1~3 条，条间 1~3 秒；讲故事/回忆可以 5~10 秒间隔；不要连续刷屏。"
+    },
+    "quota": {
+      "global": {
+        "maxSendPer2Hours": 120,
+        "maxSendPerDay": 500,
+        "maxWakePer2Hours": 30,
+        "maxWakePerDay": 100
+      }
+    },
+    "decision": {
+      "socialMentionDelayMs": 30000,
+      "highPressure": 0.6,
+      "mediumPressure": 0.35
+    },
+    "timing": {
+      "enabled": true,
+      "minDelayMs": 600,
+      "maxDelayMs": 3000,
+      "typingIndicator": true
     },
     "wait": {
       "defaultMs": 30000,
@@ -217,6 +294,17 @@
         "maxPerMinute": 2,
         "maxPerHour": 10,
         "maxRemarkChars": 20
+      },
+      "delete": {
+        "enabled": true,
+        "maxPerMinute": 1,
+        "maxPerHour": 5,
+        "maxPerDay": 20
+      },
+      "send": {
+        "mode": "normal",
+        "maxPer10Min": null,
+        "minGapMs": null
       }
     },
     "voice": {
@@ -226,6 +314,8 @@
       "maxBytes": 20971520,
       "maxPerMinute": 2,
       "maxPerHour": 10,
+      "maxPer2Hours": 4,
+      "maxPerDay": 20,
       "allowAbsolutePath": false,
       "defaultVolume": 1,
       "loudness": "normal",
@@ -250,19 +340,85 @@
       "inlineWakeMessages": true,
       "wakeMessageLimit": 12,
       "wakeRecentLimit": 4,
-      "wakeMaxChars": 6000
+      "wakeMaxChars": 6000,
+      "digestEnabled": true,
+      "digestWindowMs": 21600000,
+      "digestMaxChars": 600,
+      "digestEveryMessages": 20,
+      "digestEveryMs": 600000,
+      "digestSummaryMaxChars": 500,
+      "digestRecapMaxChars": 800,
+      "maxWakePromptChars": 12000
     },
     "initialPromptMaxChars": 2000,
     "media": {
       "maxBytes": 8388608,
       "maxPixels": 64000000,
       "maxCount": 5,
+      "dir": "media",
       "normalize": true,
       "maxModelBytes": 1048576,
       "maxLongEdge": 1280,
       "gifFrames": 6,
       "gifTile": 240,
       "normalizeTimeoutMs": 25000
+    },
+    "document": {
+      "enabled": false,
+      "allowHistory": false,
+      "maxBytes": 10485760,
+      "maxPages": 50,
+      "maxChars": 20000,
+      "maxPer10Min": 5
+    },
+    "profile": {
+      "enabled": true,
+      "cacheTtlMs": 600000,
+      "maxPer10Min": 10,
+      "avatarSize": 640,
+      "maxAvatarBytes": 4194304
+    },
+    "qzone": {
+      "enabled": true,
+      "read": {
+        "maxPosts": 10,
+        "maxFeeds": 10
+      },
+      "post": {
+        "enabled": true,
+        "maxContentChars": 1000,
+        "maxImages": 9,
+        "defaultUgcRight": 1,
+        "maxPerHour": 2,
+        "maxPerDay": 6,
+        "minIntervalMs": 300000,
+        "duplicateWindowMs": 600000,
+        "verify": true
+      }
+    }
+  },
+  "socialV3": {
+    "_comment": "三代仿真（reserved3）的配置档。只覆盖 timing/decision/context/document/tools；send/wake/quota 仍读 socialV2 基线。首次运行会从 socialV2 克隆一份，控制台保存以这里为准。",
+    "enabled": true,
+    "gen3Preset": "qq-chat-v3",
+    "timing": {
+      "enabled": true,
+      "minDelayMs": 600,
+      "maxDelayMs": 3000,
+      "typingIndicator": true
+    },
+    "decision": {
+      "socialMentionDelayMs": 30000,
+      "highPressure": 0.6,
+      "mediumPressure": 0.35
+    },
+    "context": {
+      "digestEnabled": true,
+      "inlineWakeMessages": true,
+      "wakeRecentLimit": 4
+    },
+    "wake": {
+      "privateBatchWindowMs": 1500
     }
   },
   "webSearch": {

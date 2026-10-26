@@ -1,7 +1,7 @@
 /**
  * Per-conversation policy routing for the QQ bridge.
  *
- * Why this module exists (P2 of QSH_PLAN.md §3):
+ * Why this module exists (P2 of 设计文档 §3):
  *   The bridge historically kept ONE process-global `currentMode`. That makes
  *   "this group runs simulation, but the admin's private chat runs closed-agent"
  *   impossible, and it means every mode decision in a 10k-line file reads the
@@ -68,10 +68,10 @@ const ALL_MODES = Object.freeze([...SIMULATION_MODES, 'simulation', 'closed-agen
  * rejected so a typo or a stale config cannot attach an unexpected tool surface.
  *
  * **One generation per spelling, on purpose.** `simulation` is the canonical
- * rename of `reserved2` (QSH_PLAN.md §2.1), so it is the entry that carries the
- * QSH names the plan installs — `qsh-sim` / `qsh-sim-v2` (ADR 0003 §决定 point 4)
+ * rename of `reserved2` (设计文档 §2.1), so it is the entry that carries the
+ * The canonical names the plan installs — `qsh-sim` / `qsh-sim-v2` (ADR 0003 §决定 point 4)
  * — and `[0]` is the preset this layer emits by default, exactly as
- * QSH_PLAN.md §3.1 writes `"defaults": { "mode": "simulation", "preset":
+ * 设计文档 §3.1 writes `"defaults": { "mode": "simulation", "preset":
  * "qsh-sim" }`. The legacy spellings keep the presets that are actually
  * installed today (`qq-chat` / `qq-chat-v2`), so a config written before the P3
  * rename stays loadable *and* `reserved2 + qsh-sim` stays a detectable mismatch
@@ -109,7 +109,7 @@ function buildModePresets(overrides = {}) {
   return Object.freeze(out);
 }
 
-/** Legacy mode -> canonical QSH mode (ADR 0003 / QSH_PLAN.md §2.1). */
+/** Legacy mode -> canonical mode (ADR 0003 / 设计文档 §2.1). */
 export const LEGACY_TO_CANONICAL = Object.freeze({
   chat: 'simulation',
   reserved: 'simulation',
@@ -331,7 +331,7 @@ export function createInitialConversationState(ownerQQ, {
   // closed-agent may never be a *default*: it is a per-conversation privilege,
   // never a blanket applied to every channel. Every other accepted spelling is a
   // simulation mode, and they are collapsed onto the canonical one here so this
-  // layer never *emits* the legacy vocabulary (QSH_PLAN.md §3.1 writes
+  // layer never *emits* the legacy vocabulary (设计文档 §3.1 writes
   // `"defaults": { "mode": "simulation" }`). `defaultMode` is still validated:
   // an unrecognised spelling is a config error, not a silent fallback.
   const requested = (defaultMode === null || defaultMode === undefined || defaultMode === '')
@@ -343,7 +343,7 @@ export function createInitialConversationState(ownerQQ, {
 
   const conversations = {};
   // Owner-private starts as closed-agent when the owner is known and the caller
-  // has not opted out — the documented first-run default (QSH_PLAN.md §6.2 step 3,
+  // has not opted out — the documented first-run default (设计文档 §6.2 step 3,
   // "管理员模式开关，默认开启"). Pre-populating the owner's OWN conversation is
   // not the same as initialising the global mode to closed-agent: it grants
   // nothing to any other channel.

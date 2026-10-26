@@ -1,8 +1,12 @@
 // 安全版 QQ MCP server（stdio）。由 DSH 的 MCP 客户端 spawn。
 //
 // 安全设计：
-// - 只暴露聊天所需的**安全动作子集**（查状态/查群/查消息/发消息），
-//   不暴露任何管理类动作（禁言、踢人、改群设置、文件上传下载等）。
+// - 只暴露聊天所需的**安全动作子集**（查状态/查群/查消息/发消息）；禁言、踢人、文件上传
+//   下载等管理动作一律不暴露。
+// - **唯一例外**：`qq_admin`（改群名片 / 群名 / 群头像 / QQ 资料 / 头像）。它不靠"模型自律"，
+//   而靠桥接侧的两条硬约束：① 必须带本会话的 agent token；② 只有 owner 私聊（key ===
+//   private:<ownerQQ>）会直接执行，其它会话只会生成确认卡发到 owner 私聊，owner 回「通过」
+//   才动手。所以群友的 prompt injection 最多换来一张确认卡。
 // - 发送类工具强制校验白名单：目标群/私聊必须命中 config.json 的
 //   allow.groups / allow.private，否则拒绝 —— agent 只能往被允许的地方发消息。
 // - 所有调用走 OneBot HTTP API（httpUrl + accessToken）。
@@ -309,6 +313,21 @@ const server = new McpServer({ name: 'snowluma-safe', version: '0.2.1-r1' });
 // 所以这三个仍然只在调用时由桥接校验。
 const TOOL_CONFIG_FLAGS = {
   qq_get_prompt: 'getPrompt',
+  qq_context: 'getContext',
+  qq_person_get: 'person',
+  qq_person_note: 'person',
+  qq_person_forget: 'person',
+  qq_send_image: 'sendImage',
+  qq_react: 'react',
+  qq_transcribe_voice: 'transcribeVoice',
+  qq_ocr_image: 'ocr',
+  qq_recall: 'recall',
+  qq_search_history: 'searchHistory',
+  qq_read_document: 'readDocument',
+  qq_group_sign: 'groupSign',
+  qq_like: 'like',
+  qq_share_card: 'shareCard',
+  qq_revise_message: 'revise',
   qq_get_unread_messages: 'getUnread',
   qq_get_recent_messages: 'getRecent',
   qq_social_state: 'socialState',
@@ -342,9 +361,14 @@ const TOOL_CONFIG_FLAGS = {
   qq_get_sticker_image: 'getStickerImage',
   qq_send_sticker: 'sendSticker',
   qq_collect_sticker: 'collectSticker',
+  qq_delete_sticker: 'deleteSticker',
   qq_get_self_image: 'getSelfImage',
   qq_sticker_note: 'stickerNote',
   qq_set_sticker_remark: 'setStickerRemark',
+  // QQ 资料 / 空间（默认开启；权限与配额在桥接侧判定）
+  qq_get_user_profile: 'getUserProfile',
+  qq_qzone_read: 'qzoneRead',
+  qq_qzone_post: 'qzonePost',
 };
 const disabledTools = [];
 {
@@ -581,6 +605,312 @@ server.tool(
 );
 
 server.tool(
+  'qq_context',
+  '一次取齐当前会话的上下文：最近摘要、消息快照、记忆、唤醒配置、限额使用。优先用它替代 get_prompt + get_unread + social_state 多次调用；返回里的 snapshot 已含消息，不必重复查。',
+  { key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'), token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）') },
+  async ({ key, token }) => {
+    try {
+      const data = await agentApi(`/api/socialV2/context?key=${encodeURIComponent(key)}`, { headers: { 'x-agent-token': token } });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `获取上下文失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_person_get',
+  '查看人物卡：群友的称呼、熟悉度、事实、边界、最近互动。userId 可传 QQ 号；不传则返回该会话所有人物卡。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    userId: z.string().optional().describe('要查的群友 QQ 号；不传返回全部')
+  },
+  async ({ key, token, userId }) => {
+    try {
+      const query = `key=${encodeURIComponent(key)}${userId ? `&userId=${encodeURIComponent(userId)}` : ''}`;
+      const data = await agentApi(`/api/socialV2/people?${query}`, { headers: { 'x-agent-token': token } });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `读取人物卡失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_person_note',
+  '给某个人物卡记一条有证据的印象：fact=事实/偏好，boundary=雷区/别做的事，episode=一次具体互动，alias=称呼。只在真的值得记时写，不要逐条记流水账。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    userId: z.string().describe('群友 QQ 号（或已有称呼）'),
+    category: z.enum(['fact', 'boundary', 'episode', 'alias']).describe('记录类型'),
+    text: z.string().describe('要记的内容，尽量短，最多 200 字')
+  },
+  async ({ key, token, userId, category, text }) => {
+    try {
+      const data = await agentApi('/api/socialV2/person-note', {
+        method: 'POST',
+        headers: { 'x-agent-token': token },
+        body: JSON.stringify({ key, userId, category, text })
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `记录人物卡失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_person_forget',
+  '删除人物卡里的一条事实/边界/互动/称呼，用于纠正错误记忆。只能删除当前会话里存在的记录。',
+  {
+    key: z.string().describe('会话 key'),
+    token: z.string().describe('会话令牌'),
+    userId: z.string().describe('群友 QQ 号（或已有称呼）'),
+    category: z.enum(['fact', 'boundary', 'episode', 'alias']).describe('记录类型'),
+    text: z.string().describe('要删除的原文')
+  },
+  async ({ key, token, userId, category, text }) => {
+    try {
+      const data = await agentApi('/api/socialV2/person-forget', {
+        method: 'POST', headers: { 'x-agent-token': token },
+        body: JSON.stringify({ key, token, userId, category, text })
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `删除人物记忆失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_send_image',
+  '从媒体库发一张图片（只接受 media/ 目录下的文件名，不接受路径/URL/base64）。可选 caption 作为图片前的文字说明。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    file: z.string().describe('media/ 下的图片文件名，例如 cat.png'),
+    caption: z.string().optional().describe('可选文字说明，最多 500 字')
+  },
+  async ({ key, token, file, caption }) => {
+    try {
+      const data = await agentApi('/api/socialV2/send-image', {
+        method: 'POST',
+        headers: { 'x-agent-token': token },
+        body: JSON.stringify({ key, token, file, caption })
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `发送图片失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_react',
+  '给当前会话里的一条最近消息加 QQ 表情回应（不说话也能表示看到/接梗）。emoji 支持 like/laugh/wow/cry/clap/eyes/ok/party，或数字 emoji id。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    messageId: z.union([z.number(), z.string()]).describe('要回应的消息 id（来自消息对象或 qq_get_message_detail）'),
+    emoji: z.string().describe('like/laugh/wow/cry/clap/eyes/ok/party 或数字 emoji id')
+  },
+  async ({ key, token, messageId, emoji }) => {
+    try {
+      const data = await agentApi('/api/socialV2/react', {
+        method: 'POST',
+        headers: { 'x-agent-token': token },
+        body: JSON.stringify({ key, token, messageId: String(messageId), emoji })
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `表情回应失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_transcribe_voice',
+  '把一条语音消息转成文字（走网关的语音转写，不下载音频）。用于“他刚才语音说了什么”。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    messageId: z.union([z.number(), z.string()]).describe('语音消息 id')
+  },
+  async ({ key, token, messageId }) => {
+    try {
+      const data = await agentApi('/api/socialV2/transcribe', {
+        method: 'POST', headers: { 'x-agent-token': token },
+        body: JSON.stringify({ key, token, messageId: String(messageId) })
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `语音转写失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_ocr_image',
+  '对一条图片/表情消息做 OCR，返回图片里的文字。图片必须还在当前会话缓存里。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    messageId: z.union([z.number(), z.string()]).describe('图片消息 id')
+  },
+  async ({ key, token, messageId }) => {
+    try {
+      const data = await agentApi('/api/socialV2/ocr', {
+        method: 'POST', headers: { 'x-agent-token': token },
+        body: JSON.stringify({ key, token, messageId: String(messageId) })
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `OCR 失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_recall',
+  '撤回机器人自己最近发的一条消息（只能撤自己的；用于发错了/改口）。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    messageId: z.union([z.number(), z.string()]).describe('要撤回的消息 id（机器人自己发的）')
+  },
+  async ({ key, token, messageId }) => {
+    try {
+      const data = await agentApi('/api/socialV2/recall', {
+        method: 'POST', headers: { 'x-agent-token': token },
+        body: JSON.stringify({ key, token, messageId: String(messageId) })
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `撤回失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_search_history',
+  '在当前会话的最近缓存消息里按关键词搜索，用于接旧话题/兑现承诺。返回时间、说话人和原文片段。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    query: z.string().describe('搜索关键词'),
+    limit: z.number().optional().describe('最多返回几条，默认 8，最大 20')
+  },
+  async ({ key, token, query, limit }) => {
+    try {
+      const qs = new URLSearchParams({ key, token, q: query, limit: String(limit ?? 8) });
+      const data = await agentApi(`/api/socialV2/search-history?${qs.toString()}`, { headers: { 'x-agent-token': token } });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `搜索失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_read_document',
+  '读取聊天里的一条文件消息并提取文字。支持 txt/md、PDF 文字层、DOCX、XLSX；扫描版 PDF 需 OCR，不在支持范围。默认只能读最近缓存，读历史文件需要管理员开启「允许读取历史文件」。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    messageId: z.union([z.number(), z.string()]).describe('文件消息 id')
+  },
+  async ({ key, token, messageId }) => {
+    try {
+      const data = await agentApi('/api/socialV2/document', {
+        method: 'POST', headers: { 'x-agent-token': token },
+        body: JSON.stringify({ key, token, messageId: String(messageId) })
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `读取文档失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_group_sign',
+  '在当前群签到。默认关闭，需要管理员在控制台开启；每天只能签一次。',
+  {
+    key: z.string().describe('群会话 key，格式 group:群号'),
+    token: z.string().describe('会话令牌')
+  },
+  async ({ key, token }) => {
+    try {
+      const data = await agentApi('/api/socialV2/group-sign', { method: 'POST', headers: { 'x-agent-token': token }, body: JSON.stringify({ key, token }) });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `群签到失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_like',
+  '给当前会话里的人点赞。默认关闭；群聊必须传 userId，且只能点本会话出现过的人；每人每天一次。',
+  {
+    key: z.string().describe('会话 key'),
+    token: z.string().describe('会话令牌'),
+    userId: z.string().optional().describe('群聊要点赞的群友 QQ 号；私聊可省略'),
+    times: z.number().optional().describe('点赞次数 1~10，默认 5')
+  },
+  async ({ key, token, userId, times }) => {
+    try {
+      const data = await agentApi('/api/socialV2/like', { method: 'POST', headers: { 'x-agent-token': token }, body: JSON.stringify({ key, token, userId, times }) });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `点赞失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_share_card',
+  '发一张图文分享卡片（标题/描述/跳转链接）。默认关闭；jumpUrl 和 previewUrl 必须是 http(s)。',
+  {
+    key: z.string().describe('会话 key'),
+    token: z.string().describe('会话令牌'),
+    title: z.string().describe('卡片标题，最多 80 字'),
+    desc: z.string().describe('卡片描述，最多 200 字'),
+    jumpUrl: z.string().describe('点击跳转的 http(s) 链接'),
+    previewUrl: z.string().optional().describe('可选预览图 http(s) 链接')
+  },
+  async ({ key, token, title, desc, jumpUrl, previewUrl }) => {
+    try {
+      const data = await agentApi('/api/socialV2/share-card', { method: 'POST', headers: { 'x-agent-token': token }, body: JSON.stringify({ key, token, title, desc, jumpUrl, previewUrl }) });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `分享卡片失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_revise_message',
+  '撤回机器人自己刚发的一条消息，并重发改好的文本。用于打错字/说错话/改口；只能改自己最近发的消息。',
+  {
+    key: z.string().describe('会话 key'),
+    token: z.string().describe('会话令牌'),
+    messageId: z.union([z.number(), z.string()]).describe('要撤回的自己消息 id'),
+    text: z.string().describe('改好后的文本')
+  },
+  async ({ key, token, messageId, text }) => {
+    try {
+      const data = await agentApi('/api/socialV2/revise', { method: 'POST', headers: { 'x-agent-token': token }, body: JSON.stringify({ key, token, messageId: String(messageId), text }) });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `改口失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
   'qq_get_unread_messages',
   '查看未读消息，不自动标记已读。大量积压或快照 partial=true 时，用 afterSeq=readThroughSeq 从水位后按时间顺序补读；从最早未读开始传 0。',
   {
@@ -634,7 +964,7 @@ server.tool(
 
 server.tool(
   'qq_mark_read',
-  '将指定会话已查看的未读消息标记为已读。throughSeq 使用最近读取结果的 readThroughSeq，避免清除读取后才到达的新消息；省略 throughSeq 会按旧行为清空当前全部未读，因此推荐始终带上水位。注意：每次设置潜水/下一次唤醒前，桥接要求先用 qq_wait_for_messages(timeoutMs=300000) 完成一次沉睡前观察：5 分钟内没人说话可 mark_read 收尾沉睡；期间有人发新消息则先查看 newMessages，判断不需要你参与也可直接 mark_read 收尾；若你参与了回复，则下次想睡需重新等待观察窗口。',
+  '将指定会话已查看的未读消息标记为已读。throughSeq 使用最近读取结果的 readThroughSeq，避免清除读取后才到达的新消息；省略 throughSeq 会按旧行为清空当前全部未读，因此推荐始终带上水位。注意：收尾前先看唤醒提示里的【沉睡前观察】/【收尾】段落——要求观察时，先用 qq_wait_for_messages 等够它给出的 timeoutMs（短等待不算），没人说话再 mark_read 收尾；提示说没有开启观察，就直接收尾，不用等。',
   {
     key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
     token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
@@ -652,7 +982,7 @@ server.tool(
 
 server.tool(
   'qq_set_wake_config',
-  '设置指定会话的二代唤醒配置：mode/无限期或有限时间/提前唤醒条件（@、名字、关键词、提问、拍一拍、概率、anyMessage、指定成员）。triggers.speakerIds 是可选的“指定群友发言唤醒”：填一个或多个群友 QQ 号后，只要其中任意一位在群里发言就会唤醒你；不设置则不启用。适合在等某个人回复、或某人反应慢怕错过时使用。triggers.poke 开启后，群里有人拍一拍（包括拍你或拍别人）会唤醒你。注意：每次设置潜水/下一次唤醒前需先用 qq_wait_for_messages(timeoutMs=300000) 完成一次沉睡前观察：5 分钟内没人说话可设置并沉睡；期间有人发新消息则先查看 newMessages，判断不需要你参与可直接设置并沉睡；若你参与了回复，则下次想睡需重新等待观察窗口。',
+  '设置指定会话的二代唤醒配置：mode/无限期或有限时间/提前唤醒条件（@、名字、关键词、提问、拍一拍、概率、anyMessage、指定成员）。triggers.speakerIds 是可选的“指定群友发言唤醒”：填一个或多个群友 QQ 号后，只要其中任意一位在群里发言就会唤醒你；不设置则不启用。适合在等某个人回复、或某人反应慢怕错过时使用。triggers.poke 开启后，群里有人拍一拍（包括拍你或拍别人）会唤醒你。注意：收尾前先看唤醒提示里的【沉睡前观察】/【收尾】段落——要求观察时先用 qq_wait_for_messages 等够它给出的 timeoutMs（短等待不算）；提示说没有开启观察，就直接设置并沉睡，不用等。',
   {
     key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
     token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
@@ -729,7 +1059,7 @@ server.tool(
 
 server.tool(
   'qq_send_message',
-  '统一发送工具：可发一条或多条，可引用某条消息，可自定义/按字数计算条间时间差。二代仿真模式专用。注意：字符串=一条消息，数组=多条消息；每个字符串内部不要用空格分隔中文短句，需要多条请用数组元素；每条消息要读起来完整，不要把同一句话拆到两条里。只有以下情况才需要传 replyToMessageId 引用：① 你这条消息指向的人或消息并非最新一条别人的消息（也就是你在回更早的某条）；② 你连续几句话里不同消息指代的是不同的消息或不同的人。其他情况（上下文唯一、刚在接同一条最新消息）不要引用，别让对方猜，也别为了用工具而用。',
+  '统一发送工具：可发一条或多条，可引用某条消息，可自定义/按字数计算条间时间差。二代仿真模式专用。注意：字符串=一条消息，数组=多条消息；每个字符串内部不要用空格分隔中文短句，需要多条请用数组元素；每条消息要读起来完整，不要把同一句话拆到两条里。只有以下情况才需要传 replyToMessageId 引用：① 你这条消息指向的人或消息并非最新一条别人的消息（也就是你在回更早的某条）；② 你连续几句话里不同消息指代的是不同的消息或不同的人。其他情况（上下文唯一、刚在接同一条最新消息）不要引用，别让对方猜，也别为了用工具而用。管理员让你去别的群/会话说一句时，把 key 指向那个会话即可（需要控制台「跨会话代发消息」权限；被拒时如实转告，不要反复重试）。',
   {
     key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
     token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
@@ -800,12 +1130,12 @@ if (cfg.socialV2?.tools?.sendPoke !== false) {
 
 server.tool(
   'qq_wait_for_messages',
-  '等待分两种用途。首答前已读消息、只想确认有没有补充：用 purpose="reply"，按最后来信时间补足 quietMs 静默，已安静足够就立即返回；读取/思考时新到的消息也会返回，新消息重算静默。timeoutMs 是最长预算，不要求等满；预算到但 quiet=false 不代表对方已说完。此用途绝不代替沉睡前观察。等对方继续说、等回复或睡前观察：用默认 purpose="messages"；先等新消息，收到后才按 quietMs 等静默，没有新消息会等到 timeoutMs，单传 quietMs 不会缩短总等待。静默下限由后台配置，默认 10000ms。**返回里的 canSleepNow / countsAsObservation / hint 直接告诉你现在能不能收尾、该用多大的 timeoutMs——照它做，不要反复试**：canSleepNow=true 就可以直接 mark_read / set_wake_config；false 时按 hint 给的 timeoutMs 一次等满（更短的等待不算沉睡前观察，满足不了闸门）。直接看 newMessages、unreadCount 和 readThroughSeq，返回消息无需重复查询；仍有未展示未读才补读。决定潜水/收尾时才用默认用途加 timeoutMs=300000 完成沉睡前观察，不能把 5 分钟观察放在首答之前；短等待不能代替。全程无人说话返回 preSleepWaitSatisfied=true；观察期间来了新消息返回 preSleepWaitObserved=true，读后不需参与可收尾，参与回复则下次收尾重新观察。',
+  '等待分两种用途。首答前已读消息、只想确认有没有补充：用 purpose="reply"，按最后来信时间补足 quietMs 静默，已安静足够就立即返回；读取/思考时新到的消息也会返回，新消息重算静默。timeoutMs 是最长预算，不要求等满；预算到但 quiet=false 不代表对方已说完。此用途绝不代替沉睡前观察。等对方继续说、等回复或睡前观察：用默认 purpose="messages"；先等新消息，收到后才按 quietMs 等静默，没有新消息会等到 timeoutMs，单传 quietMs 不会缩短总等待。静默下限由后台配置，默认 10000ms。**返回里的 canSleepNow / countsAsObservation / hint 直接告诉你现在能不能收尾、该用多大的 timeoutMs——照它做，不要反复试**：canSleepNow=true 就可以直接 mark_read / set_wake_config；false 时按 hint 给的 timeoutMs 一次等满（更短的等待不算沉睡前观察，满足不了闸门）。直接看 newMessages、unreadCount 和 readThroughSeq，返回消息无需重复查询；仍有未展示未读才补读。收尾时以唤醒提示里的【沉睡前观察】/【收尾】段落为准：要求观察，再用默认用途、按它给出的 timeoutMs 等够，不能放在首答之前；没要求就直接收尾。全程无人说话返回 preSleepWaitSatisfied=true；观察期间来了新消息返回 preSleepWaitObserved=true，读后不需参与可收尾，参与回复则下次收尾重新观察。',
   {
     key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
     token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
     purpose: z.enum(['messages', 'reply']).optional().describe('默认 messages：等新消息/回复/睡前观察；reply：回复前短静默，计入最后来信后已过去的时间，绝不授予睡前观察资格'),
-    timeoutMs: z.number().optional().describe('等待预算毫秒数，默认 30000、最大 600000；reply 达到静默即返回，不必等满；沉睡前观察用 messages 并传 300000'),
+    timeoutMs: z.number().optional().describe('等待预算毫秒数，默认 30000、最大 600000；reply 达到静默即返回，不必等满；沉睡前观察用 messages，timeoutMs 取唤醒提示里给的值'),
     minNewMessages: z.number().optional().describe('仅 messages 用途：至少等到多少条新消息才进入静默窗口，默认 1；reply 用途会忽略它'),
     quietMs: z.number().optional().describe('静默窗口毫秒数，建议 10000~12000；reply 从最后来信开始计时，messages 只在等到新消息后计时；后台默认至少 10000')
   },
@@ -1087,12 +1417,12 @@ if (cfg.socialV2?.tools?.getImages !== false) {
 if (cfg.socialV2?.sticker?.enabled !== false && cfg.socialV2?.tools?.listStickers !== false) {
   server.tool(
     'qq_list_stickers',
-    '查看 QQ 账号上已收藏的表情包（自定义表情）列表：包含 emoji_id、备注 desc、本地笔记 localNote、标签 tags、使用次数等。可通过 query 按备注/笔记/标签搜索；无备注的表情可以先调用 qq_get_sticker_image 看图理解，再用 qq_sticker_note 记下含义。刚新增/删除表情后如需立即同步，请传 refresh=true。',
+    '查看 QQ 账号上已收藏的表情包（自定义表情）列表：包含 emoji_id、备注 desc、本地笔记 localNote、标签 tags、使用次数等。可通过 query 按备注/笔记/标签搜索；无备注的表情可以先调用 qq_get_sticker_image 看图理解，再用 qq_sticker_note 记下含义；确实该清理的（糊图/重复/用不上）可以用 qq_delete_sticker 删掉。刚新增/删除表情后如需立即同步，请传 refresh=true。',
     {
       key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
       token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
       query: z.string().optional().describe('可选搜索词，按备注/本地笔记/标签/用法过滤'),
-      count: z.number().optional().describe('最多返回条数，默认 48，受 socialV2.sticker.maxListCount 配置上限约束（当前通常 100）'),
+      count: z.number().optional().describe('最多返回条数，默认 100（够覆盖整个收藏），受 socialV2.sticker.maxListCount 配置上限约束（当前通常 100）'),
       refresh: z.boolean().optional().describe('是否强制从 QQ 重新同步收藏表情，默认 false（走缓存）')
     },
     async ({ key, token, query, count, refresh }) => {
@@ -1144,7 +1474,7 @@ if (cfg.socialV2?.sticker?.enabled !== false && cfg.socialV2?.tools?.getStickerI
 if (cfg.socialV2?.sticker?.enabled !== false && cfg.socialV2?.tools?.sendSticker !== false) {
   server.tool(
     'qq_send_sticker',
-    '在指定会话发送一个 QQ 收藏表情包（自定义表情）。stickerId 用 qq_list_stickers 返回的 id / md5 / url。注意：一条消息只能是一张表情，不能在同一气泡里附带文字；想说的话请先用 qq_send_message / qq_reply 作为单独气泡发送，再单独发这张表情。需要引用/点名时可用 replyToMessageId / atUserId（群聊）。真人偶尔用表情包很自然，但别刷屏。',
+    '在指定会话发送一个 QQ 收藏表情包（自定义表情）。stickerId 用 qq_list_stickers 返回的 id / md5 / url。注意：一条消息只能是一张表情，不能在同一气泡里附带文字；想说的话请先用 qq_send_message / qq_reply 作为单独气泡发送，再单独发这张表情。需要引用/点名时可用 replyToMessageId / atUserId（群聊）。真人偶尔用表情包很自然，但别刷屏。发送频率受控制台「表情包参数 → 发送频率档位」限制（不发表情/少量/适中/较多/完全根据人设来）：被拒（429/403）就自然收手，不要连发重试，也不要跟群友解释系统限制。',
     {
       key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
       token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
@@ -1189,6 +1519,45 @@ if (cfg.socialV2?.sticker?.enabled !== false && cfg.socialV2?.tools?.collectStic
         return { content: [{ type: 'text', text: serializeModelData(data) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `收藏表情失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+}
+
+if (cfg.socialV2?.sticker?.enabled !== false && cfg.socialV2?.tools?.deleteSticker !== false) {
+  server.tool(
+    'qq_delete_sticker',
+    '从你的 QQ 收藏表情里删除**一个**表情（不可恢复：除非有人再发一次同一张图，否则就没了）。'
+    + '只在确实该删时用：糊得看不清、重复、完全用不上、或者让人不适/不合适的。'
+    + '**不要一次删一堆、不要因为一时情绪清空收藏**；删之前先用 qq_list_stickers 确认 id/备注，'
+    + '一次只传一个 stickerId（id / md5 / url 都行）。'
+    + '权限：默认「仅应要求」——只有管理员本人要求（或刚说过话）才删得动；群友让删会被拒绝，'
+    + '管理员没开这个能力时直接 403。有每分钟/每小时/每天上限。'
+    + '返回 verified=true 表示删除后重新拉列表确实看不到它了；verified=false 时如实说“可能还没同步”，'
+    + '不要编造已删除。',
+    {
+      key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+      token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+      stickerId: z.string().describe('要删除的表情标识：emoji_id / md5 / url（来自 qq_list_stickers）')
+    },
+    async ({ key, token, stickerId }) => {
+      try {
+        const data = await agentApi('/api/socialV2/delete-sticker', {
+          method: 'POST',
+          body: JSON.stringify({ key, stickerId: String(stickerId) }),
+          headers: { 'x-agent-token': token },
+          timeoutMs: 60000
+        });
+        const d = data?.deleted ?? {};
+        const label = d.desc || d.localNote || d.id || stickerId;
+        const lines = [`已删除收藏表情：${label}${d.id ? `（id=${d.id}）` : ''}`];
+        lines.push(data?.verified === true
+          ? '回读确认：重新拉取收藏列表后已经看不到它了（verified=true）。'
+          : '回读确认：暂时没能确认（可能还在同步）。不要宣称已经确认删除。');
+        if (Number.isFinite(Number(data?.remaining))) lines.push(`剩余收藏：${data.remaining} 个`);
+        return { content: [{ type: 'text', text: lines.join('\n') }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `删除表情失败：${error?.message ?? error}` }], isError: true };
       }
     }
   );
@@ -1252,7 +1621,7 @@ if (cfg.socialV2?.voice?.enabled !== false && cfg.socialV2?.tools?.sendVoice !==
 if (cfg.socialV2?.tools?.getSelfImage !== false) {
   server.tool(
     'qq_get_self_image',
-    '查看你自己的默认 Q 版形象图片（DeepSeek 小鲸鱼形象）。当你被问“你长什么样/发张自拍/你是什么形象”时，可以调用这个工具看自己的样子；返回的图片会直接进入你的视觉上下文。',
+    '查看你现在的 QQ 头像（取不到时回退到默认 Q 版形象）。被问“你长什么样/发张自拍/你是什么形象”时调用；返回的图片会直接进入你的视觉上下文——按图片里真实的样子描述，不要背设定里的外观。',
     {
       key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
       token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）')
@@ -1266,12 +1635,152 @@ if (cfg.socialV2?.tools?.getSelfImage !== false) {
         }
         return {
           content: [
-            { type: 'text', text: '这是你的默认 Q 版形象：' },
+            { type: 'text', text: data.source === 'default' ? '没读到当前 QQ 头像，这是默认 Q 版形象（描述时说明“这可能不是最新头像”）：' : '这是你现在的 QQ 头像，按图里的样子回答：' },
             { type: 'image', mimeType: data.image.mimeType, data: data.image.data }
           ]
         };
       } catch (error) {
         return { content: [{ type: 'text', text: `获取形象图片失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+}
+
+// ── 别人的 QQ 资料 / 头像 / QQ 空间（默认开启）──────────────────────────────
+//
+// 边界（与 RULES.md、bridge 的 profileTargetAllowed 一致）：
+//   · 只能查「本会话/本群确实出现过的人」、私聊对端、机器人自己或 owner；
+//     要查其他人必须由管理员本人在私聊里明确要求（管理员发话时可指定任意 QQ 号）。
+//   · 每个会话 10 分钟内最多查 profile.maxPer10Min 次（资料与空间读共用预算）。
+//   · 头像只从 qlogo 固定地址取（数字 QQ 号拼出来的），不接受任何外部图片 URL。
+//   · 发说说走管理员动作队列：owner 本人要求直连，其他人要求会生成确认卡；另有
+//     每小时/每天上限与「同样内容不重复发」。
+if (cfg.socialV2?.tools?.getUserProfile !== false) {
+  server.tool(
+    'qq_get_user_profile',
+    '查看某个 QQ 号的公开资料，并把头像以图像形式返回给模型（视觉模型能“看懂”）。'
+    + '合适时机：想接住对方头像/签名/等级相关的梗、判断对方是不是熟人、被问到“你看看这人”。'
+    + '**不要查与当前对话无关的人，也不要一次查一大串 QQ 号**（有每会话配额）。'
+    + '只能查本会话/本群出现过的人、私聊对端、你自己或 owner；其他人会被拒绝（让管理员私聊里指定）。'
+    + '返回里 profile 是白名单字段（昵称/备注/性别/年龄/签名/等级/Q 龄/在线），avatar 是头像图片；'
+    + 'avatarError 表示头像没取到（资料仍然有效），如实说明即可，不要编造长相。',
+    {
+      key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+      token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+      userId: z.union([z.number(), z.string()]).describe('目标 QQ 号（从消息/成员列表的 userId 拿，不要凭记忆编）'),
+      avatar: z.boolean().optional().describe('是否连头像一起返回（默认 true；只想看资料文字时传 false 省上下文）')
+    },
+    async ({ key, token, userId, avatar }) => {
+      try {
+        const q = new URLSearchParams({ key, userId: String(userId), avatar: avatar === false ? '0' : '1' });
+        const data = await agentApi(`/api/socialV2/user-profile?${q.toString()}`, {
+          headers: { 'x-agent-token': token },
+          timeoutMs: 60000
+        });
+        const p = data?.profile;
+        if (!p) return { content: [{ type: 'text', text: `没有拿到资料：${errorText(data?.error, '网关返回为空')}` }], isError: true };
+        const lines = [];
+        const from = data?.source?.profile === 'cache' ? '缓存' : '实时';
+        lines.push(`QQ ${p.userId} 的资料（${from}）：`);
+        lines.push(`昵称：${p.nickname || '（空）'}${p.remark ? `｜你给他的备注：${p.remark}` : ''}`);
+        const bits = [`性别：${p.sexLabel || '未知'}`];
+        if (p.age != null) bits.push(`年龄：${p.age}`);
+        if (p.level != null) bits.push(`QQ 等级：${p.level}`);
+        if (p.accountYears != null) bits.push(`Q 龄：${p.accountYears} 年`);
+        if (p.vip) bits.push(`会员：是${p.vipLevel ? `（SVIP${p.vipLevel}）` : ''}`);
+        lines.push(bits.join('｜'));
+        lines.push(`在线：${p.online?.label || '未知'}`);
+        if (p.signature) lines.push(`个性签名：${p.signature}`);
+        if (p.isSelf) lines.push('（这就是你自己）');
+        const content = [{ type: 'text', text: lines.join('\n') }];
+        if (data?.avatar?.data && data?.avatar?.mimeType) {
+          content.push({ type: 'text', text: '头像如下（按图里真实的样子描述，不要背设定）：' });
+          content.push({ type: 'image', mimeType: data.avatar.mimeType, data: data.avatar.data });
+        } else if (data?.avatarError) {
+          content.push({ type: 'text', text: `（头像没取到：${data.avatarError}；资料仍然有效）` });
+        }
+        return { content };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `查看 QQ 资料失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+}
+
+if (cfg.socialV2?.tools?.qzoneRead !== false) {
+  server.tool(
+    'qq_qzone_read',
+    '读取 QQ 空间动态（只读）：scope="self" 读你自己最近发的说说；scope="friends" 读好友动态。'
+    + '合适时机：想回顾自己之前发过什么、想接住好友说说的梗、或确认刚才的说说是否真的发出去了。'
+    + '返回的是精简后的文本（作者/时间/正文/评论数/图片数），不会把整页 HTML 塞进来。'
+    + '**不要频繁翻空间**：它和 qq_get_user_profile 共用每会话配额，且好友动态只有第一页可靠。',
+    {
+      key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+      token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+      scope: z.enum(['self', 'friends']).optional().describe('self=自己的说说（默认），friends=好友动态'),
+      count: z.number().optional().describe('最多返回几条（默认由配置决定，通常 10）')
+    },
+    async ({ key, token, scope, count }) => {
+      try {
+        const q = new URLSearchParams({ key, scope: scope === 'friends' ? 'friends' : 'self' });
+        if (count != null) q.set('count', String(count));
+        const data = await agentApi(`/api/socialV2/qzone?${q.toString()}`, {
+          headers: { 'x-agent-token': token },
+          timeoutMs: 60000
+        });
+        return { content: [{ type: 'text', text: serializeModelData(data) }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `读取 QQ 空间失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+}
+
+if (cfg.socialV2?.tools?.qzonePost !== false) {
+  server.tool(
+    'qq_qzone_post',
+    '发一条 QQ 空间说说（公开广播，全好友可见）。**只有管理员明确要求时才发**；群友起哄不算要求。'
+    + '权限：管理员本人要求 → 直接发；其他人要求 → 桥接会把确认卡发到管理员私聊，你只会拿到 status="pending"，'
+    + '此时不要说已经发了，也不要在确认前反复调用。'
+    + '内容：content 是正文（限长）；images 只能填媒体库 media/ 里的**文件名**（不能是 URL/路径/base64，最多 9 张）。'
+    + '可见范围 ugcRight：1=所有人（默认）/4=好友/16=部分好友/64=仅自己/128=部分好友不可见；16/128 要配 targetUins。'
+    + '有每小时/每天上限与「同样内容不重复发」。返回 verified=true 才代表回读到了这条说说；'
+    + 'verified=false 时如实说“可能还在同步”，不要编造 tid。',
+    {
+      key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+      token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+      content: z.string().describe('说说正文（建议 1~3 句，别写成小作文）'),
+      images: z.array(z.string()).optional().describe('配图文件名数组（来自媒体库 media/，最多 9 张）'),
+      ugcRight: z.union([z.number(), z.string()]).optional().describe('可见范围：1 所有人（默认）/4 好友/16 部分可见/64 仅自己/128 部分不可见'),
+      targetUins: z.array(z.union([z.number(), z.string()])).optional().describe('ugcRight=16/128 时的 QQ 号名单')
+    },
+    async ({ key, token, content, images, ugcRight, targetUins }) => {
+      try {
+        const payload = { key, token, content };
+        if (Array.isArray(images) && images.length) payload.images = images.map(String);
+        if (ugcRight !== undefined && ugcRight !== null && String(ugcRight).trim() !== '') payload.ugcRight = ugcRight;
+        if (Array.isArray(targetUins) && targetUins.length) payload.targetUins = targetUins;
+        const data = await agentApi('/api/socialV2/qzone-post', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+          headers: { 'x-agent-token': token },
+          timeoutMs: 120000
+        });
+        if (data?.status === 'pending') {
+          return { content: [{ type: 'text', text: `${data.message ?? '已发送确认请求'}\n（${data.summary ?? '发说说'}）` }] };
+        }
+        const verified = data?.verified === true;
+        const lines = [`已发布：${data?.summary ?? content}`];
+        if (data?.tid) lines.push(`tid：${data.tid}`);
+        lines.push(verified ? '回读确认：已在你的空间最新一条里看到它（verified=true）。' : '回读确认：暂时没在最新一条里看到（可能还在同步），不要编造 tid 或宣称已确认。');
+        if (data?.images) lines.push(`配图：${data.images} 张`);
+        return { content: [{ type: 'text', text: lines.join('\n') }] };
+      } catch (error) {
+        const msg = String(error?.message ?? error);
+        if (msg.includes('persona_veto')) {
+          return { content: [{ type: 'text', text: `按人设拒绝了这次发说说（persona_veto）：${msg}。不要重试，也不要说已经发了。` }] };
+        }
+        return { content: [{ type: 'text', text: `发说说失败：${msg}` }], isError: true };
       }
     }
   );
@@ -1404,5 +1913,175 @@ if (cfg.socialV2?.tools?.getForwardMsg !== false) {
     }
   );
 }
+
+// ── 管理员动作（唯一的管理类工具） ──────────────────────────────────────────
+//
+// 注册期开关与其它工具同口径：关了就不注册（省 schema 且不给模型误调的机会）。
+// 注意这里读的是**当前** config.json：adminOps/ownerQQ 缺失时按默认值放行，
+// 真正的权限判定在桥接侧（令牌 + owner 私聊），MCP 侧不做也不该做授权判断。
+function adminOpsToolsEnabled() {
+  const c = getConfig();
+  if (c?.adminOps?.enabled === false) return false;
+  return Boolean(c?.ownerQQ);
+}
+if (adminOpsToolsEnabled()) {
+  // ── 头像目录的只读预览 ────────────────────────────────────────────────
+  //
+  // 为什么模型需要它们：qq_admin 只接受精确文件名，而 assets 里的图往往是 QQ 下载的哈希，
+  // 模型看不到目录就只能猜（实测猜过 xuqingjun.png / 2.png，三次都是「文件不存在」）。
+  // 这两个工具把"猜"换成"看"，但边界极窄：只读 mediaDir 第一层、只认图片、不接受路径。
+  if (getConfig().adminOps?.assetView?.enabled !== false) {
+    server.tool(
+      'qq_list_assets',
+      '列出头像目录（assets/）里可用的图片：文件名 + 大小。**换头像前先调它拿真实文件名，不要猜文件名。**'
+      + '返回的名字直接传给 qq_admin 的 file 字段（带不带 assets/ 前缀都行）。'
+      + '只返回第一层的图片、不含子目录，也不读文件内容。**仅管理员私聊可用**：群里或非管理员会话调用会被拒绝，'
+      + '被群友问起就说到私聊里找管理员。',
+      {
+        key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+        token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）')
+      },
+      async ({ key, token }) => {
+        try {
+          const q = new URLSearchParams({ key });
+          const data = await agentApi(`/api/admin/assets?${q.toString()}`, { headers: { 'x-agent-token': token } });
+          const files = Array.isArray(data?.files) ? data.files : [];
+          if (!files.length) {
+            return { content: [{ type: 'text', text: '头像目录里没有可用的图片（png/jpg/webp/gif）。让管理员先把图片放进 assets/。' }] };
+          }
+          const lines = files.map((f, i) => `${i + 1}. ${f.name}（${(Number(f.size) / 1024 / 1024).toFixed(2)} MB）`);
+          const truncated = data?.truncated ? `\n（只列出前 ${files.length} 张，共 ${data.total} 张）` : '';
+          return {
+            content: [{
+              type: 'text',
+              text: `assets/ 里可用的头像（${files.length} 张）：\n${lines.join('\n')}${truncated}\n\n`
+                + '知道名字就直接填进 qq_admin 的 file；要用外观描述挑（比如“白毛那张”），用 qq_view_asset 逐张看，最多看 3 张就做决定。'
+            }]
+          };
+        } catch (error) {
+          return { content: [{ type: 'text', text: `获取头像目录失败：${error?.message ?? error}` }], isError: true };
+        }
+      }
+    );
+
+    server.tool(
+      'qq_view_asset',
+      '查看头像目录里的某一张图片（name 必须来自 qq_list_assets）。图片会以图像形式进入你的视觉上下文，'
+      + '用于按外观挑头像（例如对方说“白毛那张”“蓝头发那个”）。**仅管理员私聊可用**，群聊/非管理员会话会被拒绝。'
+      + '一次只看一张，最多看 3 张就换；看完不要把本地图片内容转发或详细复述到群里。'
+      + '图片超过约 2MB 或压不进上下文时会直接报错，如实转告管理员，不要编造画面。',
+      {
+        key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+        token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+        name: z.string().describe('图片文件名，来自 qq_list_assets 返回的 name（不要带路径、不要带 assets/ 前缀）')
+      },
+      async ({ key, token, name }) => {
+        try {
+          const q = new URLSearchParams({ key, name: String(name) });
+          const data = await agentApi(`/api/admin/asset?${q.toString()}`, {
+            headers: { 'x-agent-token': token },
+            timeoutMs: 60000
+          });
+          if (!data?.image?.data || !data?.image?.mimeType) {
+            return { content: [{ type: 'text', text: `没有拿到这张图片：${errorText(data?.error, '未知原因')}` }], isError: true };
+          }
+          const dims = data.width && data.height ? `（${data.width}×${data.height}）` : '';
+          const note = data.note ? `；${data.note}` : '';
+          return {
+            content: [
+              { type: 'text', text: `assets/${data.name}${dims}${note}` },
+              { type: 'image', mimeType: data.image.mimeType, data: data.image.data }
+            ]
+          };
+        } catch (error) {
+          return { content: [{ type: 'text', text: `查看图片失败：${error?.message ?? error}` }], isError: true };
+        }
+      }
+    );
+  }
+
+  server.tool(
+    'qq_admin',
+    '管理员动作：改 QQ 账号/群的真实设置（机器人在某群的名片、QQ 昵称与个性签名、QQ 头像），'
+    + '以及只影响自己的小动作（撤回自己刚发的消息、设置在线状态）。'
+    + '按控制台「机器人自主操作」的三档决定：不开放＝你根本没这个能力，调用会被拒；'
+    + '仅应要求＝只有管理员本人明确要求才做（按 QQ 号判定，不看会话），其他人要求会被桥接转成确认卡；'
+    + '人设自主＝你自己判断，可以主动发起，也可能被按人设驳回（返回 persona_veto）。'
+    + '被拒时如实转告，不要换个说法重试。persona_veto 不是故障：用你自己的话解释（可以吐槽），或者不提。'
+    + '需要确认时会返回 status="pending"，此时不要重复调用，也不要说"已经改好了"。'
+    + '头像只接受 assets/ 里的图片（png/jpg/webp/gif），不接受 URL 或任意本机路径；'
+    + '**不确定文件名时先调 qq_list_assets，不要猜**（文件名常是哈希；用外观挑图可用 qq_view_asset）。',
+    {
+      action: z.enum(['setGroupCard', 'setGroupName', 'setGroupPortrait', 'setQqProfile', 'setQqAvatar', 'recallMessage', 'setOnlineStatus'])
+        .describe('要执行的动作'),
+      key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+      token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+      groupId: z.union([z.number(), z.string()]).optional().describe('群号（群级动作必填，必须在白名单内）'),
+      card: z.string().optional().describe('新群名片（空字符串=清除，最多 30 字）'),
+      name: z.string().optional().describe('新群名（最多 30 字）'),
+      nickname: z.string().optional().describe('新 QQ 昵称（最多 36 字）'),
+      personalNote: z.string().optional().describe('新个性签名（最多 100 字，空字符串=清空）'),
+      file: z.string().optional().describe('头像文件名：来自 qq_list_assets，如「白毛.png」；带 assets/ 前缀也接受'),
+      messageId: z.union([z.number(), z.string()]).optional().describe('要撤回的消息 id（必须是机器人自己发的）；qq_send_message 返回里有 messageIds'),
+      targetKey: z.string().optional().describe('撤回时可用：group:群号 或 private:QQ号，撤回机器人最近往它发的一条（跨会话代发后常用）'),
+      status: z.enum(['online', 'away', 'invisible', 'busy', 'qme', 'dnd']).optional().describe('在线状态（setOnlineStatus 必填）')
+    },
+    async (params) => {
+      const { action, key, token, ...rest } = params;
+      const args = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined));
+      try {
+        const data = await agentApi('/api/admin/op', {
+          method: 'POST',
+          body: JSON.stringify({ key, action, args }),
+          headers: { 'x-agent-token': token },
+          timeoutMs: 30000
+        });
+        if (data?.status === 'pending') {
+          return { content: [{ type: 'text', text: `${data.message ?? '已发送确认请求'}\n（${data.summary ?? action}）` }] };
+        }
+        return { content: [{ type: 'text', text: `已执行：${data?.summary ?? action}` }] };
+      } catch (error) {
+        const msg = String(error?.message ?? error);
+        // persona_veto 不是故障，是一次「按人设拒绝」：不标 isError，免得模型把它当成工具坏了去重试。
+        if (msg.includes('persona_veto')) {
+          return { content: [{ type: 'text', text: `按人设拒绝了这次操作（persona_veto）：${msg}。不要重试，也不要说已经做了；用你自己的话说明为什么不做，或者干脆不提。` }] };
+        }
+        return { content: [{ type: 'text', text: `管理员动作失败：${msg}` }], isError: true };
+      }
+    }
+  );
+}
+
+// ── 跨会话委派：让目标会话用它自己的人设说 ──────────────────────────────────
+//
+// 与 qq_send_message 的分工：
+//   · qq_send_message 适合“原样发这段文字”（引述、转发、固定文案）；
+//   · qq_delegate 适合“去那个群回复/说一句”——任务投给目标会话，由它用自己的系统提示、
+//     历史和人设来写，避免拿当前会话的人设去套（这就是人设串台的根因）。
+server.tool(
+  'qq_delegate',
+  '让另一个白名单会话用**它自己的人设**去说话/回复。管理员让你“去某个群回复/接一句”时优先用它；'
+  + 'qq_send_message 会沿用你当前会话的人设，跨会话发言容易串台。投递是异步的：返回 queued 后不要替它写，也不要宣称已经说了。'
+  + '需要控制台「跨会话委派」权限；目标会话已静音时会拒绝，先用 /unmute。',
+  {
+    key: z.string().describe('当前会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('当前会话令牌（见唤醒提示中的【会话令牌】）'),
+    targetKey: z.string().describe('目标会话 key，例如 group:123456789'),
+    instruction: z.string().describe('要它做什么，例如“回复群里最下面那条：角色甲不用 token；用你平时的语气”')
+  },
+  async ({ key, token, targetKey, instruction }) => {
+    try {
+      const data = await agentApi('/api/socialV2/delegate', {
+        method: 'POST',
+        body: JSON.stringify({ key, targetKey, instruction }),
+        headers: { 'x-agent-token': token },
+        timeoutMs: 15000
+      });
+      return { content: [{ type: 'text', text: `已委派给 ${data?.targetKey ?? targetKey}${data?.id ? `（#${data.id}）` : ''}：它会用自己的身份处理，你不用替它写。` }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `委派失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
 
 await server.connect(new StdioServerTransport());
