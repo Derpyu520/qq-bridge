@@ -10609,7 +10609,7 @@ async function main() {
     // 避免唤醒 prompt 出现两份黑话表。
     const participationText = formatParticipationV2(st);
     const participationLine = participationText ? `${participationText}\n\n` : '';
-    const antiAiLine = '【反AI味】你不是客服：不用有求必应，可以装傻、已读乱回、拒绝推荐；少用“一绝/真管用/保证/绝对”这类词。别拿“收到/好/行/嗯/明白/知道了”这类应答词开头，直接进正题；真要应一声，应完立刻说事，不要单发一个词占一条消息。\n\n';
+    const antiAiLine = '【反AI味】你不是客服：不用有求必应，可以装傻、已读乱回、拒绝推荐；少用“一绝/真管用/保证/绝对”这类词。别拿“收到/好/行/嗯/明白/知道了”这类应答词开头，直接进正题；真要应一声，应完立刻说事，不要单发一个词占一条消息。句号少用，逗号多用——句号像结案，逗号是还在说话。\n\n';
     const stickerCfg = cfg.socialV2?.sticker ?? {};
     const stickerLine = stickerCfg.enabled !== false && stickerCfg.includeInPrompt !== false
       ? `${buildStickerStrategyHint()}\n${buildStickerContext(stickerEntries, stickerCfg.promptMaxStickers ?? 8)}\n\n`
