@@ -41,6 +41,8 @@ const SKIP_RULES = [
   [/^test-vision-media/, '要百炼 key 与真实图片 URL'],
   [/^test-stickers/, '要真实表情缓存'],
   [/^test-console-ui/, '要 Playwright'],
+  // 在线冒烟：打真桥、改实机白名单、往群里发测试消息。默认不参与串跑。
+  [/^test-console$/, '会改本机正在跑的桥（白名单/人格/测试发送），要单独跑'],
   [/^test-dsh-auth/, '要正在跑的 DSH（端口写死 3080，会飘）'],
   [/^test-onebot-connection/, '要真 SnowLuma 在 3003'],
   [/^verify-dsh-021-adaptation/, '要 @deepseek-ai/dsh-persona（本机没装）'],
