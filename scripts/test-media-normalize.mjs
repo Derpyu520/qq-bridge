@@ -1,6 +1,6 @@
 // 媒体归一化（体积 + 动图抽帧）的离线回归。
 //
-// 背景（2026-10-18 审计，见 docs/audits/AUDIT_2026-10-18_MEDIA_AND_WATERMARK.md）：
+// 背景（媒体层审计）：
 //   1. DSH 的 MCP 图片入口用正则校验 base64，实测 base64 ≥ 4,474,880 字符（原始字节 ≈3.20 MiB）
 //      必抛 RangeError: Maximum call stack size exceeded → 工具结果降级成
 //      `[image unavailable: image/gif; Maximum call stack size exceeded; …]`。

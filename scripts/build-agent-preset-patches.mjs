@@ -23,8 +23,8 @@ import yaml from 'js-yaml';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(__dirname, '..');
 
-/** 由桥接托管的两个 preset（顺序即 patch 层顺序）。 */
-export const PRESETS = ['qq-chat', 'qq-chat-v2'];
+/** 由桥接托管的三个 preset（顺序即 patch 层顺序）。 */
+export const PRESETS = ['qq-chat', 'qq-chat-v2', 'qq-chat-v3'];
 
 /** preset 行 id：与 config.id（桥接解析的 preset 名）区分开，方便在 profile patch 里按行定位。 */
 export function presetRowId(name) {

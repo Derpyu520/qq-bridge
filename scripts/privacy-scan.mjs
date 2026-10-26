@@ -202,6 +202,13 @@ if (!files.length) {
 const allowRe = rules.allowPaths.map((p) => (p.includes('*') ? globToRe(p) : new RegExp(`^${p.replace(/[.+^${}()|[\]\\]/g, '\\$&')}`)));
 const denyFileRes = rules.denyFiles.map((p) => ({ glob: p, re: globToRe(p) }));
 
+// 占位符白名单：本仓库的示例/夹具用这些号，其余纯数字（QQ 号/群号）一律要报。
+// 注意必须声明在扫描循环之前：isNoise() 在循环里被调用，函数声明会提升但 const 不会。
+const PLACEHOLDER_NUMBERS = new Set([
+  '123456780', '123456781', '123456782', '123456783', '123456788', '123456789',
+  '1000000000', '1000000001', '1000000002', '1234567890', '987654321'
+]);
+
 const findings = [];
 for (const rel of files) {
   const normalized = rel.split(path.sep).join('/');
@@ -253,8 +260,14 @@ for (const rel of files) {
  *   - 全大写下划线的长串：环境变量名 / 常量名（`PLAYWRIGHT_MODULE`）；
  *   - 连字符/点号分隔的小写长串：文件名/包名/路径片段（`bridge.js.bak-20260821-1722-currentRoleHint`）。
  * 真凭据是**混合大小写 + 数字**的高熵串，因此下面要求"同时含小写与大写与数字"。
+ *
+ * ⚠️ **纯数字不是噪音**：QQ 号/群号就是纯数字。早期版本把纯数字一并当噪音吞掉，
+ * 结果"9-10 位数字"这条规则永远不报——这是真实项目里差点漏掉几十个真号的原因。
+ * 只放行下面这份占位符白名单（本仓库的示例/夹具用它）。
  */
 function isNoise(value, rule) {
+  if (/^[0-9]+$/.test(value)) return PLACEHOLDER_NUMBERS.has(value);  // QQ 号/群号：纯数字，必须报
+  if (/^(iVBORw0KGgo|data:image\/|R0lGOD)/i.test(value)) return true;  // 测试夹具里的 1x1 图片 base64
   if (rule.requireNonHex && /^[0-9a-f]+$/i.test(value)) return true;
   if (/^[A-Z0-9_]+$/.test(value)) return true;                       // 环境变量名/常量
   if (/^[a-z0-9._-]+$/.test(value)) return true;                     // 文件名/包名/路径片段

@@ -27,6 +27,14 @@
     "method": "POST",
     "path": "/api/mode",
     "body": {
+      "mode": "reserved3",
+      "closedAgentPreset": ""
+    }
+  },
+  {
+    "method": "POST",
+    "path": "/api/mode",
+    "body": {
       "mode": "closed-agent",
       "closedAgentPreset": ""
     }
@@ -114,12 +122,26 @@
     "body": {
       "enabled": true,
       "agentPreset": "contract-v2",
+      "gen3Preset": "qq-chat-v3",
       "provideRecommendations": false,
       "autoReplyCheckMs": 17000,
       "tools": {
         "getPrompt": false,
         "getUnread": true,
         "getRecent": true,
+        "getContext": true,
+        "person": true,
+        "sendImage": true,
+        "react": true,
+        "transcribeVoice": true,
+        "ocr": true,
+        "recall": true,
+        "searchHistory": true,
+        "readDocument": true,
+        "groupSign": false,
+        "like": false,
+        "shareCard": false,
+        "revise": true,
         "socialState": true,
         "sendGroup": true,
         "sendPrivate": true,
@@ -169,6 +191,8 @@
         "sleepMaxMs": 0,
         "maxWakePerMinute": 1,
         "maxWakePerHour": 12,
+        "maxWakePer2Hours": 10,
+        "maxWakePerDay": 30,
         "batchWindowMs": 8000,
         "noActionLimit": 3,
         "maxWakeConfigReminders": 2
@@ -183,12 +207,61 @@
         "longGapMaxMs": 10000,
         "maxSendPerMinute": 0,
         "maxSendPerHour": 60,
+        "maxSendPer2Hours": 30,
+        "maxSendPerDay": 120,
         "maxMessageChars": 500,
         "maxGapMs": 10000,
         "gapBaseMs": 800,
         "gapPerCharMs": 20,
         "recommendedHint": ""
       },
+      "quota": {
+        "global": {
+          "maxSendPer2Hours": 120,
+          "maxSendPerDay": 500,
+          "maxWakePer2Hours": 30,
+          "maxWakePerDay": 100
+        }
+      },
+      "decision": {
+        "socialMentionDelayMs": 30000,
+        "highPressure": 0.6,
+        "mediumPressure": 0.35
+      },
+      "timing": {
+        "enabled": true,
+        "minDelayMs": 600,
+        "maxDelayMs": 3000,
+        "typingIndicator": true
+      },
+      "media": {
+        "maxBytes": 8388608,
+        "maxPixels": 64000000,
+        "maxCount": 5,
+        "dir": "media"
+      },
+      "document": {
+        "enabled": false,
+        "allowHistory": false,
+        "maxBytes": 10485760,
+        "maxPages": 50,
+        "maxChars": 20000,
+        "maxPer10Min": 5
+      },
+      "voice": {
+        "enabled": false,
+        "allowAbsolutePath": false,
+        "autoReadback": true,
+        "maxSeconds": 300,
+        "maxBytes": 20971520,
+        "maxPerMinute": 2,
+        "maxPerHour": 10,
+        "maxPer2Hours": 4,
+        "maxPerDay": 20,
+        "defaultVolume": 1,
+        "loudness": "normal"
+      },
+      "initialPromptMaxChars": 2000,
       "wait": {
         "defaultMs": 30000,
         "minMs": 5000,
@@ -219,7 +292,19 @@
       "context": {
         "recentLimit": 100,
         "unreadLimit": 30,
-        "contextWindow": 20
+        "contextWindow": 20,
+        "inlineWakeMessages": true,
+        "wakeMessageLimit": 12,
+        "wakeRecentLimit": 4,
+        "wakeMaxChars": 6000,
+        "digestEnabled": true,
+        "digestWindowMs": 21600000,
+        "digestMaxChars": 600,
+        "digestEveryMessages": 20,
+        "digestEveryMs": 600000,
+        "digestSummaryMaxChars": 500,
+        "digestRecapMaxChars": 800,
+        "maxWakePromptChars": 12000
       },
       "feedback": {
         "maxLength": 500,
@@ -233,12 +318,26 @@
     "body": {
       "enabled": true,
       "agentPreset": "contract-v2",
+      "gen3Preset": "qq-chat-v3",
       "provideRecommendations": false,
       "autoReplyCheckMs": 17000,
       "tools": {
         "getPrompt": false,
         "getUnread": true,
         "getRecent": true,
+        "getContext": true,
+        "person": true,
+        "sendImage": true,
+        "react": true,
+        "transcribeVoice": true,
+        "ocr": true,
+        "recall": true,
+        "searchHistory": true,
+        "readDocument": true,
+        "groupSign": false,
+        "like": false,
+        "shareCard": false,
+        "revise": true,
         "socialState": true,
         "sendGroup": true,
         "sendPrivate": true,
@@ -288,6 +387,8 @@
         "sleepMaxMs": 0,
         "maxWakePerMinute": 1,
         "maxWakePerHour": 12,
+        "maxWakePer2Hours": 10,
+        "maxWakePerDay": 30,
         "batchWindowMs": 8000,
         "noActionLimit": 3,
         "maxWakeConfigReminders": 2
@@ -302,12 +403,61 @@
         "longGapMaxMs": 10000,
         "maxSendPerMinute": 0,
         "maxSendPerHour": 60,
+        "maxSendPer2Hours": 30,
+        "maxSendPerDay": 120,
         "maxMessageChars": 500,
         "maxGapMs": 10000,
         "gapBaseMs": 800,
         "gapPerCharMs": 20,
         "recommendedHint": ""
       },
+      "quota": {
+        "global": {
+          "maxSendPer2Hours": 120,
+          "maxSendPerDay": 500,
+          "maxWakePer2Hours": 30,
+          "maxWakePerDay": 100
+        }
+      },
+      "decision": {
+        "socialMentionDelayMs": 30000,
+        "highPressure": 0.6,
+        "mediumPressure": 0.35
+      },
+      "timing": {
+        "enabled": true,
+        "minDelayMs": 600,
+        "maxDelayMs": 3000,
+        "typingIndicator": true
+      },
+      "media": {
+        "maxBytes": 8388608,
+        "maxPixels": 64000000,
+        "maxCount": 5,
+        "dir": "media"
+      },
+      "document": {
+        "enabled": false,
+        "allowHistory": false,
+        "maxBytes": 10485760,
+        "maxPages": 50,
+        "maxChars": 20000,
+        "maxPer10Min": 5
+      },
+      "voice": {
+        "enabled": false,
+        "allowAbsolutePath": false,
+        "autoReadback": true,
+        "maxSeconds": 300,
+        "maxBytes": 20971520,
+        "maxPerMinute": 2,
+        "maxPerHour": 10,
+        "maxPer2Hours": 4,
+        "maxPerDay": 20,
+        "defaultVolume": 1,
+        "loudness": "normal"
+      },
+      "initialPromptMaxChars": 2000,
       "wait": {
         "defaultMs": 30000,
         "minMs": 5000,
@@ -338,7 +488,19 @@
       "context": {
         "recentLimit": 100,
         "unreadLimit": 30,
-        "contextWindow": 20
+        "contextWindow": 20,
+        "inlineWakeMessages": true,
+        "wakeMessageLimit": 12,
+        "wakeRecentLimit": 4,
+        "wakeMaxChars": 6000,
+        "digestEnabled": true,
+        "digestWindowMs": 21600000,
+        "digestMaxChars": 600,
+        "digestEveryMessages": 20,
+        "digestEveryMs": 600000,
+        "digestSummaryMaxChars": 500,
+        "digestRecapMaxChars": 800,
+        "maxWakePromptChars": 12000
       },
       "feedback": {
         "maxLength": 500,

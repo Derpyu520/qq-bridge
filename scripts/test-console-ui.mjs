@@ -118,7 +118,7 @@ try {
   });
 
   await test('Mode and preset contracts', async () => {
-    for (const mode of ['chat', 'reserved', 'reserved2', 'closed-agent']) {
+    for (const mode of ['chat', 'reserved', 'reserved2', 'reserved3', 'closed-agent']) {
       assert.deepEqual(await clickWrite(`#modeRow [data-mode="${mode}"]`, '/api/mode'), { mode, closedAgentPreset: '' });
     }
     const select = await reveal('#closedPreset');

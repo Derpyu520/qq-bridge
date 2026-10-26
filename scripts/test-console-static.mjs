@@ -40,6 +40,12 @@ ok(/api\('\/api\/voice\/list/.test(html), '面板调用 /api/voice/list（操作
 ok(/api\('\/api\/voice\/send'/.test(html), '面板调用 /api/voice/send');
 ok(/typeof loadVoiceLibrary === 'function'|async function loadVoiceLibrary/.test(html), 'loadVoiceLibrary 已定义');
 
+console.log('## 会话级主动概率');
+ok(/主动概率调整/.test(html), '会话表包含「主动概率调整」列');
+ok(/\/api\/socialV2\/proactive/.test(html), '控制台调用 /api/socialV2/proactive');
+ok(/data-proactive-key=/.test(html), '每行带 data-proactive-key');
+ok(/document\.activeElement\?\.dataset\?\.proactiveKey/.test(html), '轮询重绘会避让正在编辑的输入框');
+
 console.log('## JS 语法');
 const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
 const big = scripts.sort((a, b) => b.length - a.length)[0];

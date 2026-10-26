@@ -121,8 +121,9 @@ await test('malformed HTTP request targets return 400 without hanging', async (h
 {
   const image = Buffer.from('89504e470d0a1a0a00000000', 'hex');
   let body;
+  let safeFetchCalls = 0;
   const h = await bridgeHarness({ globals: {
-    safeFetchBuffer: async () => ({ buffer: image }),
+    safeFetchBuffer: async () => { safeFetchCalls += 1; return { buffer: image }; },
     validateFetchUrl: async () => { throw new Error('must fetch validated bytes instead of passing a URL'); },
     fetch: async (_url, init) => {
       body = JSON.parse(init.body);
@@ -130,9 +131,19 @@ await test('malformed HTTP request targets return 400 without hanging', async (h
     },
   } });
   try {
+    // 1) 默认走 send_custom_face：发出来是收藏表情（表情包样式），不是普通图片气泡。
     await h.sendStickerV2('group:456', 'fixture-sticker');
-    assert.equal(body.message.find((part) => part.type === 'image').data.file, 'base64://' + image.toString('base64'));
-    console.log('PASS sticker sending gives OneBot validated bytes, never a URL to refetch');
+    assert.equal(h.calls.customFaces.length, 1, '默认应调用 send_custom_face');
+    assert.equal(h.calls.customFaces[0].emoji_id, 'fixture-sticker');
+    assert.equal(h.calls.customFaces[0].group_id, 456);
+    assert.equal(safeFetchCalls, 0, '收藏表情通道成功时不应再下载图片');
+    // 2) 带 @ 时 send_custom_face 不支持，退回图片通道：仍然只发校验过的字节，不把 URL 交给网关。
+    await h.sendStickerV2('group:456', 'fixture-sticker', { atUserId: '111' });
+    const imagePart = body.message.find((part) => part.type === 'image');
+    assert.ok(imagePart, '回退路径必须发 image 段');
+    assert.equal(imagePart.data.file, 'base64://' + image.toString('base64'));
+    assert.ok(body.message.some((part) => part.type === 'at'), '回退路径要带上 at');
+    console.log('PASS sticker sending prefers send_custom_face and keeps validated bytes on image fallback');
   } catch (error) { failures++; console.error('FAIL safe sticker sending:', error.message); }
   finally { await h.close(); }
 }

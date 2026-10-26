@@ -1,7 +1,7 @@
 // qq-tool-restrict 守卫的回归（2026-10-18 新增）。
 //
 // 背景：一份重启后**新建**的 QQ 会话，请求头里 `dev_*` 仍然是 18 个
-// （docs/audits/AUDIT_2026-10-18_MEDIA_AND_WATERMARK.md §3 P3）。
+// （媒体层审计 §3 P3）。
 // 名单本身是对的、加载的副本也含这些名字，所以失败在 `ctx.tools.restrict()` 调用期，
 // 被 per-name try/catch 静默吞掉 —— 现网完全不可观测（DSH 的 stderr 不落文件）。
 //

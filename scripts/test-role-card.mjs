@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { test } from 'node:test';
-import { parseRoleSections, roleCharStats, roleSectionReport, selectRoleText } from '../src/role-card.js';
+import { applyRoleAssignment, canonicalRoleKey, mergeRoleState, normalizeRoleState, parseBehaviorContract, parseRoleSections, resolveRoleName, roleCharStats, roleSectionReport, selectRoleText } from '../src/role-card.js';
 
 const CARD = [
   '# 角色卡：测试',
@@ -105,4 +105,86 @@ test('真实人格卡可用，且筛选不丢公共内容', () => {
   }
   // 二代注入的文本里不应再出现一代的分条机制
   assert.doesNotMatch(v2, /空格分隔（例如|\[SILENT\]/);
+});
+
+// ── 会话级人格（byKey） ─────────────────────────────────────────────────────
+
+test('会话人格解析：例外优先于默认，未指定的会话走默认', () => {
+  const state = { role: '小鲸鱼', mode: 'active', byKey: { 'group:123456781': '傲娇助手' } };
+  assert.equal(resolveRoleName(state, 'group:123456781'), '傲娇助手');
+  assert.equal(resolveRoleName(state, 'group:123456789'), '小鲸鱼');
+  assert.equal(resolveRoleName(state, 'private:1000000001'), '小鲸鱼');
+  assert.equal(resolveRoleName(state, ''), '小鲸鱼', '拿不到 key 时退回默认人格');
+  assert.equal(resolveRoleName({ role: '小鲸鱼', byKey: null }, 'group:1'), '小鲸鱼');
+});
+
+test('会话人格解析：默认和例外都为空时返回 null（不扮演）', () => {
+  assert.equal(resolveRoleName({ role: null, mode: 'active', byKey: {} }, 'group:1'), null);
+  assert.equal(resolveRoleName({}, 'group:1'), null);
+  assert.equal(resolveRoleName(null, 'group:1'), null);
+});
+
+test('会话 key 归一化：只认 group/private + 正整数，并去掉前导零', () => {
+  assert.equal(canonicalRoleKey('group:00123'), 'group:123');
+  assert.equal(canonicalRoleKey('private:42'), 'private:42');
+  assert.equal(canonicalRoleKey(' group:7 '), 'group:7');
+  assert.equal(canonicalRoleKey('group:0'), null);
+  assert.equal(canonicalRoleKey('group:abc'), null);
+  assert.equal(canonicalRoleKey('friend:1'), null);
+  assert.equal(canonicalRoleKey(''), null);
+});
+
+test('状态合并：只改 role/mode 时 byKey 原样保留（静默开关不会清空会话人格）', () => {
+  const prev = { role: '小鲸鱼', mode: 'active', byKey: { 'group:1': '猫娘' } };
+  assert.deepEqual(mergeRoleState(prev, { role: '傲娇助手', mode: 'silent' }), {
+    role: '傲娇助手',
+    mode: 'silent',
+    byKey: { 'group:1': '猫娘' },
+  });
+  assert.deepEqual(mergeRoleState(prev, { byKey: {} }), { role: '小鲸鱼', mode: 'active', byKey: {} });
+  assert.deepEqual(mergeRoleState(prev, {}), prev);
+});
+
+test('状态归一化：非法 key / 非字符串人格名 / 脏字符都被挡在读入点', () => {
+  const state = normalizeRoleState({
+    role: ' 小鲸鱼/../x ',
+    mode: 'whatever',
+    byKey: {
+      'group:001': '猫娘',
+      'friend:2': '猫娘',
+      'group:0': '猫娘',
+      'private:3': '  坏/名 ',
+      'group:4': null,
+      'group:5': 123,
+      'group:6': '',
+    },
+  });
+  assert.equal(state.role, '小鲸鱼x', '路径字符应被清掉');
+  assert.equal(state.mode, 'active', '非法 mode 归一为 active');
+  assert.deepEqual(state.byKey, { 'group:1': '猫娘', 'private:3': '坏名' });
+});
+
+test('状态归一化：byKey 条数受上限约束', () => {
+  const byKey = {};
+  for (let i = 1; i <= 10; i += 1) byKey[`group:${i}`] = '猫娘';
+  const state = normalizeRoleState({ role: null, byKey }, 3);
+  assert.equal(Object.keys(state.byKey).length, 3);
+});
+
+test('设置/清除会话例外：保留其他会话与默认人格，且不改原对象', () => {
+  const prev = { role: '小鲸鱼', mode: 'silent', byKey: { 'group:1': '猫娘', 'group:2': '傲娇助手' } };
+  const added = applyRoleAssignment(prev, 'group:3', ' 温柔/助手 ');
+  assert.equal(added.role, '小鲸鱼');
+  assert.equal(added.mode, 'silent');
+  assert.deepEqual(added.byKey, { 'group:1': '猫娘', 'group:2': '傲娇助手', 'group:3': '温柔助手' });
+  assert.equal(prev.byKey['group:3'], undefined, '不应修改传入对象');
+  const removed = applyRoleAssignment(added, 'group:1', null);
+  assert.deepEqual(removed.byKey, { 'group:2': '傲娇助手', 'group:3': '温柔助手' });
+  assert.equal(applyRoleAssignment(prev, 'group:x', '猫娘'), null);
+});
+test('行为合同：反驳主人 / 反驳 都解析成 vetoOwner', () => {
+  const card = ['## 行为合同', '- 主动：偶尔插一句', '- 反驳主人：15%'].join('\n');
+  assert.equal(parseBehaviorContract(card).vetoOwner, '15%');
+  assert.equal(parseBehaviorContract('## 行为合同\n- 反驳：0.2').vetoOwner, '0.2');
+  assert.equal(parseBehaviorContract('## 行为合同\n- 主动：正常').vetoOwner, undefined);
 });

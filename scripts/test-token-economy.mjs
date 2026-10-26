@@ -184,7 +184,13 @@ await test('another conversation token, pause, mode and allowlist guards still r
   await request('unread');
   const otherToken = h.getSocialV2State('private:123').agentToken;
   const body = { config: ACTIVE, throughSeq: 1 };
+  // 跨会话控制现在是受控能力（crossSessionControl，默认 owner）。这里先关掉它，
+  // 验证"别的会话令牌不能动这个会话"的旧边界仍然成立；开着它的正例在
+  // scripts/test-admin-ops-api.mjs 的跨会话静音用例里。
+  const prevControl = h.cfg.botPerms.scope.crossSessionControl;
+  h.cfg.botPerms.scope.crossSessionControl = 'none';
   assert.equal((await request('wake-config', { body, token: otherToken })).status, 403);
+  h.cfg.botPerms.scope.crossSessionControl = prevControl;
   h.socialV2.paused = true;
   assert.equal((await request('wake-config', { body })).status, 403);
   h.socialV2.paused = false;

@@ -8,6 +8,7 @@ import yaml from 'js-yaml';
 import {
   PRESET_BLOCKING_SUBSTRINGS,
   PRESET_REQUIRED_MARKERS,
+  PRESET_REQUIRED_MARKERS_V3,
   extractPresetPrefix,
   locatePresetPromptBlock,
   presetBlockingSubstrings,
@@ -27,7 +28,7 @@ const originalPrefix = extractPresetPrefix(source);
 // 报错还说它「缺少安全不变量」，而它从来就没打算有那些工具面表述。
 // 这条测试同时钉住两件事：① 每代预设都能通过自己的清单；② 清单本身没写错字。
 test('每代内置预设都满足自己那一代的安全不变量', () => {
-  for (const [name, gen] of [['qq-chat', 'v1'], ['qq-chat-v2', 'v2']]) {
+  for (const [name, gen] of [['qq-chat', 'v1'], ['qq-chat-v2', 'v2'], ['qq-chat-v3', 'v3']]) {
     const text = fs.readFileSync(new URL(`../dsh/agent-presets/${name}/agent.cordis.yml`, import.meta.url), 'utf8');
     const prefix = extractPresetPrefix(text);
     assert.equal(typeof prefix, 'string', `${name} 应能抽出 persona.prefix`);
@@ -40,6 +41,14 @@ test('一代与二代的硬性不变量清单确实不同（防止又合并成�
   assert.notDeepEqual(presetBlockingSubstrings('v1'), presetBlockingSubstrings('v2'));
   // 二代的工具面不变量不应该出现在一代清单里
   assert.ok(!presetBlockingSubstrings('v1').includes('你没有本地工具'));
+});
+
+test('三代软警告使用三代段落，不再误报二代段落', () => {
+  const text = fs.readFileSync(new URL('../dsh/agent-presets/qq-chat-v3/agent.cordis.yml', import.meta.url), 'utf8');
+  const prefix = extractPresetPrefix(text);
+  assert.equal(typeof prefix, 'string');
+  assert.deepEqual(presetPromptWarnings(prefix, 'v3'), []);
+  assert.ok(PRESET_REQUIRED_MARKERS_V3.every((m) => prefix.includes(m)));
 });
 
 test('真实预设能定位到 persona 的 prefix 块', () => {
@@ -133,12 +142,21 @@ test('删掉安全不变量或正文过短时阻断保存（保护 AI 效果与�
 });
 
 test('写回沿用文件主导行尾，且不吞掉块尾空行', () => {
+  // 断言按**源文件自己的**行尾来判：仓库在不同平台上可能是 LF 或 CRLF 检出，
+  // 而这条测试要保证的是「写回沿用源文件的 EOL」，不是「源文件一定是 CRLF」。
+  // 旧写法写死 CRLF，在 LF 检出下会误报，掩盖它真正要防的"混入另一种换行"。
+  const sourceCrlf = /\r\n/.test(source);
   const next = renderPresetPromptYaml(source, originalPrefix);
   const crlf = (next.match(/\r\n/g) ?? []).length;
   const lfOnly = (next.match(/\n/g) ?? []).length - crlf;
-  assert.ok(crlf > 0, 'CRLF 文件写回后应仍使用 CRLF');
-  assert.equal(lfOnly, 0, '写回后不应残留/新增 LF-only 行');
-  assert.ok(next.includes('prefix: |-\r\n'), '新增行应使用 CRLF');
+  if (sourceCrlf) {
+    assert.ok(crlf > 0, 'CRLF 文件写回后应仍使用 CRLF');
+    assert.equal(lfOnly, 0, '写回后不应残留/新增 LF-only 行');
+    assert.ok(next.includes('prefix: |-\r\n'), '新增行应使用 CRLF');
+  } else {
+    assert.equal(crlf, 0, 'LF 文件写回后不应引入 CRLF');
+    assert.ok(next.includes('prefix: |-\n'), '新增行应使用 LF');
+  }
   // 块之后的内容（空行、注释、后续条目）必须逐字保留
   const before = locatePresetPromptBlock(source);
   const after = locatePresetPromptBlock(next);

@@ -15,7 +15,7 @@ const timestamp = '2026-09-20T08:30:00.000Z';
 function presetStatusFixture(preset) {
   return {
     preset,
-    label: preset === 'qq-chat' ? '一代仿真（reserved）' : '二代仿真（reserved2）',
+    label: preset === 'qq-chat' ? '一代仿真（reserved）' : preset === 'qq-chat-v3' ? '三代仿真（reserved3）' : '二代仿真（reserved2）',
     sourceFile: `dsh/agent-presets/${preset}/agent.cordis.yml`,
     installed: true,
     requiresRestart: true,
@@ -288,6 +288,8 @@ export function makeFixtureState() {
   return {
     mode: 'reserved2', role: '小鲸鱼', roleMode: 'active', closedAgentPreset: '', paused: false,
     roles: ['小鲸鱼', '温柔助手', '技术伙伴'],
+    // 按会话人格（离线示例）：一个群、一个私聊各指定一张卡，其余会话走默认。
+    roleAssignments: { 'group:123456789': '温柔助手', 'private:100001': '技术伙伴' },
     roleContents: {
       小鲸鱼: '# 小鲸鱼\n\n- 性格：好奇、爱接梗，遇到不懂的会直接问\n- 说话风格：简短，偶尔用 emoji',
       温柔助手: '# 温柔助手\n\n- 性格：温和、有耐心\n- 说话风格：先共情再回答',
@@ -376,7 +378,7 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
       }
       if (method === 'GET') {
         switch (path) {
-          case '/api/status': return json({ ok: true, dshReady: true, mode: state.mode, role: state.role, roleMode: state.roleMode, closedAgentPreset: state.closedAgentPreset, ownerQQ: state.whitelist.ownerQQ, allowGroups: state.whitelist.allow.groups, allowPrivate: state.whitelist.allow.private, activity: '[08:30:00] 演示桥接已连接\n[08:30:12] group:123456789 · 已处理一条消息\n[08:30:20] 二代社交助手正在运行\n以上均为离线模拟数据。' });
+          case '/api/status': return json({ ok: true, dshReady: true, mode: state.mode, role: state.role, roleMode: state.roleMode, roleAssignments: Object.keys(state.roleAssignments).length, closedAgentPreset: state.closedAgentPreset, ownerQQ: state.whitelist.ownerQQ, allowGroups: state.whitelist.allow.groups, allowPrivate: state.whitelist.allow.private, activity: '[08:30:00] 演示桥接已连接\n[08:30:12] group:123456789 · 已处理一条消息\n[08:30:20] 二代社交助手正在运行\n以上均为离线模拟数据。' });
           case '/api/presets': return json({ presets: [{ id: 'qq-chat-v2', trust: 'user' }, { id: 'qq-chat', trust: 'user' }] });
           case '/api/roles': return json({
             roles: state.roles.slice(),
@@ -401,6 +403,7 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
               };
             }),
             current: state.role,
+            assignments: { ...state.roleAssignments },
             limits: { nameMax: 40, contentMaxBytes: 65536, injectMaxChars: state.roleInjectMax },
           });
           case '/api/roles/content': {
@@ -510,7 +513,15 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
       if (method === 'POST') {
         switch (path) {
           case '/api/mode': state.mode = body.mode; state.closedAgentPreset = body.closedAgentPreset; return json({ ok: true, dshSynced: true });
-          case '/api/role': state.role = body.role; return json({ ok: true });
+          case '/api/role':
+            if (body.key) {
+              const next = { ...state.roleAssignments };
+              if (body.role) next[body.key] = body.role; else delete next[body.key];
+              state.roleAssignments = next;
+              return json({ ok: true, key: body.key, role: body.role ?? null, assignments: next });
+            }
+            state.role = body.role;
+            return json({ ok: true });
           case '/api/roles/create': state.roles.push(body.name); state.roleContents[body.name] = body.content ?? ''; return json({ ok: true, role: body.name, warnings: [] });
           case '/api/roles/update': state.roleContents[body.name] = body.content ?? ''; return json({ ok: true, role: body.name, chars: String(body.content ?? '').length, warnings: [] });
           case '/api/roles/rename': {
@@ -519,7 +530,11 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
             state.roleContents[body.to] = state.roleContents[body.from] ?? '';
             delete state.roleContents[body.from];
             if (state.role === body.from) state.role = body.to;
-            return json({ ok: true, role: body.to, renamed: true, currentFollowed: state.role === body.to });
+            let assignmentsUpdated = 0;
+            for (const [key, value] of Object.entries(state.roleAssignments)) {
+              if (value === body.from) { state.roleAssignments[key] = body.to; assignmentsUpdated += 1; }
+            }
+            return json({ ok: true, role: body.to, renamed: true, currentFollowed: state.role === body.to, assignmentsUpdated });
           }
           case '/api/roles/delete': {
             const idx = state.roles.indexOf(body.name);
@@ -527,7 +542,11 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
             delete state.roleContents[body.name];
             const cleared = state.role === body.name;
             if (cleared) state.role = null;
-            return json({ ok: true, deleted: body.name, clearedCurrent: cleared });
+            let assignmentsCleared = 0;
+            for (const [key, value] of Object.entries(state.roleAssignments)) {
+              if (value === body.name) { delete state.roleAssignments[key]; assignmentsCleared += 1; }
+            }
+            return json({ ok: true, deleted: body.name, clearedCurrent: cleared, assignmentsCleared });
           }
           case '/api/roles/limit': state.roleInjectMax = Number(body.maxInjectChars) || state.roleInjectMax; return json({ ok: true, maxInjectChars: state.roleInjectMax, limits: { injectMaxChars: state.roleInjectMax } });
           case '/api/preset/sim-prompt': {

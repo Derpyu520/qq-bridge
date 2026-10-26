@@ -17,6 +17,10 @@ const tests = [
   'test-md-to-plain.mjs', 'test-slang-learn.mjs', 'test-mux-reconnect.mjs',
   'test-token-economy.mjs', 'test-qq-model-view.mjs', 'test-qq-preset-contract.mjs',
   'test-reply-wait.mjs', 'test-preset-prompt.mjs', 'test-role-card.mjs',
+  // 会话级主动概率（base + delta）接口与持久化
+  'test-proactive-session.mjs',
+  // 人格切换 / 静音恢复后必须重新排主动检查（否则「设了 80% 却从不开口」）
+  'test-proactive-rearm.mjs',
   // 体检修复回归：无令牌智能体调用面、send-burst 失败回滚、唤醒限频重试、
   // 定时器类暂存唤醒补发、collector 生命周期、ownerQQ 覆盖语义、预设名校验、
   // wake triggers 白名单、memory-update 边界、wait 租约归一化、md/黑话/表情/账本；
@@ -33,6 +37,19 @@ const tests = [
   'test-v2-initial-prompt.mjs',
   // 令牌账本 / 价目表 与 体检修复回归（纯函数，无外部依赖）
   'test-token-usage.mjs', 'test-hardening.mjs',
+  // 管理员动作（改群名片/资料/头像）：动作白名单、参数与路径沙箱、确认文本解析、
+  // 待确认队列、限流、超时、撤销选点。用例在 src/admin-ops.test.mjs。
+  'test-admin-ops.mjs',
+  // QQ 资料 / 头像 / QQ 空间：字段白名单、只能查会话内的人、头像视觉返回、
+  // 说说的 owner 直连与确认卡、图片沙箱、频率/重复内容、回读校验。
+  'test-qzone-profile.mjs',
+  // 删除自己收藏的表情：令牌/工具开关/三档权限、全局限额、未知 id、删后本地移除与回读确认。
+  'test-sticker-delete.mjs',
+  // 发表情频率档位：off/low/normal/high/persona 的提示词与硬上限一致性、
+  // persona 不设档位上限、高级覆盖、被拦不消耗普通发送额度。
+  'test-sticker-frequency.mjs',
+  // 表情库纯函数 / 配置模板默认值 / MCP 与 bridge 的接线（不需要活网关）。
+  'test-stickers.mjs',
   // 语音发送（纯函数 + 端点存在性；真发语音只在 --live 或 CLI 里做）
   'test-voice.mjs',
   // 音量：参数校验 + 真的调用 ffmpeg 调音量 + 自算 RMS 验证增益
@@ -47,13 +64,17 @@ const tests = [
   'test-voice-system.mjs',
   // SnowLuma 账号/token 自发现（换 QQ 账号后 token 会变，写死的工具会 401）
   'test-snowluma-conn.mjs',
+  // DSH 端点自愈（端口跟随）：DSH 更新/重启后端口会变（实测 12516 → 2500），
+  // 而 dsh.baseUrl 是静态配置 —— 连不上时必须能自己找回来，且**验证不过绝不切换**
+  // （错判会把桥接指到陌生服务上，比不改更糟）。纯离线，端口枚举/探测/验证全注入。
+  'test-dsh-endpoint.mjs',
   // 启动器与编码（乱码根因：.cmd 里的非 ASCII 会被 cmd 按 ANSI 解码）
   'test-encoding.mjs',
   // 控制台乱码机制（UTF-8 字节被按 GBK 解码）+ chcp 修复
   'test-console-encoding.mjs',
   // 🔴 铁律 L7（仿真会话不得拥有本地执行能力）：注册期断言——
   //    preset 挂了守卫、守卫的 restrict 名单覆盖全部已知本地工具、且执行期一律拒绝。
-  //    这是唯一挡住"绕过桥接直连 OneBot HTTP"的东西（见 QSH_PLAN.md §0.1/§5.2），
+  //    这是唯一挡住"绕过桥接直连 OneBot HTTP"的东西（见 设计文档 §0.1/§5.2），
   //    所以必须在每次回归里跑，而不是一次性验收。
   'test-preset-local-tools.mjs',
   // qq-mode-console 的 settings 契约：0.2.0 删除了 ctx.settings.register()，

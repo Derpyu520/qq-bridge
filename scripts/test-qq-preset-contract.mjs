@@ -76,9 +76,16 @@ test('social autonomy and visual, forwarding, sticker and web capabilities remai
     '不会自动发送到 QQ', 'qq_get_message_images', 'qq_get_forward_msg', 'nestedForwardIds',
     'qq_send_poke', 'qq_list_stickers', 'qq_get_sticker_image', 'qq_send_sticker',
     'qq_collect_sticker', 'qq_sticker_note', 'qq_get_self_image',
+    // 删除收藏表情：工具名、不可恢复与「仅管理员要求才删」都必须写进提示词。
+    'qq_delete_sticker', '不可恢复', '一次只删一个',
     'qq_set_sticker_remark', '只有管理端明确开启后才能用',
     'qq_list_voices', 'qq_send_voice', 'verified=true 才代表这条语音确实落地',
     '语音**默认是关闭的**', '不要假装发了语音',
+    // QQ 资料/头像/空间：工具名、"只能查会话内的人"、发说说的管理员前提都必须在提示词里，
+    // 否则模型会把它当 QQ 号查询台，或把说说当普通消息随便发。
+    'qq_get_user_profile', 'qq_qzone_read', 'qq_qzone_post',
+    '只能查本会话/本群出现过的人', '别把它当 QQ 号查询台',
+    '**发说说只有【管理员】明确要求才做**', 'status="pending"',
     'mcp__web-search-safe__web_search', 'mcp__web-search-safe__web_fetch',
   ]) assert.ok(prefix.includes(text), `missing capability or voice rule: ${text}`);
 });
@@ -94,13 +101,22 @@ test('autonomy limits and the observation escape hatch stay described', () => {
     '【记忆卫生】', 'qq_memory_append', 'qq_memory_query', 'qq_memory_remove', 'qq_memory_clear',
     // 黑话面
     'qq_slang_query', 'qq_slang_submit', '不重复提交',
-    // 频率上限
-    '普通闲聊约 3~5 轮一张', '别刷屏', '每条只能一张，不能附带文字', '不要频繁拍',
+    // 频率上限：固定轮数已交给控制台档位（注入的【表情包策略】），preset 自己不能再写死。
+    '以本轮注入的【表情包策略】里的档位为准', '不要自己套固定的', '发送被拒就自然收手',
+    '别刷屏', '每条只能一张，不能附带文字', '不要频繁拍',
     // 会话令牌是硬前置，漏传会被拒绝。
     '作为 token 参数传入',
     // 指定成员唤醒
     'triggers.speakerIds', '不凭记忆乱填',
   ]) assert.ok(prefix.includes(text), `missing rule: ${text}`);
+});
+
+test('qq_admin 的三档语义与 persona_veto 协议仍在 preset 里', () => {
+  for (const text of ['「不开放」', '「仅应要求」', '「人设自主」', 'persona_veto', '不要换说法重试', '自己发起']) {
+    assert.ok(prefix.includes(text), `missing autonomy tier protocol: ${text}`);
+  }
+  // 「人设自主」档下模型可以主动发起，旧口径必须消失；否则它会拿旧规则拒绝本该做的事。
+  assert.equal(prefix.includes('绝不自己发起'), false, '「绝不自己发起」与新三档冲突，已被移除');
 });
 
 console.log(`reserved2 persona prefix: ${prefix.length} characters (not a model-token estimate)`);

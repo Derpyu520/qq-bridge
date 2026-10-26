@@ -273,3 +273,61 @@ test('denied group reads never reveal the group allowlist', async () => {
     assert.ok(calls.length >= 1, '应当只经过桥接的鉴权/拒绝路径');
   }
 });
+
+// QQ 资料 / 空间（默认开启）：MCP 侧只做「转发 + 把资料/头像拼成模型能读的内容」，
+// 真正的权限在桥接端点。这里钉三件事：
+//   1. 资料文字只来自桥接返回的白名单字段，头像作为 image content 进入视觉上下文；
+//   2. 发说说的 pending 不能被说成「已发送」；
+//   3. 三个工具都登记了注册期开关（否则控制台关不掉，还会白占 schema）。
+test('qq_get_user_profile returns profile text plus image content', async () => {
+  const calls = [];
+  const callTool = loadSnowlumaTools(async (url, init = {}) => {
+    calls.push({ url: String(url), init });
+    return Response.json({
+      ok: true,
+      key: 'group:1',
+      profile: {
+        userId: '111', nickname: '小明', remark: '明明', sex: 'male', sexLabel: '男',
+        age: 20, signature: '今天也在摸鱼', level: 59, vip: false, vipLevel: 0,
+        accountYears: 10, online: { code: 10, label: '在线' }
+      },
+      source: { profile: 'live', avatar: 'live' },
+      avatar: { mimeType: 'image/png', data: 'iVBORw0KGgo=' }
+    });
+  }, { socialV2: { tools: {} } }, null, 'reserved2');
+
+  const result = await callTool('qq_get_user_profile', { key: 'group:1', token: 'fixture-token', userId: '111', avatar: true });
+  assert.notEqual(result.isError, true);
+  const text = result.content.filter((c) => c.type === 'text').map((c) => c.text).join('\n');
+  assert.match(text, /昵称：小明/);
+  assert.match(text, /备注：明明/);
+  assert.match(text, /个性签名：今天也在摸鱼/);
+  assert.match(text, /QQ 等级：59/);
+  assert.equal(result.content.some((c) => c.type === 'image' && c.mimeType === 'image/png'), true);
+  assert.match(calls[0].url, /\/api\/socialV2\/user-profile\?key=group%3A1&userId=111&avatar=1/);
+  assert.equal(calls[0].init.headers['x-agent-token'], 'fixture-token');
+});
+
+test('qq_qzone_post surfaces pending and never claims it was published', async () => {
+  const callTool = loadSnowlumaTools(async () => Response.json({
+    ok: true, status: 'pending', id: 7, summary: '发 QQ 空间说说：「测试」｜所有人可见',
+    message: '已把确认卡发到管理员私聊（#7）。确认前不要说已经发了。'
+  }), { socialV2: { tools: {} } }, null, 'reserved2');
+  const result = await callTool('qq_qzone_post', { key: 'group:1', token: 'fixture-token', content: '测试' });
+  assert.notEqual(result.isError, true);
+  const text = result.content[0].text;
+  assert.match(text, /确认卡/);
+  assert.doesNotMatch(text, /已发布/);
+});
+
+test('QQ profile/qzone tools are registered behind their tool flags', () => {
+  const src = fs.readFileSync(new URL('../src/mcp-snowluma-safe.js', import.meta.url), 'utf8');
+  for (const [tool, flag] of [
+    ['qq_get_user_profile', 'getUserProfile'],
+    ['qq_qzone_read', 'qzoneRead'],
+    ['qq_qzone_post', 'qzonePost']
+  ]) {
+    assert.match(src, new RegExp(`${tool}: '${flag}'`), `${tool} 必须登记注册期开关 ${flag}`);
+    assert.ok(src.includes(`'${tool}'`), `${tool} 必须真的注册`);
+  }
+});

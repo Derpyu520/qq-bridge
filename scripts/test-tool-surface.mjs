@@ -1,6 +1,6 @@
 // P3「工具面收敛」回归（2026-10-18）。
 //
-// 背景（会话实证，docs/audits/AUDIT_2026-10-18_MEDIA_AND_WATERMARK.md §3 P3）：
+// 背景（会话实证，媒体层审计 §3 P3）：
 //   一份 reserved2 会话的请求头是「58 个工具 / 45.5 KB schema（≈14k token/次）」，其中
 //     · qq_list_groups / qq_get_group_members / qq_get_group_history：旧无令牌工具，
 //       在 reserved2 下**必然** 403，白占 schema 还诱导模型误调（实测 turn10 踩过）；
@@ -195,6 +195,20 @@ await test('旧只读工具按启动模式注册，v2 群成员工具不依赖 c
     'qq_get_group_members 不能落在旧只读工具的注册开关里');
   // 工具开关登记（否则控制台关不掉它）
   assert.match(src, /qq_get_group_members: 'getGroupMembers'/, '工具开关要登记 getGroupMembers');
+});
+
+await test('头像预览工具挂在管理员动作开关内，且只收文件名', async () => {
+  const src = fs.readFileSync(path.join(ROOT, 'src/mcp-snowluma-safe.js'), 'utf8');
+  const adminAt = src.indexOf('if (adminOpsToolsEnabled()) {');
+  assert.ok(adminAt > 0, '管理员动作开关必须存在');
+  const listAt = src.indexOf("'qq_list_assets'");
+  const viewAt = src.indexOf("'qq_view_asset'");
+  assert.ok(listAt > adminAt, 'qq_list_assets 必须注册在 adminOps 开关内');
+  assert.ok(viewAt > adminAt, 'qq_view_asset 必须注册在 adminOps 开关内');
+  assert.match(src, /getConfig\(\)\.adminOps\?\.assetView\?\.enabled/, 'assetView.enabled 必须能整体关掉预览');
+  const viewBlock = src.slice(viewAt, viewAt + 1200);
+  assert.match(viewBlock, /name: z\.string\(\)/, 'view 必须只接受文件名');
+  assert.doesNotMatch(viewBlock, /path: z\.|url: z\.|file: z\./, 'view 不能接受路径/URL');
 });
 
 console.log(`\n${failures ? 'FAILED' : 'ALL PASS'}  tests=${tests} failures=${failures}`);
