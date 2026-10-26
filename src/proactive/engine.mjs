@@ -197,7 +197,16 @@ export function createProactiveEngine(deps = {}) {
           timeZone,
           policy,
           // 强制测试用：跳过「会话正忙」这道门槛，其余门槛仍然照判。
-          busy: options.forceBusy === true ? false : (deps.isBusy ? deps.isBusy(userId, scope.dshSessionId) === true : false),
+          // 两道都要算：
+          //   ① deps.isBusy —— QQ 这一侧忙不忙（有没有正在等的唤醒）；
+          //   ② activeTurns —— DSH 会话里有没有回合在跑。
+          // ② 是 10-26 夜里补的：prompt 走 queue 会排在正在跑的那一轮后面，而等回复只等 180s，
+          // 排在别人后面必然超时，还白烧一次调用额度（那几次「等 DSH 回复超时」全是这个原因）。
+          // 只判 ① 的时候，正干着活它照样发起，然后怪我没回它。
+          busy: options.forceBusy === true
+            ? false
+            : ((deps.isBusy ? deps.isBusy(userId, scope.dshSessionId) === true : false)
+              || (activeTurns.get(scope.dshSessionId) ?? 0) > 0),
         });
 
         const detail = {
