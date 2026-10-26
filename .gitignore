@@ -1,68 +1,33 @@
-# Dependencies
+# 依赖
 node_modules/
 .npm-cache/
 
-# Runtime state and local config (never publish)
+# 运行时状态与本机配置（绝不提交）
 state/
 config.json
 *.log
 *.bak
 *.bak-*
+.tmp/
 
-# Local development / planning / research docs (not part of public project)
-/PROJECT_GUIDE.md
-/ARCH_REVIEW.md
-/DSH_QQ_TOOLS_PLAN.md
-/GEN2_SIMULATION_PLAN.md
-/SOCIAL_MODE_PLAN.md
-/RESEARCH_QQ_MESSAGE_DND.md
-/RESEARCH_SNOWLUMA_EMOJI_STICKER.md
-/SnowLuma功能调研.md
-/真人语感策略.md
-# 花费实测档案：含个人用量数据，且未被任何公开文档引用 —— 默认不发布。
-# （如需公开，删掉这一行并挪到 docs/ 后从 README 链接，避免成为孤儿文件。）
-/TOKEN_COST.md
+# 本机隐私扫描规则（含真实号码，只在本地用）
+scripts/privacy-rules.json
 
-# 本地模型选型 / 硬件配置调研（内部笔记，无任何公开文档引用）
-/LOCAL_MODEL_SIZING.md
-
-# 大体积演示视频（10.93 MB）：改由 Release 附件托管，README 有链接。
-# 注意：移除只影响此后提交、--depth 1 克隆与 Release 的 Source zip；
-# 历史中的旧 blob 仍在，完整 clone 的体积要等历史重写后才会下降。
-/assets/project-intro.mp4
-
-# Local one-off dev/debug/patch scripts
-# (machine-specific paths/IDs, or bound to artifacts of a single probe run under state/)
-/scripts/cleanup-probe-sessions.mjs
-/scripts/cleanup-probe-workspaces.mjs
-/scripts/cleanup-test-sessions.mjs
-/scripts/debug-whitelist.mjs
-/scripts/diag-archive.mjs
-/scripts/fix-probe-workspace-title.mjs
-/scripts/patch-qq-chat-v2-collect-memory.mjs
-/scripts/patch-qq-chat-v2-presleep.mjs
-/scripts/patch-qq-chat-v2-stickers.mjs
-/scripts/patch-web-mcp-timeout.mjs
-
-
-# 本机专用的隐私扫描规则（含真实 QQ 号/路径，不入库）
-/scripts/privacy-rules.json
-
-# ── 内部文档保护（修复：忽略规则仍指向旧的根目录路径）──────────────────────
-# 上面那批 `/XXX.md` 规则是按**仓库根目录**写的，但这些文档后来整体挪进了 docs/，
-# 旧规则再也匹配不上 —— 于是"原始开发文档不进公开仓库"这条约定静默失效，privacy-scan
-# 在 docs/ 里扫出多份含本机真实路径（含本机用户名与工作盘路径）的文件。这里按新路径补回。
-# 判断依据：① 原 .gitignore 已列出的同义文件；② privacy-scan 实测命中真实路径的文件；
-# ③ 安全审计/发布计划这类"写了怎么绕过"的内部文档。
-docs/audits/
-docs/design/
-docs/legacy/
-docs/research/
-docs/qq-bridge-PUBLISH_PLAN.md
-docs/qq-bridge-SECURITY_AUDIT.md
-docs/guides/PROJECT_GUIDE.md
-docs/guides/VOICE.md
-
-# 语音库（用户个人音频素材，config.json 的 socialV2.voice.dir 指向此处）
+# 个人媒体：语音库、要发给 QQ 的图片、头像候选
 audio/
+media/*
+!media/.gitkeep
+assets/*
+!assets/deepseek娘.png
+!assets/README.md
 
+# 环境变量与编辑器
+.env
+.env.*
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# 杂项
+*.swp
