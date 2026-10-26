@@ -60,6 +60,7 @@ import { buildStyleHint } from './style-sample.js';
 import { createBiliClient } from './bilibili.js';
 import { createSelfEvolve } from './self-evolve.js';
 import { createFoodPicker } from './food.js';
+import { extractFilesFromSegments, readFilesFromMessage, FILE_TEXT_MAX_CHARS } from './files.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -10156,7 +10157,7 @@ async function main() {
   }
 
   // ── 二代仿真模式（reserved2）唤醒调度 ──────────────────────────────────
-  function appendSocialV2Message(key, sender, textContent, plainContent, quoteTargetIsSelf, isOwner, messageId, media = [], userId = null, forwardIds = []) {
+  function appendSocialV2Message(key, sender, textContent, plainContent, quoteTargetIsSelf, isOwner, messageId, media = [], userId = null, forwardIds = [], files = []) {
     const st = getSocialV2State(key);
     const recentLimit = Number(cfg.socialV2?.context?.recentLimit) || 100;
     const unreadLimit = Number(cfg.socialV2?.context?.unreadLimit) || 30;
@@ -10211,6 +10212,16 @@ async function main() {
       hasForward: safeForwardIds.length > 0,
       time: Date.now()
     };
+    // 文件消息：内容在收到时就下载并解析好，随消息一起存，唤醒时直接给模型看。
+    if (Array.isArray(files) && files.length) {
+      msg.files = files.map((f) => ({
+        name: String(f?.name || '文件').slice(0, 120),
+        size: Number(f?.size) || 0,
+        ...(typeof f?.text === 'string' ? { text: f.text.slice(0, FILE_TEXT_MAX_CHARS) } : {}),
+        ...(f?.binary ? { binary: true } : {}),
+        ...(f?.error ? { error: String(f.error).slice(0, 160) } : {})
+      }));
+    }
     st.lastUnreadSeq = msg.seq;
     st.lastIncomingAt = Date.now();
     st.preSleepWaitSatisfiedAt = 0; // 有新消息进来，之前的“沉睡前已等待/已观察”作废
@@ -10588,6 +10599,24 @@ async function main() {
     const tokenLine = `【会话令牌】${st.agentToken}（调用二代状态工具时请在参数中带上此令牌）\n\n`;
     const memoryText = formatMemoryV2(st);
     const memoryLine = memoryText ? `${memoryText}\n\n` : '';
+    // 最近收到的文件：把解析出的文本直接注入，模型没有文件系统工具，不喂进来就真的读不到。
+    const fileLine = (() => {
+      const seen = new Set();
+      const msgs = [...(Array.isArray(st.unread) ? st.unread : []), ...(Array.isArray(st.recentMessages) ? st.recentMessages : [])]
+        .filter((m) => m && Array.isArray(m.files) && m.files.length)
+        .filter((m) => (m.seq == null ? true : (seen.has(m.seq) ? false : (seen.add(m.seq), true))));
+      if (!msgs.length) return '';
+      const parts = [];
+      for (const m of msgs.slice(-2)) {
+        for (const f of m.files) {
+          if (typeof f.text === 'string') parts.push(`- ${f.name}（来自 ${m.sender}，${f.size || f.text.length} 字节）：\n${f.text}`);
+          else if (f.error) parts.push(`- ${f.name}（来自 ${m.sender}）：读取失败：${f.error}`);
+          else parts.push(`- ${f.name}（来自 ${m.sender}）：不是文本文件，只有文件名`);
+        }
+      }
+      const body = parts.join('\n\n').slice(0, 12000);
+      return body ? `【最近收到的文件】\n${body}\n（内容已经替你读过；回答时按需要引用，别整段复读。）\n\n` : '';
+    })();
     // 注意：黑话表不在这里注入，deliverPromptNow 的 withSlangContext 会统一注入，
     // 避免唤醒 prompt 出现两份黑话表。
     const participationText = formatParticipationV2(st, key.startsWith('group:'));
@@ -10679,7 +10708,7 @@ async function main() {
     const slot = nowDate.getHours() < 5 ? '凌晨' : nowDate.getHours() < 9 ? '早上' : nowDate.getHours() < 12 ? '上午'
       : nowDate.getHours() < 14 ? '中午' : nowDate.getHours() < 18 ? '下午' : nowDate.getHours() < 23 ? '晚上' : '深夜';
     const nowLine = `【现在】${nowDate.getFullYear()}年${nowDate.getMonth() + 1}月${nowDate.getDate()}日 ${weekNames[nowDate.getDay()]} ${hh}:${mi}（${slot}）\n\n`;
-    const base = nowLine + roleUpdateHint() + roleLine + identityLine + tokenLine + initialPromptLine + antiAiLine + styleLine + selfLine + selfGuide + proactiveLine + stickerLine + replyLine + statusLine + innerGuide + innerLine + wakeLine + memoryLine + participationLine + preSleepLine;
+    const base = nowLine + roleUpdateHint() + roleLine + identityLine + tokenLine + initialPromptLine + antiAiLine + styleLine + selfLine + selfGuide + proactiveLine + stickerLine + fileLine + replyLine + statusLine + innerGuide + innerLine + wakeLine + memoryLine + participationLine + preSleepLine;
     if (reason === 'bootstrap') {
       return `${base}【引导唤醒】你已接入 QQ 会话 ${key}。\n当前是二代仿真模式：你的文本输出不会自动发送到 QQ，所有发言必须通过工具完成。\n请先调用 qq_get_prompt 查看角色、推荐值、可用工具和状态；有待回应的消息先按首回复节奏处理，最后才用 qq_set_wake_config 设置你希望如何被唤醒。`;
     }
@@ -11280,6 +11309,25 @@ async function main() {
     const textContent = await segmentsToText(event.message ?? [], { resolveAtName, resolveReply });
     const plainContent = await segmentsToText(event.message ?? [], { resolveAtName, includeReply: false });
     const mediaList = extractMediaFromSegments(event.message ?? []);
+    // 文件消息：QQ 群/私聊发来的 txt、json、md 之类，收到就下载解析，内容随消息一起存，
+    // 唤醒时直接给模型看（模型自己没有文件系统工具，只能靠桥接把文本喂进去）。
+    let fileEntries = [];
+    try {
+      const fileSegs = extractFilesFromSegments(event.message ?? []);
+      if (fileSegs.length) {
+        fileEntries = await readFilesFromMessage({
+          kind,
+          convId: id,
+          files: fileSegs,
+          httpUrl: String(cfg.snowluma?.httpUrl || 'http://127.0.0.1:3000').replace(/\/+$/, ''),
+          accessToken: cfg.snowluma?.accessToken,
+          log
+        });
+        log(`[file] ${key} 收到文件：${fileEntries.map((f) => `${f.name}${f.text ? '（已读取 ' + f.text.length + ' 字）' : f.error ? '（失败）' : '（非文本）'}`).join('、')}`);
+      }
+    } catch (error) {
+      log(`[file] 处理文件消息失败：${String(error?.message ?? error).slice(0, 160)}`);
+    }
     const messageRef = String(event.message_id ?? event.msg_id ?? event.message_seq ?? '');
     const seqRef = event.message_seq != null ? String(event.message_seq) : '';
     const refsToStore = [...new Set([messageRef, seqRef].filter(Boolean))];
@@ -11422,7 +11470,7 @@ async function main() {
     // 二代仿真模式（reserved2）：唤醒调度
     if (currentMode === 'reserved2') {
       const sender = kind === 'group' ? (event.sender?.card || event.sender?.nickname || String(event.user_id)) : '私聊';
-      appendSocialV2Message(key, sender, textContent, plainContent, quoteTargetIsSelf, isOwner, event.message_id ?? event.msg_id ?? null, mediaList, event.user_id ?? null, extractForwardIds(event.message ?? []));
+      appendSocialV2Message(key, sender, textContent, plainContent, quoteTargetIsSelf, isOwner, event.message_id ?? event.msg_id ?? null, mediaList, event.user_id ?? null, extractForwardIds(event.message ?? []), fileEntries);
       // 二代同样收集群聊黑话学习素材（AI 自主提交之外，桥接仍自动提取高频陌生词）
       if (kind === 'group') feedSlangWindow(key, sender, plainContent);
       if (socialV2.paused) {
