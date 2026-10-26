@@ -1,16 +1,18 @@
 # QQ ↔ DeepSeek Harness Bridge (qq-bridge)
 
-> Connect QQ messages to DeepSeek Harness (DSH) agents: QQ friends/groups become DSH conversations, and agent replies (including questions and tool approvals) are sent back to QQ.
+> Connect QQ messages to DeepSeek Harness (DSH) agents — with an independent persona per chat, memory of the people it talks to, and owner commands from private chat. QQ friends/groups become DSH conversations, and agent replies (including questions and tool approvals) are sent back to QQ.
 
-> ⚠️ **Current release `v0.2.1-r1`, targets DSH 0.2.1-rc.2** (also compatible with 0.2.0-rc.2; verified item by item on both — run `npm run verify:adaptation`). It uses the persistent local signing key to **mint the session Cookie offline**, slash RPC endpoints and the `/api/remote.mux` event stream — a protocol generation introduced in DSH `0.1.2-alpha.1`, incompatible with the older dot-endpoint protocol. Reading the launch token out of the old guard logs has not worked since DSH 0.1.7 (the token is generated per process and never written to disk). Agent presets are `@deepseek-ai/dsh-agent-preset` Cordis rows since DSH 0.1.7 (the `~/.dsh/.agent-presets/` directory mechanism is gone). On **DSH `0.1.1-rc.2` or earlier**, use tag [`v0.1.0`](https://github.com/Derpyu520/qq-bridge/releases/tag/v0.1.0); for **DSH 0.1.5-rc.1** use [`v0.1.5`](https://github.com/Derpyu520/qq-bridge/releases/tag/v0.1.5); for **DSH 0.1.7-rc.2** use [`v0.1.7`](https://github.com/Derpyu520/qq-bridge/releases/tag/v0.1.7).
+> ⚠️ **Current release `v0.3.0`: the Gen2-era improvements plus the first public build of the Gen3 simulation (`reserved3`)**, targeting DSH 0.2.1-rc.2.
+> `reserved2` is kept intact and can be switched back at any time; both generations share the same config baseline and tool surface.
 >
-> **r4 highlights**: sticker/animated-emoji pipeline (CDN first, `emoji_id` fallback, multi-address DNS failover), web search now reuses DSH's own DeepSeek search backend (Bing only as fallback), `qq_wait_for_messages` long-polling past the 300 s undici timeout, plus fixes for the mode-switch rollback, permanent "busy" turns, missing self-identity injection and a full-project audit. Details: [Release v0.2.0-r4](https://github.com/Derpyu520/qq-bridge/releases/tag/v0.2.0-r4).
+> Gen3 is not a separate engine: it is the same social kernel plus a separate config profile and a separate preset (`qq-chat-v3`). The real difference lives in the prompt: it treats the agent as a QQ group member, decides whether to reply from the behavior contract and reply pressure (staying silent is allowed), and explicitly drives `qq_context`, person cards, digests and the interaction tools. Both generations share the delay/typing layer, episodic summaries, reply pressure, quota, burst splitting and persona-switch isolation.
+> Design and configuration: [docs/design/GEN3.md](docs/design/GEN3.md); evaluation protocol: [docs/guides/GEN3_CHAT_PERSONA_EVAL.md](docs/guides/GEN3_CHAT_PERSONA_EVAL.md).
 >
-> **v0.2.1-r1 highlights**: DSH 0.2.1-rc.2 adaptation. Fixes a **P0** — the `{{cwd}}` prompt variable used by both QQ presets was removed in DSH 0.2.1, so *every* turn failed during system-prompt assembly before the model ran (QQ showed it as "no reply at all"). Also adds the newly global `working_directory` tool plus the terminal / session-query / plugin-market families to the safety guard. Details: [docs/guides/DSH_021_ADAPTATION.md](docs/guides/DSH_021_ADAPTATION.md).
+> DSH compatibility, older releases and per-release notes live upstream at [Derpyu520/qq-bridge releases](https://github.com/Derpyu520/qq-bridge/releases). The default branch `main` is this version.
 >
-> The default branch `main` **is** this version — a plain `git clone` gets it, no branch switching needed.
+> **Scope:** this is not only Gen3. Compared with upstream `main`, the tree carries the whole batch of Gen2-era improvements as well (admin operations, permissions, quotas, profile/QZone, sticker system, person cards, proactive scoring, media/document/voice, console, tests). See **[docs/CHANGES.md](docs/CHANGES.md)** for the file-level list.
 
-For the detailed Chinese guide, see **[docs/guides/PROJECT_GUIDE.md](docs/guides/PROJECT_GUIDE.md)**.
+For the detailed guide, see the Chinese **[README.md](README.md)**.
 The documentation index (one line per doc, with "still current?" notes) is **[docs/README.md](docs/README.md)**;
 the repository/folder and script-naming conventions are in **[docs/FOLDER_MAP.md](docs/FOLDER_MAP.md)**.
 
@@ -35,10 +37,25 @@ QQ messages ──► SnowLuma (OneBot v11 WS) ──► qq-bridge ──► DSH
 - Space-based message splitting for more natural multi-message replies.
 - Whitelist/blacklist access control, fail-closed by default.
 - Sensitive text audit prevents paths/credentials from being sent to QQ.
-- MCP tools for reading group history/members, sending messages, replying with quotes, and (in `reserved2`) full simulated-group-friend tooling.
+- MCP tools for reading group history/members, sending messages, replying with quotes, and (in `reserved2` / `reserved3`) full simulated-group-friend tooling.
 - Slang/network-expression learning with human confirmation.
 - Lightweight memory system for active topics, pending thoughts and member impressions.
-- Sticker library integration with AI-friendly sticker usage.
+- Sticker library integration with AI-friendly sticker usage, including **deleting its own collected
+  stickers** (`qq_delete_sticker`): irreversible, therefore default permission is "on request only"
+  (the owner must be the last speaker), with per-minute/hour/day caps and a post-delete read-back.
+- **Configurable sticker send frequency** (`socialV2.sticker.send.mode`): `off` / `low` / `normal`
+  (default) / `high` / `persona` ("entirely by persona"). The tier drives both the injected prompt
+  guidance and a bridge-side cap (0/2/6/15 stickers per 10 minutes, min gap 0/45/3/1 s); `persona`
+  imposes no tier cap and lets the role card decide, still bounded by the global send quota.
+- **QQ profiles / avatars / Qzone (on by default)**: `qq_get_user_profile` returns a whitelisted
+  public profile (nickname, remark, sex/age, signature, level, QQ age, online) plus the avatar as
+  image content for the vision model — only for people seen in the current chat/group, the private
+  peer, or an QQ number the owner explicitly asked about (per-session quota).
+  `qq_qzone_read` reads your own posts / friends' feed (HTML is reduced to short text) and
+  `qq_qzone_post` publishes a post through the admin-action queue: owner requests run directly,
+  everyone else gets a confirmation card; image names are restricted to the `media/` library, with
+  hourly/daily caps, duplicate suppression and read-back verification. See
+  [docs/guides/QQ_PROFILE_QZONE.md](docs/guides/QQ_PROFILE_QZONE.md).
 
 ## Requirements
 
@@ -82,7 +99,7 @@ Or double-click `start.bat` on Windows (guard mode with auto-restart).
 
 ## DSH Setup on Another Device
 
-The bridge and console can run without extra DSH setup, but the two DSH chat presets (`qq-chat` and `qq-chat-v2`) and the MCP servers must be installed into DSH once per machine:
+The bridge and console can run without extra DSH setup, but the three DSH chat presets (`qq-chat`, `qq-chat-v2`, `qq-chat-v3`) and the MCP servers must be installed into DSH once per machine:
 
 ```bash
 node scripts/setup-dsh.mjs
@@ -90,10 +107,10 @@ node scripts/setup-dsh.mjs
 
 This installs:
 
-- the `qq-agent-presets` bundle, which generates the two `@deepseek-ai/dsh-agent-preset` rows (`qq-chat`, `qq-chat-v2`) plus the shared `qq-tool-restrict` safety guard
+- the `qq-agent-presets` bundle, which generates the three `@deepseek-ai/dsh-agent-preset` rows (`qq-chat`, `qq-chat-v2`, `qq-chat-v3`) plus the shared `qq-tool-restrict` safety guard
 - MCP entries in `~/.dsh/profiles/web/cordis.patch.yml`
 - `qq-mode-console` and `qq-agent-presets` in the profile `package.json` (`bundles` + `link:` dependencies)
-- Default DSH mode set to `reserved2` (second-generation simulation), with a local `state/mode.json` fallback
+- Default DSH mode set to `reserved2` (second-generation simulation), with `reserved3` (third-generation) selectable from the console and a local `state/mode.json` fallback
 
 Then restart DSH. See [docs/guides/DSH_SETUP.md](docs/guides/DSH_SETUP.md) for details.
 
@@ -111,32 +128,29 @@ Then restart DSH. See [docs/guides/DSH_SETUP.md](docs/guides/DSH_SETUP.md) for d
 qq-bridge/
   config.example.json   # sanitized config template (real config.json is not in repo)
   docs/
-    README.md           # documentation index (one line per doc + "still current?" notes)
+    README.md           # documentation index
     FOLDER_MAP.md       # folder layout and scripts/ naming conventions
-    guides/             # user/operator facing: PROJECT_GUIDE, DSH_SETUP, VOICE, TOKEN_USAGE_CONSOLE, CONSOLE-UI-TESTING
-    design/             # design & planning docs
-    research/           # investigation notes
-    audits/             # review / optimisation reports
-    legacy/             # archived docs that were superseded
-  dsh/agent-presets/    # qq-chat / qq-chat-v2 DSH agent preset templates
-  plugins/qq-agent-presets  # DSH bundle: generates the qq-chat / qq-chat-v2 preset patch rows + the shared tool guard
-  plugins/qq-mode-console  # DSH plugin: exposes the qq-mode settings namespace (host half only; no UI card yet)
+    guides/             # DSH_SETUP, ADMIN_OPS, GEN3_CHAT_PERSONA_EVAL, PRIVACY, SECURITY_BASELINE …
+    design/GEN3.md      # Gen3 design, configuration and rollback
+    UPSTREAM_PR.md      # how to send Gen3 upstream as a PR
+  dsh/agent-presets/    # qq-chat / qq-chat-v2 / qq-chat-v3 preset templates
+  plugins/              # qq-mode-console + qq-agent-presets (preset patch bundler)
+  public/console.html   # local web console (no build step)
+  roles/                # persona cards (examples: 傲娇助手, 小鲸鱼)
+  skills/qq-persona-card # DSH skill for writing persona cards
   src/                  # bridge core and MCP servers
-  public/
-    console.html        # local web console
-  roles/                # persona cards
-  assets/               # images (the intro video ships as a release asset, not in the repo)
+  assets/               # avatar candidates
+  media/                # images sent to QQ (not in repo)
   scripts/              # tests and helper scripts
   state/                # runtime data (not in repo)
 ```
 
-The standalone **voice sender tool** (`voice-cli.mjs`, `voice-gui.mjs`, `public/voice.html`, `发语音.cmd`)
-lives in the sibling folder **`../voice-tool/`** — it only needs SnowLuma, and reuses this repo's
-`src/voice-core.js` / `src/snowluma-conn.js` as the single shared implementation.
+The standalone voice GUI is not part of this repo; the sending core lives in
+`src/voice-core.js` / `src/send-voice-lib.js` and is disabled by default (`socialV2.voice.enabled`).
 
 ## Testing
 
-`npm run test:audit` runs isolated regression tests without production credentials, DSH, or QQ messages. The detailed audit is in [docs/audits/AUDIT_REPORT_2026-09-20.md](docs/audits/AUDIT_REPORT_2026-09-20.md) (Chinese); the 2026-09-18 one it superseded is archived in [docs/legacy/](docs/legacy/).
+`npm run test:audit` runs isolated regression tests without production credentials, DSH, or QQ messages; `npm run test:regressions` covers the Gen3 regressions, and `npm run privacy-scan` must stay green before publishing a fork.
 
 After upgrading, legacy QQ session mappings without permission metadata are recreated once. Mode or preset changes also retire the old mapping and recreate the session on the next message; DSH history is retained.
 

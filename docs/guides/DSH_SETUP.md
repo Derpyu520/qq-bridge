@@ -9,7 +9,7 @@
 1. **克隆/获取仓库**：
 
    ```bash
-   git clone https://github.com/Derpyu520/qq-bridge.git
+   git clone https://github.com/<你的 GitHub 用户名>/qq-bridge.git
    cd qq-bridge
    ```
 
@@ -59,7 +59,7 @@
      - `mcp-snowluma-host`（`src/mcp-host-server.js`）
      - `mcp-web-search-safe`（`src/mcp-web-search-safe.js`）
    - 在 `~/.dsh/profiles/web/package.json` 注册 `qq-mode-console` 与 `qq-agent-presets`（`dsh.profile.bundles` + `link:` 依赖），并维护 `node_modules` 下的 junction
-   - 把 `qq-mode` 的默认模式设为 `reserved2`（二代仿真）
+   - 安装 `qq-chat` / `qq-chat-v2` / `qq-chat-v3` 三套 preset；把 `qq-mode` 的默认模式设为 `reserved2`（二代仿真），保留 `reserved3`（三代仿真）供控制台一键切换
    - 创建本地 `state/mode.json`（`mode: reserved2`）作为 DSH settings 不可用时的兜底
    - 尝试自动执行 `dsh plugin --profile web install`（当 `dsh` CLI 在 PATH 中可用时），注册两个插件的 bundle 依赖；若 `dsh` 不在 PATH，缺失依赖时 DSH 会提示补跑
 
@@ -117,6 +117,10 @@
 - **QQ preset 挂载失败，群里 AI 完全没反应**：`chat` / `reserved` / `reserved2`（会话可能属于 QQ 群）**必须**挂上 `qq-chat` / `qq-chat-v2`，否则桥接**直接拒绝建会话**并打日志 `⛔ 群聊/仿真会话缺少 preset …`——QQ 上表现为「发了消息没人回」，而桥接日志里能查到原因。这是有意的 fail-closed 设计：**「无 preset 会话」= DSH 默认 preset（通常 `standard`，含 bash/文件读写）**，降级过去等于把本地工具暴露给群里的任何人。`closed-agent` 模式（仅 owner 私聊）是唯一例外，那里本就使用完整工具面，允许回落。修复：确认 `plugins/qq-agent-presets` bundle 已注册进 profile（`bundles` + `link:` 依赖 + `node_modules` junction 三者齐备，跑 `node scripts/setup-dsh.mjs` 可自动补齐）并重启 DSH；若手改过 `config.json` 的 `agentPreset`，确认该名字确实在 DSH 的 preset 清单里。
 - **发送消息报 `unauthorized` / HTTP 401**：`config.json` 的 `snowluma.accessToken` 与 SnowLuma 的 OneBot 实例 token 不一致。将 SnowLuma WebUI 中 HTTP 与 WebSocket 两端的 accessToken 设为相同，再填入 `config.json`，然后重启桥。
 - **DSH 侧 401/鉴权失败**：DSH 0.1.7 起进程启动 token 是**每进程现生成、只存在内存**的随机数（不落盘、不可推导），旧版「从 `~/.dsh/guard/logs/server-*.out.log` 里读 token」的办法已经失效（读到的是上一个进程的陈旧 token，换 Cookie 只会 401）。桥接现在**默认离线铸造 Cookie**：读 `~/.dsh/.credentials.yaml` 里持久化的 `client-connection/browser-session` 签名密钥自签一个会话 Cookie，不依赖任何进程期状态。`config.json` 的 `dsh.authToken` 一般应留空；只有显式填了才会优先走 token 交换。若报鉴权失败，先确认 `DSH_HOME` 指向真正的 `.dsh` 目录、且该文件里有 `client-connection/browser-session` 记录。`npm run test:dsh-auth`（17 项断言）与 `npm run self-test` 可快速定位。
+- **DSH 更新/重启后桥接「连不上 DSH」（事件流每次都是 0 帧）**：先核对 `config.json` 的 `dsh.baseUrl` 与 DSH 窗口/浏览器地址栏里的端口 —— DSH 桌面版换版本后绑定端口会变（实测 `12516` → `2500`），而桥接连的是配置里的静态地址。端口对不上时的现象是「连接 DSH 事件流…」→「已结束（本次收到 0 帧）」循环，外加「读取 DSH 模型能力失败…`fetch failed`」。`fetch failed` 是**连接层**错误（ECONNREFUSED），不是版本/协议不兼容；日志里那句「多半是 DSH 侧事件流协议/版本不匹配」在这类场景是**误诊**（连接被拒看起来同样是「连上→0 帧→断开」）。
+  - 默认 `dsh.autoDiscover: true`：`settings/describe` 失败时桥接会枚举本机 LISTENING 端口，用**无凭据**的 `GET /` 指纹（`__DSH_BOOT__` / `DeepSeek Harness` / `dsh-auth-` Cookie）粗筛，再用一次真实 RPC 验证，**验证通过才切换**并写回 `config.json`；60 秒最多一次。成功时日志是「🔎 DSH 端点已自动跟随：… → …」，随后照常出现「DSH 已就绪」。
+  - 设为 `false`、或跑多份 DSH 时：手动把 `dsh.baseUrl` 改成当前端口，重启桥接（`restart.bat` 或控制台「重启桥接」）。
+  - 回归测试：`npm run test:dsh-endpoint`（离线，不依赖 DSH 在线）。
 - **发送消息报 HTTP 426（Upgrade Required）**：说明 `config.json` 里的 `snowluma.httpUrl` 指向了 **WebSocket 端口**。`httpUrl` 必须是 OneBot 的 **HTTP API 地址**（例如 `http://127.0.0.1:3000`），而 `wsUrl` 才是 WebSocket 地址（例如 `ws://127.0.0.1:3001`）。请在 SnowLuma WebUI 的 OneBot 配置里分别确认 HTTP 和 WebSocket 的端口。也可以运行诊断脚本：
    ```bash
    node scripts/check-onebot-status.mjs

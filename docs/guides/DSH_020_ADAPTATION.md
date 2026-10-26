@@ -46,7 +46,7 @@
 | 13 | `scripts/test-preset-local-tools.mjs` | 删掉自带的模糊抽取器，改用 §3 的唯一实现；名单同步 | §3 |
 | 14 | `scripts/test-audit.mjs` | 清单加入 2 个新脚本（28 → 30） | §6 |
 | 15 | 版本身份：`package.json`、`package-lock.json`、两个插件包、三个 MCP serverInfo | 0.1.7 → **0.2.0** | §6 |
-| 16 | 文档：`README.md`、`README.en.md`、`RULES.md`、`docs/FOLDER_MAP.md`、`docs/guides/DSH_SETUP.md`、`docs/guides/SECURITY_BASELINE.md`、`docs/guides/PROJECT_GUIDE.md` | 版本行、preset 安装位置、鉴权说明、脚本清单、过期清单 | §6 |
+| 16 | 文档：`README.md`、`README.en.md`、`RULES.md`、`docs/FOLDER_MAP.md`、`docs/guides/DSH_SETUP.md`、`docs/guides/SECURITY_BASELINE.md` | 版本行、preset 安装位置、鉴权说明、脚本清单、过期清单 | §6 |
 
 ---
 
@@ -58,7 +58,7 @@
 
 - 读队列的代码（`frame.value.value?.queues`）由提交 `288642d`（**2026-09-18**）引入，
   并**随 v0.1.7 发布**（`git merge-base --is-ancestor 288642d ce726bb` 成立）。
-- `state/bridge.log` 里有 `invalid session/control baseline` 报错，时间是 **9/27 21:37** 与 **9/28 08:16**。
+- `state/bridge.log` 里有 `invalid session/control baseline` 报错，时间都在 9 月下旬、0.2.0 发布之前。
 - DSH `0.2.0-rc.2` 的发布时间是 **2026-09-29**。
 
 ⇒ 报错**全部发生在 0.1.7-rc.2 上**。也就是说：**这段解析从来没有工作过**，不是 0.2.0 改坏了它，
@@ -255,7 +255,6 @@ schema 接受全部 mode 拼写、**不再出现 `settings.register`**（只看�
 | `docs/FOLDER_MAP.md` | 脚本数、被删/新增脚本、探针状态 |
 | `docs/guides/SECURITY_BASELINE.md` | 守卫两道闸门与对账工具；回归清单脚本数与新增命令 |
 | `RULES.md` | preset 修改说明指向已废弃目录 |
-| `docs/guides/PROJECT_GUIDE.md` | 它是历史说明书（文首自带"已过时"清单），补了第 3、4 条：preset 机制、鉴权链路 |
 
 ---
 
@@ -331,16 +330,16 @@ HTTP transport 下起作用，而三个 MCP server 全是 stdio。清掉是为�
 
 ### 9.2 真实 QQ 链路实测（活群）
 
-在真实白名单群里跑通了一个完整来回（记录取自 `state/`）：
+在真实白名单群里跑通了一个完整来回，按时序记录如下（以入站消息到达时刻为 T+0）：
 
-| 时刻 | 发生的事 |
+| 相对时刻 | 发生的事 |
 | --- | --- |
-| 22:07:45 | 入站：`@小鲸鱼`（owner）→ 进未读队列 |
-| 22:07:54 | 桥接**新建 DSH 会话**、挂上 `qq-chat-v2` preset、模型固定 `deepseek-official/deepseek-flash (max)` |
-| 22:07:56 | agent 调 `qq_get_prompt` → 拿到会话令牌与人设 ✅ |
-| 22:08:02 | agent 调 `qq_send_message` → **成功 2/2 条** |
-| 22:08:15 | 入站：`没事` |
-| 22:08:29 | agent 再发 1 条 → **成功 1/1** |
+| T+0s | 入站：一条 @机器人 的群消息（owner 发出）→ 进未读队列 |
+| T+9s | 桥接**新建 DSH 会话**、挂上 `qq-chat-v2` preset、模型固定 `deepseek-official/deepseek-flash (max)` |
+| T+11s | agent 调 `qq_get_prompt` → 拿到会话令牌与人设 ✅ |
+| T+17s | agent 调 `qq_send_message` → **成功 2/2 条** |
+| T+30s | 入站：一条普通群消息 |
+| T+44s | agent 再发 1 条 → **成功 1/1** |
 
 一条链路同时验证了：0.2.0 的 **preset bundle 机制**、**离线铸造 Cookie 鉴权**、
 `session/selectModel`、三个 **MCP 工具**的活调用，以及人设确实在起作用（短句、不像客服、不汇报）。
@@ -394,7 +393,7 @@ v0.2.0 发布后，有人反馈「**QQ 注入失败**」。调查后修了三类
 | 它自己报 `good=false` | 桥接**从不读 `good`**；没有看门狗（对比：DSH 有 5 秒探活）、`/api/status` 没有字段、控制台没有指示、文档没有排查分支 |
 
 ⇒ 症状是「接了但没反应」，而**没有任何证据指向 SnowLuma**，于是被报成「qq-bridge 注入失败」。
-用户自己的 SnowLuma 日志里 `receive path stale` 出现过 4 次（3 次自愈）—— 这个状态是**常态化偶发**，
+测试环境的 SnowLuma 日志里 `receive path stale` 出现过 4 次（3 次自愈）—— 这个状态是**常态化偶发**，
 不是别人的特殊环境。
 
 **修复**：桥接现在把上游健康报出来（`/api/status.snowluma` + 控制台「运行总览」卡片 +
@@ -436,7 +435,7 @@ v0.2.0 发布后，有人反馈「**QQ 注入失败**」。调查后修了三类
 
 ### E. 全新 clone 上 `npm run test:audit` 会失败 7 个脚本（真实的打包缺陷）
 
-用一个真的 `git clone` 复现的（作者机器上全绿，所以一直没人发现）：
+用一个真的 `git clone` 复现的（开发机上全绿，所以一直没人发现）：
 
 | 原因 | 影响的脚本 |
 | --- | --- |
@@ -460,15 +459,15 @@ SnowLuma 同一账号的 **HTTP token（3000）与 WS token（3001）不同**，
 这条序列是正常的，日志文案已改清楚；真正会一直连不上的是**自愈无从下手**
 （`homeDir` 没配/被移动/读不到 `config/onebot_<QQ>.json`）—— 那才要查。
 
-### G. 运行时升到 1.14.20 的实测（2026-10-03）
+### G. 运行时升到 1.14.20 的实测
 
-把用户的运行时从 1.14.9 升到 1.14.20 并逐项实测（**安装/启动由用户自己做**，本次只做了下载、校验、
+把测试环境的运行时从 1.14.9 升到 1.14.20 并逐项实测（**安装/启动由使用者自己做**，本次只做了下载、校验、
 迁移与核对）。结论：
 
 | 检查 | 证据 |
 | --- | --- |
 | 包完整性 | `SnowLuma-v1.14.20-win-x64-lite.zip` SHA256 == 官方发布资产 `digest` |
-| **原生组件跨版本未变** | 官方 1.14.9 包 == 本机 1.14.9 == 官方 1.14.20，`native/snowluma-win32-x64.{dll,node}` 与 `websocket-win32-x64.node` **逐字节相同**；`index.mjs` 7,062,899 → 7,476,546 B |
+| **原生组件跨版本未变** | 官方 1.14.9 包 == 本地 1.14.9 == 官方 1.14.20，`native/snowluma-win32-x64.{dll,node}` 与 `websocket-win32-x64.node` **逐字节相同**；`index.mjs` 7,062,899 → 7,476,546 B |
 | 配置迁移无损 | 桥接的 `readOneBotTokens()` 在新装目录解析出两个账号，HTTP/WS token 与旧装**逐一相同** |
 | 心跳主信号仍成立 | `status = {"online":true,"good":true}`、`interval = 30000` |
 | `bot_status` 真的出现了 | 1.14.9：**0** 次；1.14.20：**3** 次（带 `sub_type`/`user_id`） |
@@ -499,7 +498,7 @@ SnowLuma 同一账号的 **HTTP token（3000）与 WS token（3001）不同**，
 ### I. r3 时**未**修、r4 已修的问题
 
 工具流水里 `mcp__snowluma__qq_wait_for_messages` 出现过 `ok:false` 且
-`error: "\"Error: [object Object]\""`（2026-09-28、2026-10-03 各一次）。错误对象被 `String()` 成了
+`error: "\"Error: [object Object]\""`（实测出现过两次）。错误对象被 `String()` 成了
 `[object Object]`，**运维与智能体都看不到任何信息**。
 
 r4 已修：MCP 侧统一走 `errorText()`（对象 → `JSON.stringify` 或取 `message`，限长 500），
@@ -528,7 +527,7 @@ r4 已修：MCP 侧统一走 `errorText()`（对象 → `JSON.stringify` 或取 
 ### J.1 图片/表情（含动图）链路
 
 **根因**：QQ 表情 CDN（`gxh.vip.qq.com` / `p.qpic.cn` / `multimedia.nt.qq.com.cn`）的 DNS 应答里
-AAAA 排在 A 前面，而本机没有 IPv6 出口；旧 `safe-fetch` 只取 `addresses[0]` 并钉死连接 ——
+AAAA 排在 A 前面，而测试机没有 IPv6 出口；旧 `safe-fetch` 只取 `addresses[0]` 并钉死连接 ——
 抢到 AAAA 的那次请求白等 20 秒超时，DNS 顺序又是轮转的，于是表现为「**部分**表情/图片时好时坏」。
 
 - `safe-fetch`：全部解析结果校验后按 **IPv4 优先、两族交替**排序；多地址时逐地址尝试
@@ -539,7 +538,7 @@ AAAA 排在 A 前面，而本机没有 IPv6 出口；旧 `safe-fetch` 只取 `ad
 - 落库（`appendSocialV2Message`）不再丢 `kind`/`emojiId`/`summary`/`subType`；`summary` 单行化并限长 60。
 - 单条媒体上限：8MB / 64MP / 5 张（`socialV2.media` 可调）。
 
-实测：29 个收藏表情 29/29 抓取成功（修复前抽样 5/6，失败那次 20003ms）；会话里的 GIF 表情
+实测：全部收藏表情抓取成功（修复前抽样偶有失败，单次曾等满 20 秒）；会话里的 GIF 表情
 `20s 超时 → 421ms`。
 
 ### J.2 联网搜索
