@@ -15,6 +15,7 @@ import yaml from 'js-yaml';
 import { extractPresetPrefix, presetPromptBlockers, presetPromptWarnings, renderPresetPromptYaml } from './preset-prompt.js';
 import { allowed, modeAllowed } from './access-rules.js';
 import { publicSlangEntry } from './slang-entry.js';
+import { resolvePresetName as resolvePresetNameCore } from './preset-resolve.js';
 import { getImageDimensions } from './media-dims.js';
 import { clampGapV2, computeGapsV2, randInt } from './qq-send-pacing.js';
 import { GEN1_ROLE_LINE_RE, parseRoleSections, roleCharStats, roleSectionReport, selectRoleText } from './role-card.js';
@@ -2746,18 +2747,14 @@ async function main() {
    *   **绝不能回退到 DSH 默认 preset（standard）**：standard 含 bash/文件读写等本地工具，
    *   一旦套在群聊会话上，群友即可驱动一个能操作本机的 agent（见 RULES.md「无本地工具」）。
    */
-  function resolvePresetName(name, { strict = false } = {}) {
-    const wanted = String(name ?? '').trim();
-    if (!wanted) return strict ? '' : (dshDefaultPreset || '');
-    // DSH 可能接受未知 preset 并套用默认值；清单未知时也必须 fail-closed。
-    if (dshPresetIds.length === 0) return strict ? '' : wanted;
-    if (dshPresetIds.includes(wanted)) return wanted;
-    log(`⚠️ preset "${wanted}" 不在 DSH 可用清单（${dshPresetIds.join(', ')}）中`);
-    if (strict) {
-      log(`⛔ 群聊/仿真会话缺少 preset "${wanted}"，拒绝回退到 DSH 默认 preset（会把本地工具暴露给 QQ 群）；请运行 node scripts/setup-dsh.mjs 并重启 DSH`);
-      return '';
-    }
-    return dshDefaultPreset || '';
+  function resolvePresetName(name, opts = {}) {
+    // 逻辑在 src/preset-resolve.js（单独测 fail-closed 分支）；这里只把闭包状态喂进去。
+    return resolvePresetNameCore(name, {
+      strict: opts.strict === true,
+      presetIds: dshPresetIds,
+      defaultPreset: dshDefaultPreset,
+      warn: (msg) => log(msg)
+    });
   }
 
   /** 当前模式下的会话预设；返回 undefined 表示「该模式下没有可安全使用的 preset」 */

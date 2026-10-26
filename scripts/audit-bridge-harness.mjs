@@ -28,6 +28,7 @@ import * as roleCard from '../src/role-card.js';
 import * as snowlumaConn from '../src/snowluma-conn.js';
 import * as accessRules from '../src/access-rules.js';
 import * as slangEntry from '../src/slang-entry.js';
+import * as presetResolve from '../src/preset-resolve.js';
 import { unwrap, createTurnCollector } from '../src/dsh-client.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -152,6 +153,7 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
       'send-voice-lib.js', 'preset-prompt.js', 'state-acl.mjs', 'dsh-client.js',
       'qq-text-split.js', 'media-dims.js', 'qq-send-pacing.js', 'role-card.js', 'snowluma-conn.js',
       'access-rules.js', 'slang-entry.js',
+      'preset-resolve.js',
       // qq-model-view.js 走另一条路：源码被摘掉 export 后在 VM 里执行（见下面的 modelViewSource）。
       'qq-model-view.js',
     ]);
@@ -162,6 +164,21 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     if (missing.length) {
       throw new Error(`审计 harness 没注入这些本地模块：${[...new Set(missing)].join(', ')} —— `
         + 'bridge.js 在 VM 里没有 import，必须把它们 ...spread 进 createContext');
+    }
+    // 别名同样要显式注入：spread 只带出模块原本的导出名，
+    // 像 `import { resolvePresetName as resolvePresetNameCore }` 这种，VM 里得到的是
+    // resolvePresetName，调用方找 resolvePresetNameCore 就是 not defined。
+    const injectedAliases = new Set(['resolvePresetNameCore']);
+    const badAliases = [];
+    for (const block of source.matchAll(/import\s*\{([^}]*)\}\s*from/g)) {
+      for (const part of block[1].split(',')) {
+        const m = /^\s*[\w$]+\s+as\s+([\w$]+)\s*$/.exec(part);
+        if (m && !injectedAliases.has(m[1])) badAliases.push(m[1]);
+      }
+    }
+    if (badAliases.length) {
+      throw new Error(`审计 harness 没注入这些 import 别名：${[...new Set(badAliases)].join(', ')} —— `
+        + '在 createContext 里显式写 `<别名>: <模块>.<原名>`，光 spread 拿不到');
     }
   }
   // 去掉顶层 import（VM 里靠 context 注入提供这些绑定）。
@@ -238,6 +255,10 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     // 只是因为没测试走到那条路径才没被发现。补上，别等下次踩。
     ...roleCard, ...snowlumaConn,
     ...accessRules, ...slangEntry,
+    ...presetResolve,
+    // bridge.js 里把它 import 成 resolvePresetNameCore（避免和 main() 内的同名包装冲突），
+    // 而模块导出名是 resolvePresetName —— 这里必须显式对上，别靠 spread 猜。
+    resolvePresetNameCore: presetResolve.resolvePresetName,
     // 桥接的出图出口会调归一化（体积/动图抽帧）：VM 里必须能拿到这几个函数。
     normalizeImageForModel: mediaNormalize.normalizeImageForModel,
     sniffImage: mediaNormalize.sniffImage,
