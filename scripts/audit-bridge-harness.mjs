@@ -21,6 +21,11 @@ import * as tokenLedger from '../src/token-ledger.js';
 import * as voiceLib from '../src/send-voice-lib.js';
 import * as presetPrompt from '../src/preset-prompt.js';
 import * as stateAcl from '../src/state-acl.mjs';
+import * as qqTextSplit from '../src/qq-text-split.js';
+import * as mediaDims from '../src/media-dims.js';
+import * as sendPacing from '../src/qq-send-pacing.js';
+import * as roleCard from '../src/role-card.js';
+import * as snowlumaConn from '../src/snowluma-conn.js';
 import { unwrap, createTurnCollector } from '../src/dsh-client.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -135,6 +140,27 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     }
   }
   let source = fs.readFileSync(path.join(root, 'src/bridge.js'), 'utf8');
+  // 自检：bridge.js 顶层 import 的每个本地模块，都必须在这里被注入到 VM。
+  // 不加这条，把函数搬进新模块后测试只会报 "xxx is not defined"，
+  // 而且常常是几十个测试一起红、看不出是同一件事。
+  {
+    const injected = new Set([
+      'md-to-plain.js', 'sensitive.js', 'v2-wait.js', 'safe-fetch.js', 'media-normalize.js',
+      'forward.js', 'slang-learner.js', 'sticker-lib.js', 'model-prices.js', 'token-ledger.js',
+      'send-voice-lib.js', 'preset-prompt.js', 'state-acl.mjs', 'dsh-client.js',
+      'qq-text-split.js', 'media-dims.js', 'qq-send-pacing.js', 'role-card.js', 'snowluma-conn.js',
+      // qq-model-view.js 走另一条路：源码被摘掉 export 后在 VM 里执行（见下面的 modelViewSource）。
+      'qq-model-view.js',
+    ]);
+    const missing = [];
+    for (const m of source.matchAll(/from '\.\/([^']+)'/g)) {
+      if (!injected.has(m[1])) missing.push(m[1]);
+    }
+    if (missing.length) {
+      throw new Error(`审计 harness 没注入这些本地模块：${[...new Set(missing)].join(', ')} —— `
+        + 'bridge.js 在 VM 里没有 import，必须把它们 ...spread 进 createContext');
+    }
+  }
   // 去掉顶层 import（VM 里靠 context 注入提供这些绑定）。
   // 必须按行处理：这些 import 有**多行**写法，用单行正则（/^import[\s\S]*?;/gm）会在
   // 第一个分号处停下，把紧跟其后的正常代码一起删掉（曾把 `cfg.socialV2.voice = {…}`
@@ -165,7 +191,9 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     getInitialPrompt, setInitialPrompt, loadInitialPrompts, formatInitialPromptV2,
     initialPrompts, initialPromptMaxChars,
     extractMediaFromSegments, segmentsToText, fetchOneBotImage, fetchMediaData, resolveMediaList,
-    emojiCdnCandidates, getImageDimensions, acceptImageBuffer, MAX_MEDIA_BYTES, bot,
+    emojiCdnCandidates, acceptImageBuffer, MAX_MEDIA_BYTES, bot,
+    // 已经搬进 src/media-dims.js，main() 里没有这个名字了；测试还在用它，从这里递出去。
+    getImageDimensions,
     isConversationBusyV2, v2TurnStartAt, turnLeaseNoted, TURN_BUSY_LEASE_MS,
     settingFromDshNamespace, selfIdentityTextV2, buildWakeReminderPromptV2,
     getMode() { return currentMode; },
@@ -200,6 +228,12 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     discoverDshLaunchToken: () => '', unwrap, createTurnCollector,
     ...markdown, ...sensitive, ...wait, ...safeFetch, ...forward, ...slang, ...sticker,
     ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...presetPrompt,
+    // 2026-10-26 起从 main() 里搬出去的纯函数模块。VM 里没有 import，全靠这里注入；
+    // 漏一个就是 "xxx is not defined"，而且往往只在某条路径上炸（见下面的自检）。
+    ...qqTextSplit, ...mediaDims, ...sendPacing,
+    // role-card / snowluma-conn 之前一直没注入：落在 VM 里就是 "not defined"，
+    // 只是因为没测试走到那条路径才没被发现。补上，别等下次踩。
+    ...roleCard, ...snowlumaConn,
     // 桥接的出图出口会调归一化（体积/动图抽帧）：VM 里必须能拿到这几个函数。
     normalizeImageForModel: mediaNormalize.normalizeImageForModel,
     sniffImage: mediaNormalize.sniffImage,

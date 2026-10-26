@@ -13,6 +13,8 @@ import crypto from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import yaml from 'js-yaml';
 import { extractPresetPrefix, presetPromptBlockers, presetPromptWarnings, renderPresetPromptYaml } from './preset-prompt.js';
+import { getImageDimensions } from './media-dims.js';
+import { clampGapV2, computeGapsV2, randInt } from './qq-send-pacing.js';
 import { GEN1_ROLE_LINE_RE, parseRoleSections, roleCharStats, roleSectionReport, selectRoleText } from './role-card.js';
 import { fileURLToPath } from 'node:url';
 import { SnowLumaWebSocketClient, text } from '@snowluma/sdk';
@@ -7531,53 +7533,7 @@ async function main() {
 
   // 解析常见图片宽高（PNG/JPEG/GIF；WebP 暂不解析返回 null）。
   // 用于限制“图片炸弹”的解码像素量。
-  function getImageDimensions(buf) {
-    if (!buf || buf.length < 24) return null;
-    try {
-      if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
-        return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
-      }
-      if (buf.toString('ascii', 0, 6) === 'GIF87a' || buf.toString('ascii', 0, 6) === 'GIF89a') {
-        return { width: buf.readUInt16LE(6), height: buf.readUInt16LE(8) };
-      }
-      if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
-        let offset = 2;
-        while (offset + 9 < buf.length) {
-          if (buf[offset] !== 0xff) { offset += 1; continue; }
-          const marker = buf[offset + 1];
-          if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) { offset += 2; continue; }
-          const len = buf.readUInt16BE(offset + 2);
-          if (len < 2) return null;
-          // SOF0-SOF15（排除 DHT C4、DAC CC、DNL DC、DRI DD）
-          if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
-            return { height: buf.readUInt16BE(offset + 5), width: buf.readUInt16BE(offset + 7) };
-          }
-          offset += 2 + len;
-        }
-      }
-      // WebP：解析 VP8X / VP8L / VP8 三种容器，避免“图片炸弹”绕过像素上限。
-      if (buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') {
-        const fourcc = buf.toString('ascii', 12, 16);
-        if (fourcc === 'VP8X' && buf.length >= 30) {
-          const width = 1 + buf[24] + (buf[25] << 8) + (buf[26] << 16);
-          const height = 1 + buf[27] + (buf[28] << 8) + (buf[29] << 16);
-          return { width, height };
-        }
-        if (fourcc === 'VP8L' && buf.length >= 25) {
-          const bits = [buf[21], buf[22], buf[23], buf[24]];
-          const width = 1 + (((bits[1] & 0x3f) << 8) | bits[0]);
-          const height = 1 + (((bits[3] & 0x0f) << 10) | (bits[2] << 2) | ((bits[1] & 0xc0) >> 6));
-          return { width, height };
-        }
-        if (fourcc === 'VP8 ' && buf.length >= 30) {
-          const width = buf.readUInt16LE(26) & 0x3fff;
-          const height = buf.readUInt16LE(28) & 0x3fff;
-          return { width, height };
-        }
-      }
-    } catch {}
-    return null;
-  }
+  // getImageDimensions 已搬到 src/media-dims.js（顶部 import 进来）。
 
   function base64FromMaybe(value) {
     if (typeof value !== 'string') return null;
@@ -7979,41 +7935,8 @@ async function main() {
     return [];
   }
 
-  function clampGapV2(ms, sendCfg) {
-    const min = Math.max(100, Number(sendCfg.burstIntervalMinMs) || 300);
-    const max = Math.max(min, Number(sendCfg.maxGapMs) || 10000);
-    return Math.max(min, Math.min(max, Math.round(Number(ms) || min)));
-  }
 
-  function computeGapsV2(messages, gapMode, gapMs, gaps, sendCfg) {
-    const delays = [];
-    if (!messages || messages.length <= 1) return delays;
-    const mode = gapMode === 'fixed' || gapMode === 'byLength' ? gapMode : 'auto';
-    if (mode === 'fixed') {
-      if (Array.isArray(gaps) && gaps.length >= messages.length - 1) {
-        for (let i = 0; i < messages.length - 1; i++) delays.push(clampGapV2(gaps[i], sendCfg));
-      } else {
-        const g = clampGapV2(Number(gapMs) || Number(sendCfg.burstIntervalMinMs) || 1000, sendCfg);
-        for (let i = 0; i < messages.length - 1; i++) delays.push(g);
-      }
-    } else if (mode === 'byLength') {
-      const base = Number(sendCfg.gapBaseMs) || 800;
-      const perChar = Number(sendCfg.gapPerCharMs) || 20;
-      for (let i = 0; i < messages.length - 1; i++) {
-        const chars = Math.max(1, String(messages[i] || '').length);
-        delays.push(clampGapV2(base + chars * perChar, sendCfg));
-      }
-    } else {
-      const longProb = Math.min(1, Math.max(0, Number(sendCfg.longGapProbability) || 0));
-      for (let i = 0; i < messages.length - 1; i++) {
-        const useLong = longProb > 0 && Math.random() < longProb;
-        const min = useLong ? (Number(sendCfg.longGapMinMs) || 5000) : (Number(sendCfg.burstIntervalMinMs) || 1000);
-        const max = useLong ? (Number(sendCfg.longGapMaxMs) || 10000) : (Number(sendCfg.burstIntervalMaxMs) || 3000);
-        delays.push(clampGapV2(randInt(Math.max(100, min), Math.max(100, max)), sendCfg));
-      }
-    }
-    return delays;
-  }
+  // computeGapsV2 / clampGapV2 已搬到 src/qq-send-pacing.js（顶部 import 进来）。
 
   function sendMessagesV2(key, messages, delays, replyToMessageId, atUserId = null) {
     const assertSendAllowed = captureSendGuard(key);
@@ -8286,10 +8209,7 @@ async function main() {
   }
 
   // ── 仿真群友社交引擎（仿真模式，内部标识 reserved） ────────────────────────
-  const randInt = (min, max) => {
-    if (min > max) [min, max] = [max, min];
-    return Math.floor(min + Math.random() * (max - min + 1));
-  };
+  // randInt 已搬到 src/qq-send-pacing.js（顶部 import 进来）。
   let selfNickname = 'deepseek'; // 机器人昵称（小写；启动时从网关获取，识别"被提到"用）
   // 给 agent 看的身份（保留原始大小写）与机器人自己的 QQ 号。
   // 为什么必须单独存：消息里只有 "@樰" 这一串文本，agent 没有任何途径知道"樰"就是它自己，
