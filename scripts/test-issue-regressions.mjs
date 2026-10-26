@@ -120,6 +120,34 @@ await test('#29 唤醒 prompt 必须写明机器人自己的昵称与 QQ 号', a
   } finally { await h.close(); }
 });
 
+await test('#角色卡注入：reserved2 唤醒提示必须带人格卡正文（旧实现只给角色名）', async () => {
+  const h = await bridgeHarness({
+    files: {
+      'roles/测试人格.md': '# 测试人格\n\n- 性格：偏执、只认一个称呼。\n- 称呼：叫他「宝宝」。\n',
+      'state/current-role.json': JSON.stringify({ role: '测试人格', mode: 'active' }),
+    },
+  });
+  try {
+    const prompt = h.buildWakePromptV2(KEY, 'atMention');
+    assert.match(prompt, /【当前角色】测试人格/);
+    assert.match(prompt, /叫他「宝宝」/, '人格卡正文必须进唤醒提示，否则模型只知道名字、按预设即兴发挥');
+    assert.doesNotMatch(
+      prompt,
+      /完整角色卡请调用 qq_get_prompt 查看/,
+      '不能只留「请调用 qq_get_prompt」——实测模型不会去调，人设等于没注入',
+    );
+
+    const reminder = h.buildWakeReminderPromptV2(KEY);
+    assert.match(reminder, /叫他「宝宝」/, '收尾提醒那条路径同样要带人格卡');
+
+    // 没有启用角色时不得凭空注入空段落
+    const plain = await bridgeHarness({ files: { 'state/current-role.json': JSON.stringify({ role: null, mode: 'active' }) } });
+    try {
+      assert.doesNotMatch(plain.buildWakePromptV2(KEY, 'atMention'), /【当前角色】/);
+    } finally { await plain.close(); }
+  } finally { await h.close(); }
+});
+
 if (failures) {
   console.error(`\n${failures} 项失败`);
   process.exitCode = 1;
