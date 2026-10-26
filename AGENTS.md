@@ -79,6 +79,23 @@ SnowLuma 已连接：ws://127.0.0.1:3001
 - 别在 `allowAllWhenEmpty: true` 且白名单空着的情况下把 agent 挂进公开群 —— 那等于把账号交给模型。
 - 空白名单 + `allowAllWhenEmpty: false` 是刻意的 fail-closed 默认值：不填就谁都不理，不是坏了。
 
+## 重启会自己回来
+
+控制台上那个「重启桥接」不是只把进程关掉：它在退出前先 spawn 一个 detached 子进程接力，父子之间靠 `BRIDGE_RESTART_DELAY_MS`（默认 1500ms）错开，让出锁文件和控制台端口。父进程再退。
+
+所以没有守护窗口、手动 `node src/bridge.js` 起的桥，点重启也会自己站回去。日志长这样：
+
+```
+控制台：已拉起接力进程 pid=67264
+桥接已启动
+重连后恢复了进行中的回合（session-xxxx，turn 80）
+```
+
+两点注意：
+
+- 重启后如果 `config.json` 里没写 `consoleToken`，`state/console-token` 会重新生成一枚 —— 之前开着的控制台页面要刷新重登。
+- 这条只保证「自己回来」，不保证「回来得快」：那 1.5 秒里 3100 是空的，来消息的 QQ 会在协议端侧排队，不会丢。
+
 ## 出问题先看哪儿
 
 - 文档索引：`docs/README.md`（每篇一句话 + 是否仍然有效）
