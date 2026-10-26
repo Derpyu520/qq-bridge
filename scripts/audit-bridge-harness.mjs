@@ -29,6 +29,9 @@ import * as snowlumaConn from '../src/snowluma-conn.js';
 import * as accessRules from '../src/access-rules.js';
 import * as slangEntry from '../src/slang-entry.js';
 import * as presetResolve from '../src/preset-resolve.js';
+import * as messageDedup from '../src/core/message-dedup.mjs';
+import * as triggerPolicy from '../src/core/trigger-policy.mjs';
+import * as groupStoreModule from '../src/core/group-store.mjs';
 import { unwrap, createTurnCollector } from '../src/dsh-client.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -154,6 +157,9 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
       'qq-text-split.js', 'media-dims.js', 'qq-send-pacing.js', 'role-card.js', 'snowluma-conn.js',
       'access-rules.js', 'slang-entry.js',
       'preset-resolve.js',
+      'core/message-dedup.mjs',
+      'core/trigger-policy.mjs',
+      'core/group-store.mjs',
       // qq-model-view.js 走另一条路：源码被摘掉 export 后在 VM 里执行（见下面的 modelViewSource）。
       'qq-model-view.js',
     ]);
@@ -256,6 +262,11 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     ...roleCard, ...snowlumaConn,
     ...accessRules, ...slangEntry,
     ...presetResolve,
+    ...messageDedup,
+    ...triggerPolicy,
+    // 只取工厂函数：模块里还有 DEFAULT_RETENTION_DAYS / MAX_TEXT_CHARS 这类常量，
+    // 整包 spread 进 VM 容易和 bridge.js 自己的同名声明撞车（重复声明 = SyntaxError）。
+    createGroupStore: groupStoreModule.createGroupStore,
     // bridge.js 里把它 import 成 resolvePresetNameCore（避免和 main() 内的同名包装冲突），
     // 而模块导出名是 resolvePresetName —— 这里必须显式对上，别靠 spread 猜。
     resolvePresetNameCore: presetResolve.resolvePresetName,
@@ -297,6 +308,9 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
   return { ...bridge, calls, temp, async close() {
     for (const timer of timers) clearTimeout(timer);
     restoreProfile();
+    // 长历史库（core/group-store.mjs）握着 sqlite 句柄；不关掉的话下面 rmSync 在
+    // Windows 上是 EPERM（文件被占），测试会以「删不掉临时目录」的名义失败。
+    try { context.__closeHistoryStore?.(); } catch { /* 没建库就没事 */ }
     fs.rmSync(temp, { recursive: true, force: true });
   } };
 }

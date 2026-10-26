@@ -35,6 +35,9 @@ import { hardenDir, manualDirCommand } from './state-acl.mjs';
 import { extractForwardIds, forwardIdFromData, sanitizeForwardId, formatForwardResponse } from './forward.js';
 import { resolvePriceTable } from './model-prices.js';
 import { createTokenLedger } from './token-ledger.js';
+import { createMessageDedup } from './core/message-dedup.mjs';
+import { createGroupStore } from './core/group-store.mjs';
+import { createTriggerPolicy } from './core/trigger-policy.mjs';
 import {
   loadSlang,
   saveSlang,
@@ -533,12 +536,16 @@ function consoleAssetVersion() {
   return parts.join('-');
 }
 
-function renderConsoleHtml() {
+function renderConsoleHtml(token = '') {
   const html = fs.readFileSync(path.join(ROOT, 'public', 'console.html'), 'utf8');
   const v = consoleAssetVersion();
+  // 浏览器按 href/src 原样取子资源，不会自己补 ?token=。不带上它，样式表与脚本就都是
+  // 401、页面裸奔（只剩没有样式的 HTML）。这里的令牌不算泄漏：拿到这份 HTML 的人
+  // 本来就已经有它了，而且整页只在回环上、还是要令牌才给。
+  const tail = token ? `&token=${encodeURIComponent(token)}` : '';
   return html
-    .replace(/href="\/console\.css(?:\?v=[^"]*)?"/, `href="/console.css?v=${v}"`)
-    .replace(/src="\/console\.js(?:\?v=[^"]*)?"/, `src="/console.js?v=${v}"`);
+    .replace(/href="\/console\.css(?:\?v=[^"]*)?"/, `href="/console.css?v=${v}${tail}"`)
+    .replace(/src="\/console\.js(?:\?v=[^"]*)?"/, `src="/console.js?v=${v}${tail}"`);
 }
 
 function listPresetBackups(name) {
@@ -1236,6 +1243,41 @@ function releaseLock() {
   } catch {}
 }
 
+// ── 运行意图 ────────────────────────────────────────────────────────────────
+// 区分「意外退出了，应该拉起来」和「用户主动停止，别再拉」。
+//
+// 为什么需要持久化成文件：巡检方（DSH 插件）看到端口空了，只能靠一件事判断要不要拉——
+// 上次是「想跑」还是「想停」。没有这个判据时，用户点了停止，巡检 5 秒后又把它拉起来，
+// 界面上就是「停止按钮没用」。
+const INTENT_FILE = path.join(STATE_DIR, 'bridge.intent.json');
+
+/** 没有这个文件、或读不动时一律按「该运行」处理：未知状态不能变成「永久不启动」。 */
+function readIntent() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(INTENT_FILE, 'utf8'));
+    return {
+      desired: raw?.desired === 'stopped' ? 'stopped' : 'running',
+      at: Number(raw?.at) || 0,
+      by: String(raw?.by ?? ''),
+    };
+  } catch {
+    return { desired: 'running', at: 0, by: '' };
+  }
+}
+
+function writeIntent(desired, by) {
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    fs.writeFileSync(
+      INTENT_FILE,
+      JSON.stringify({ desired: desired === 'stopped' ? 'stopped' : 'running', at: Date.now(), by: String(by ?? '') }),
+      { mode: 0o600 },
+    );
+  } catch (error) {
+    console.error(`[bridge] 写运行意图失败 ${INTENT_FILE}：${error?.message ?? error}`);
+  }
+}
+
 // ── 工具 ────────────────────────────────────────────────────────────────────
 // 日志同时输出到 stdout 与 state/bridge.log（守护窗口不可见时也能排查）
 
@@ -1472,6 +1514,9 @@ async function main() {
   }
   hardenStateDirAcl();
   acquireLock();
+  // 拿到锁就说明这次启动是要跑起来的：把意图翻回 running（上次可能是 stopped）。
+  // 接力进程重启也会走到这里，所以 /api/restart 之后意图自然回到 running。
+  writeIntent('running', restartDelayMs > 0 ? 'handoff' : 'boot');
   loadState();
   // 手工备份只留最近几份，免得 state/backups 一直涨（保留条数见 STATE_BACKUP_KEEP）
   {
@@ -2500,6 +2545,34 @@ async function main() {
   for (const sessionId of Object.values(state.sessions)) api.events.follow(sessionId);
   const sessionPromises = new Map(); // key -> create promise（防并发重复创建）
   const promptQueues = new Map(); // key -> { queue: [], running: false }：每个 QQ 会话串行投递 DSH prompt，保证 turn 顺序
+  // 入参级去重：同一条 QQ 消息只处理一次（容量 2048 条 / 30 分钟，纯内存，见 core/message-dedup.mjs）
+  const messageDedup = createMessageDedup();
+  // 群聊长历史（state/history.db，30 天）。social-v2.json 里只有最近 200 条，超出的
+  // 对话原来就永久丢了；这里补一份只追加的档案，给她「往前翻」用。
+  // 库打不开/写不进都不影响收消息 —— group-store 内部自己吞错误。
+  const historyStore = createGroupStore({
+    file: path.join(STATE_DIR, 'history.db'),
+    onError: (error) => log('长历史库异常（不影响收消息）：', error?.message ?? error)
+  });
+  // sqlite 的文件句柄是打开的：Windows 上不显式 close 就删不掉 state 目录（审计 harness
+  // 清理临时目录时会 EPERM）。挂一个全局钩子，退出和测试都能关。
+  globalThis.__closeHistoryStore = () => historyStore.close();
+
+  /** 把一条已归一化的消息追加到长历史。失败只是少一条档案，不阻断主流程。 */
+  function recordHistoryMessage(key, msg) {
+    if (!msg) return;
+    historyStore.append({
+      convKey: key,
+      messageId: msg.messageId,
+      seq: msg.seq,
+      ts: msg.time,
+      userId: msg.userId,
+      nickname: msg.sender,
+      kind: msg.hasMedia ? 'media' : 'text',
+      isSelf: !!msg.isSelf,
+      text: msg.plain || msg.text || ''
+    });
+  }
 
   // ── Token 用量账本（控制台「令牌与花费」） ───────────────────────────────
   // 权威总量取 DSH 的 tokenUsage 投影（整条会话日志累计，含桥接启动前的历史），
@@ -3471,7 +3544,7 @@ async function main() {
           try {
             // 页面和它的静态资源在同一个 mtime 上取版本号：改完 console.js 刷新就拿新的，
             // 不用手工改 ?v=，也不会因为缓存看到旧面板。
-            res.end(renderConsoleHtml());
+            res.end(renderConsoleHtml(consoleToken));
           } catch {
             res.end('控制台页面缺失：qq-bridge/public/console.html');
           }
@@ -3536,6 +3609,13 @@ async function main() {
             // 上游健康只给操作者看：它包含网关诊断信息（good/hint），
             // 属于管理侧观测，不该进 QQ 会话里那个受限的智能体视图。
             snowluma: snowlumaHealthSnapshot(),
+            // 入参去重的实时计数：accepted 随每条新消息增长，duplicates 就是被挡下的重投。
+            // 只给管理端视图——会话级智能体不需要、也不该看到跨群的统计。
+            dedup: messageDedup.stats(),
+            // 长历史库的规模与健康：rows 是总条数，broken 非空说明库坏了（收消息照旧）。
+            history: historyStore.stats(),
+            // 运行意图：'stopped' 表示上一次是用户主动停的，巡检不该自动拉起。
+            intent: readIntent(),
             activity: readActivityTail(100)
           });
           return;
@@ -4877,9 +4957,47 @@ async function main() {
           if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
           if (req.headers['x-agent-token'] && !v2ToolEnabled('getRecent')) { sendJson({ ok: false, error: '工具未启用：qq_get_recent_messages' }, 403); return; }
           const st = getSocialV2State(key);
+          // 读历史配额：一轮对话里反复翻历史只会烧 token —— 唤醒快照里已经带了未读和
+          // 最近消息。窗口 90 秒、默认 3 次，管理端可用 socialV2.context.recentReadsPerWindow 调。
+          // 只约束智能体（带 x-agent-token）；控制台用人眼翻，不设限。
+          if (req.headers['x-agent-token']) {
+            const windowMs = 90000;
+            const quota = Math.max(1, Number(cfg.socialV2?.context?.recentReadsPerWindow) || 3);
+            const nowTs = Date.now();
+            const hits = (Array.isArray(st.recentReadHits) ? st.recentReadHits : [])
+              .map(Number).filter((t) => Number.isFinite(t) && nowTs - t < windowMs);
+            if (hits.length >= quota) {
+              sendJson({ ok: false, error: `读历史太频繁：${windowMs / 1000} 秒内最多 ${quota} 次，先用唤醒快照里的未读与最近消息` }, 429);
+              return;
+            }
+            hits.push(nowTs);
+            st.recentReadHits = hits.slice(-10);
+          }
           const start = Math.max(0, st.recentMessages.length - offset - limit);
           const end = Math.max(0, st.recentMessages.length - offset);
-          const messages = st.recentMessages.slice(start, end);
+          let messages = st.recentMessages.slice(start, end);
+          // 内存里只有最近 recentLimit 条（默认 100）。不够时从长历史库补更早的，
+          // 让她真能「往前翻」：补出来的条目形状与 recentMessages 一致，模型看不出差别，
+          // 只多一个 fromHistory 标记（排查用）。
+          if (messages.length < limit) {
+            const wanted = offset + limit;
+            const fromHistory = historyStore.recent(key, Math.min(200, wanted));
+            const seen = new Set(messages.map((m) => (m?.messageId ? `id:${m.messageId}` : `seq:${m?.seq}`)));
+            const older = fromHistory
+              .filter((r) => !seen.has(r.messageId ? `id:${r.messageId}` : `seq:${r.seq}`))
+              .map((r) => ({
+                seq: r.seq,
+                messageId: r.messageId,
+                sender: r.nickname,
+                userId: r.userId,
+                text: truncateText(String(r.text ?? ''), 200),
+                plain: truncateText(String(r.text ?? ''), 200),
+                isSelf: !!r.isSelf,
+                fromHistory: true,
+                time: r.ts
+              }));
+            if (older.length) messages = [...older, ...messages].slice(-wanted);
+          }
           const readThroughSeq = req.headers['x-agent-token'] ? noteModelMessagesV2(st, messages) : readThroughSeqV2(st);
           sendJson({ ok: true, key, messages, readThroughSeq });
           return;
@@ -4925,6 +5043,64 @@ async function main() {
           log(`[reserved2] 控制台/工具标记 ${key} 未读已读：${markedCount} 条，已确认下一次唤醒配置`);
           sendJson({ ok: true, key, markedCount, unreadCount: st.unread.length, readThroughSeq: readThroughSeqV2(st), wakeGuaranteed: computeWakeSafetyV2(st.wakeConfig).guaranteed, wakeSafety: computeWakeSafetyV2(st.wakeConfig), wakeConfig: st.wakeConfig });
           return;
+        }
+        // 群策略：每个群可以单独设「静音」和唤醒默认值，落在 config.json 的
+        // socialV2.groups["group:456"] 里。智能体不许改自己所在群的规则，只有控制台能改。
+        if (url.pathname === '/api/socialV2/group-policy') {
+          if (req.method === 'GET') {
+            const key = String(url.searchParams.get('key') ?? '').trim();
+            if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
+            if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+            const st = getSocialV2State(key);
+            sendJson({
+              ok: true,
+              key,
+              policy: groupPolicyV2(key),
+              wake: effectiveWakeConfigV2(key, st.wakeConfig)
+            });
+            return;
+          }
+          if (req.method === 'POST') {
+            const body = await readBody();
+            const key = String(body.key ?? '').trim();
+            const canonical = canonicalV2Key(key);
+            if (!canonical) { sendJson({ ok: false, error: 'key 不能为空或格式不对' }, 400); return; }
+            if (req.headers['x-agent-token']) { sendJson({ ok: false, error: '群策略只能由控制台修改' }, 403); return; }
+            const raw = body.policy;
+            const configFile = path.join(ROOT, 'config.json');
+            const file = readConfigObject(configFile);
+            file.socialV2 = file.socialV2 && typeof file.socialV2 === 'object' && !Array.isArray(file.socialV2) ? file.socialV2 : {};
+            const table = file.socialV2.groups && typeof file.socialV2.groups === 'object' && !Array.isArray(file.socialV2.groups)
+              ? { ...file.socialV2.groups } : {};
+            if (raw === null || (typeof raw === 'object' && Object.keys(raw).length === 0)) {
+              delete table[canonical];
+            } else if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+              const next = {};
+              if (typeof raw.muted === 'boolean') next.muted = raw.muted;
+              if (raw.wake && typeof raw.wake === 'object' && !Array.isArray(raw.wake)) {
+                const wake = {};
+                if (Number.isFinite(Number(raw.wake.batchWindowMs)) && Number(raw.wake.batchWindowMs) >= 1000) {
+                  wake.batchWindowMs = Math.min(3600000, Math.round(Number(raw.wake.batchWindowMs)));
+                }
+                if (raw.wake.triggers && typeof raw.wake.triggers === 'object' && !Array.isArray(raw.wake.triggers)) {
+                  // 只带已知键，避免把错别字写进配置后永远不生效。
+                  wake.triggers = pickWakeTriggersV2(raw.wake.triggers, {});
+                }
+                if (Object.keys(wake).length) next.wake = wake;
+              }
+              if (Object.keys(next).length) table[canonical] = next;
+              else delete table[canonical];
+            } else {
+              sendJson({ ok: false, error: 'policy 必须是对象或 null' }, 400);
+              return;
+            }
+            file.socialV2.groups = table;
+            atomicWriteJson(configFile, file);
+            cfg.socialV2 = { ...cfg.socialV2, groups: table };
+            log(`控制台：群策略已更新 ${canonical}`);
+            sendJson({ ok: true, key: canonical, policy: table[canonical] ?? null });
+            return;
+          }
         }
         if (req.method === 'POST' && url.pathname === '/api/socialV2/wake-config') {
           const body = await readBody();
@@ -7201,6 +7377,7 @@ async function main() {
           queuedHintAt.delete(key);
           sessionPromises.delete(key);
           drainPromptQueue(key, '会话已重置');
+          messageDedup.forget(key);
           social.recentMessages.delete(key);
           messageMediaStore.delete(key);
           social.pendingSummaries.delete(key);
@@ -7296,6 +7473,24 @@ async function main() {
           sendJson({ ok: true, archivedCount, stoppedCount });
           return;
         }
+        // ── 停止桥接（真停：不拉接力进程） ────────────────────────────────────
+        // 和 /api/restart 的区别只有一件事：它不会自己回来。重启是「换一个进程继续跑」，
+        // 停止是「到此为止」。所以这里要做三件 restart 不做的事：
+        //   1. 写下 desired=stopped 的意图 —— 否则巡检发现端口空了会立刻拉起；
+        //   2. 不 spawn 接力进程；
+        //   3. 正常落盘后再退，退出码 0（不是崩溃，巡检不该当成故障去拉）。
+        if (req.method === 'POST' && url.pathname === '/api/stop') {
+          sendJson({ ok: true, message: '正在停止桥接（不拉起接力进程）…' });
+          setTimeout(() => {
+            log('控制台：停止桥接（用户要求，不再自动拉起）');
+            writeIntent('stopped', 'console');
+            try { saveState(); } catch (error) { log('停止前保存会话映射失败:', error?.message ?? error); }
+            try { saveSocialV2State(); } catch (error) { log('停止前保存二代会话状态失败:', error?.message ?? error); }
+            releaseLock();
+            setTimeout(() => process.exit(0), 200);
+          }, 200);
+          return;
+        }
         // ── 重启桥接（守护模式下 5 秒后自动拉起） ──────────────────────────────
         if (req.method === 'POST' && url.pathname === '/api/restart') {
           // 重启不能只靠「守护窗口自动恢复」：没有守护时（比如手动 node 起的、或守护脚本已经退了）
@@ -7304,6 +7499,8 @@ async function main() {
           sendJson({ ok: true, message: '正在重启桥接（先拉起接力进程，再退出当前实例）…' });
           setTimeout(() => {
             log('控制台：重启桥接');
+            // 重启 = 想继续跑：把意图翻回 running，否则上次 stopped 的痕迹会让巡检以为该停。
+            writeIntent('running', 'console-restart');
             // 退出前落盘：SIGINT/SIGTERM 的收尾路径会 saveState()/saveSocialV2State()，
             // 而重启这条路径以前直接 process.exit，500ms 窗口内改动的唤醒配置/计数器会丢。
             try { saveState(); } catch (error) { log('重启前保存会话映射失败:', error?.message ?? error); }
@@ -8194,6 +8391,12 @@ async function main() {
   // ── 仿真群友社交引擎（仿真模式，内部标识 reserved） ────────────────────────
   // randInt 已搬到 src/qq-send-pacing.js（顶部 import 进来）。
   let selfNickname = 'deepseek'; // 机器人昵称（小写；启动时从网关获取，识别"被提到"用）
+  // 唤醒判定（要不要叫她）整块搬去了 core/trigger-policy.mjs：原来长在这个闭包里，
+  // 想单测就得把整条链路都起起来。下面几个函数只是名字不变的空壳，调用点一处没动。
+  const triggerPolicy = createTriggerPolicy({
+    nickname: () => selfNickname,
+    mustReplyKeywords: () => cfg.social?.mustReplyKeywords ?? [],
+  });
   // 给 agent 看的身份（保留原始大小写）与机器人自己的 QQ 号。
   // 为什么必须单独存：消息里只有 "@樰" 这一串文本，agent 没有任何途径知道"樰"就是它自己，
   // 于是会把 @自己 当成 @别人、已读不回（issue #29）。昵称与 QQ 号要显式写进 prompt。
@@ -8419,6 +8622,25 @@ async function main() {
       if (key) setupSleepTimerV2(key);
       log(`[reserved2] 唤醒配置无任何触发条件，已重置为默认配置，避免永眠`);
     }
+  }
+
+  // 每个群可以有自己的唤醒策略：全局 socialV2.wake 是默认值，socialV2.groups["group:456"]
+  // 里写什么就覆盖什么，少写一项就继承全局。这样把某个群调成「只在被 @ 时才醒」不会污染别的群。
+  function groupPolicyV2(key) {
+    const table = cfg.socialV2?.groups;
+    if (!table || typeof table !== 'object') return null;
+    const raw = table[key];
+    return raw && typeof raw === 'object' ? raw : null;
+  }
+
+  function effectiveWakeConfigV2(key, base) {
+    const override = groupPolicyV2(key)?.wake;
+    if (!override || typeof override !== 'object') return base;
+    const merged = { ...base, ...override };
+    if (override.triggers && typeof override.triggers === 'object') {
+      merged.triggers = { ...(base?.triggers ?? {}), ...override.triggers };
+    }
+    return merged;
   }
 
   function getSocialV2State(key) {
@@ -8935,44 +9157,17 @@ async function main() {
 
   // 启动阶段的"明确与 AI 有关"：@ / 提到名字 / 必回关键词 / 管理员私聊
   function isDirectAddress(textContent, event, kind) {
-    if (kind !== 'group') return true;
-    const lower = String(textContent ?? '').toLowerCase();
-    const selfId = String(event?.self_id ?? '');
-    if (selfId && lower.includes('@' + selfId)) return true;
-    if (selfNickname && (lower.includes('@' + selfNickname) || lower.includes(selfNickname))) return true;
-    for (const kw of (cfg.social?.mustReplyKeywords ?? [])) {
-      if (lower.includes(String(kw).toLowerCase())) return true;
-    }
-    if (isDirectedAtAi(textContent)) return true;
-    return false;
+    return triggerPolicy.isDirectAddress(textContent, event, kind);
   }
 
   // 是否"直接针对 AI"的提问/挑战：提到 AI 相关词且带疑问/比较，或对"你"开火，或追问催促
   function isDirectedAtAi(textContent) {
-    const lower = String(textContent ?? '').toLowerCase();
-    const aiMention = /deepseek|claude|chatgpt|gpt|大肥鱼|小鲸鱼|鲸鱼|d指导|d老师|d师傅|深度求索|\bds\b|ai|人工智障|机器人|模型/.test(lower);
-    const challenge = /强|弱|行不行|能不能|会不会|是不是|一半|水平|垃圾|废物|白嫖|菜|不如|厉害|赢|输|比.*强|比.*弱/.test(lower);
-    const question = /[?？吗呢吧]|怎么|为什么|哪|谁/.test(lower);
-    if (aiMention && (question || challenge)) return true;
-    // "你/您" + 疑问/比较/挑战（放宽，避免漏掉"你有claude一半强吗"这类直接问）
-    if (/(你|您).{0,10}(吗|呢|？|\?|怎么|是不是|能不能|行不行|有没有|有|没有|比|不如|强|弱|一半|厉害|垃圾|菜|赢|输)/.test(lower)) return true;
-    if (/^(你|您)(是不是|行不行|能不能|会不会|觉得|有|没有)/.test(lower)) return true;
-    // "你是...还是... / 你是...吗 / 你是...？"（如：你是人类还是ai、你是真人吗）
-    if (/(你|您)是[^？?。！!]{0,14}(还是|或者|吗|么|？|\?)/.test(lower)) return true;
-    // 追问/催促：AI 没回时的真人式催促
-    if (/怎么不说话|人呢|回我|说话啊|理我|别装死|在不在|装死|说话/.test(lower)) return true;
-    return false;
+    return triggerPolicy.isDirectedAtAi(textContent);
   }
 
   // 活跃期批量检测用的"必须回"判断：不依赖 event，只认昵称/关键词/直接针对 AI 的提问
   function isMustReplyText(textContent) {
-    const lower = String(textContent ?? '').toLowerCase();
-    if (selfNickname && (lower.includes('@' + selfNickname) || lower.includes(selfNickname))) return true;
-    for (const kw of (cfg.social?.mustReplyKeywords ?? [])) {
-      if (lower.includes(String(kw).toLowerCase())) return true;
-    }
-    if (isDirectedAtAi(textContent)) return true;
-    return false;
+    return triggerPolicy.isMustReplyText(textContent);
   }
 
   function appendRecentMessage(key, sender, textContent, plainText, quoteTargetIsSelf = false, isOwner = false, media = [], messageRef = '') {
@@ -9868,6 +10063,7 @@ async function main() {
       hasForward: safeForwardIds.length > 0,
       time: Date.now()
     };
+    recordHistoryMessage(key, msg);
     st.lastUnreadSeq = msg.seq;
     st.lastIncomingAt = Date.now();
     st.preSleepWaitSatisfiedAt = 0; // 有新消息进来，之前的“沉睡前已等待/已观察”作废
@@ -9917,6 +10113,7 @@ async function main() {
       poke: { targetId: targetId != null ? String(targetId) : null, targetIsSelf: !!targetIsSelf, groupId: groupId != null ? String(groupId) : null },
       time: Date.now()
     };
+    recordHistoryMessage(key, msg);
     st.lastUnreadSeq = msg.seq;
     st.lastIncomingAt = Date.now();
     st.preSleepWaitSatisfiedAt = 0;
@@ -10058,42 +10255,7 @@ async function main() {
   }
 
   function evaluateWakeTriggerV2(key, st, event, kind, textContent, plainContent, quoteTargetIsSelf) {
-    if (kind === 'private') return 'private';
-    const tr = st.wakeConfig?.triggers ?? {};
-    if (tr.anyMessage) return 'anyMessage';
-    if (tr.atMention) {
-      const atSelf = Array.isArray(event?.message) && event.message.some((seg) => seg?.type === 'at' && String(seg.data?.qq) === String(event?.self_id ?? ''));
-      if (atSelf || quoteTargetIsSelf) return 'atMention';
-    }
-    if (tr.nameMention && selfNickname) {
-      // 用 plainContent（当前消息自己的文字）：textContent 含 `[引用 某人：原文]`，
-      // 引用一条恰好提到机器人昵称的旧消息不该算「叫了名字」（那是被动触发的付费回合）。
-      const lower = String(plainContent ?? '').toLowerCase();
-      if (lower.includes('@' + selfNickname.toLowerCase()) || lower.includes(selfNickname.toLowerCase())) return 'nameMention';
-    }
-    if (Array.isArray(tr.keywords) && tr.keywords.length) {
-      const lower = String(plainContent ?? '').toLowerCase();
-      for (const kw of tr.keywords) {
-        const kwStr = String(kw ?? '').toLowerCase();
-        if (!kwStr) continue;
-        // 短英文/数字关键词（如 DS/R1）用词边界匹配，避免 ADS/BDSM/DSL 误触发。
-        if (/^[a-z0-9]+$/.test(kwStr) && kwStr.length <= 4) {
-          if (new RegExp(`\\b${kwStr}\\b`, 'i').test(lower)) return `keyword:${kw}`;
-        } else if (lower.includes(kwStr)) {
-          return `keyword:${kw}`;
-        }
-      }
-    }
-    if (tr.question && isDirectedAtAi(plainContent)) return 'question';
-    if (Array.isArray(tr.speakerIds) && tr.speakerIds.length) {
-      const speakerId = String(event?.user_id ?? event?.sender?.user_id ?? '');
-      if (speakerId && tr.speakerIds.some((id) => String(id) === speakerId)) {
-        const senderLabel = event?.sender?.card || event?.sender?.nickname || speakerId;
-        return `speaker:${senderLabel}`;
-      }
-    }
-    if (Number(tr.probability) > 0 && Math.random() < Number(tr.probability)) return 'probability';
-    return null;
+    return triggerPolicy.evaluateWake(effectiveWakeConfigV2(key, st.wakeConfig), event, kind, textContent, plainContent, quoteTargetIsSelf);
   }
 
   // Only messages actually offered to the model authorize cursor-based acknowledgement.
@@ -10751,31 +10913,18 @@ async function main() {
     return false;
   }
 
-  const WAKE_PRIORITY = {
-    private: 100,
-    atMention: 90,
-    question: 80,
-    speaker: 75,
-    nameMention: 70,
-    keyword: 60,
-    anyMessage: 50,
-    replyCheck: 40,
-    timeout: 30,
-    proactiveCheck: 20
-  };
-
   // 唤醒原因可能带子类型（如 keyword:小鲸鱼、speaker:昵称），取冒号前的基名计算优先级。
+  // 优先级表也搬去了 core/trigger-policy.mjs：和判定规则放一起，改的时候两边不会走岔。
   function wakePriorityV2(reason) {
-    const base = String(reason ?? '').split(':')[0];
-    return WAKE_PRIORITY[base] ?? 0;
+    return triggerPolicy.wakePriority(reason);
   }
 
   // 与「未读消息」无关的唤醒原因（定时器/引导）。这些原因在会话繁忙时被暂存后，
   // 不能用「unread 里还有没有对应 seq」来判断是否还要补发 —— 那一轮很可能已经把
   // 未读全部标读了，结果就是 timeout 定时器被静默丢掉、会话停在无定时器的静默态。
-  const TIMER_WAKE_REASONS = new Set(['timeout', 'replyCheck', 'proactiveCheck', 'bootstrap', 'admin']);
+  // 名单本身在 core/trigger-policy.mjs（TIMER_WAKE_REASONS）。
   function isTimerWakeReason(reason) {
-    return TIMER_WAKE_REASONS.has(String(reason ?? '').split(':')[0]);
+    return triggerPolicy.isTimerWakeReason(reason);
   }
 
   function scheduleWakeV2(key, reason) {
@@ -10812,7 +10961,7 @@ async function main() {
       st.sleepTimer = null;
     }
     st.pendingWakeReason = reason;
-    const batchMs = Math.max(1000, Number(st.wakeConfig?.batchWindowMs) || 8000);
+    const batchMs = Math.max(1000, Number(effectiveWakeConfigV2(key, st.wakeConfig)?.batchWindowMs) || 8000);
     st.pendingWakeTimer = setTimeout(() => {
       st.pendingWakeTimer = null;
       const finalReason = st.pendingWakeReason || reason;
@@ -11004,6 +11153,25 @@ async function main() {
       log(`忽略未授权会话 ${key}（当前模式 ${currentMode}，来自 ${event.user_id}）`);
       return;
     }
+    // 群策略：静音的群什么都不进状态（连未读都不攒），但日志留一行，便于事后查
+    // 「这条消息为什么没反应」。放在账号守卫之前，省一次状态访问。
+    if (groupPolicyV2(key)?.muted === true) {
+      log(`群策略：${key} 已静音，消息不进状态（来自 ${event.user_id}）`);
+      return;
+    }
+    // 多账号守卫：会话状态是按「群号/QQ 号」存的，换绑一个 QQ 之后同一个群仍会命中同一份
+    // 未读与话题记忆。这里只记一笔并告警，不迁移也不断流 —— 真要支持多账号并发，会话键
+    // 必须带上 botAccountId 做复合主键（那是另一单，动键会打断现有会话的历史）。
+    {
+      const seenSelfId = event?.self_id == null ? '' : String(event.self_id);
+      if (seenSelfId) {
+        const guard = getSocialV2State(key);
+        if (!guard.botAccountId) guard.botAccountId = seenSelfId;
+        else if (guard.botAccountId !== seenSelfId) {
+          log(`⚠️ 会话 ${key} 上次由账号 ${guard.botAccountId} 使用，现在是 ${seenSelfId}：历史与未读可能串号`);
+        }
+      }
+    }
     const resolveAtName = async (qq) => {
       // 只有群聊才需要把 @QQ号 解析成群名片/昵称；私聊没有群成员概念
       if (kind !== 'group') return null;
@@ -11018,6 +11186,13 @@ async function main() {
     const messageRef = String(event.message_id ?? event.msg_id ?? event.message_seq ?? '');
     const seqRef = event.message_seq != null ? String(event.message_seq) : '';
     const refsToStore = [...new Set([messageRef, seqRef].filter(Boolean))];
+    // 同一条消息只处理一次：WS 断线重连、协议端超时重投、桥接接力重启的父子交接，
+    // 都会把同一条 message_id 再送一遍。没有这层时它会二次进未读、二次参与唤醒判定。
+    // 放在写 mediaStore 之前，重复的那份不污染媒体缓存。没有 id 的消息照样放行。
+    if (!messageDedup.accept(key, refsToStore)) {
+      log(`重复消息已忽略 ${key}：${refsToStore.join('/')}`);
+      return;
+    }
     if (refsToStore.length > 0 && mediaList.length > 0) {
       let mediaByRef = messageMediaStore.get(key);
       if (!mediaByRef) {
@@ -11093,6 +11268,7 @@ async function main() {
           queuedHintAt.delete(key);
           sessionPromises.delete(key);
           drainPromptQueue(key, '会话已重置');
+          messageDedup.forget(key);
           social.recentMessages.delete(key);
           messageMediaStore.delete(key);
           social.pendingSummaries.delete(key);
@@ -12254,7 +12430,11 @@ process.on('uncaughtException', (error) => {
   releaseLock();
   process.exit(1);
 });
-process.on('exit', () => releaseLock());
+process.on('exit', () => {
+  // 先把 sqlite 句柄放了：WAL 模式留着没意义，而且 Windows 上句柄不放会挡住删库/搬家。
+  try { globalThis.__closeHistoryStore?.(); } catch {}
+  releaseLock();
+});
 
 main().catch((error) => {
   console.error('[bridge] 启动失败:', error);

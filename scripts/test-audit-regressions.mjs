@@ -18,6 +18,8 @@
 //   R14 token 账本：被淘汰采样被新基线覆盖后不得重复计费
 //   R15 /api/send/* 失败路径的 st/now 越界（与 R2 同型，残留在这条旧发送工具真正走的端点）
 //   R16 reserved2 消息落库不得丢 kind/emojiId/summary/subType（表情 CDN 兜底与标签全靠它）
+//   R17 同一条 message_id 重复投递只处理一次（WS 重连 / 协议端重发 / 亲子进程交接）
+//   R18 收到的消息必须同时进长历史库（否则她只能看到最近 200 条）
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -28,6 +30,7 @@ import { mdToPlain } from '../src/md-to-plain.js';
 import { extractJsonArray } from '../src/slang-learner.js';
 import { sanitizeStickerText } from '../src/sticker-lib.js';
 import { createTokenLedger } from '../src/token-ledger.js';
+import { createGroupStore } from '../src/core/group-store.mjs';
 import { DEFAULT_PRICE_TABLE } from '../src/model-prices.js';
 
 const CONSOLE = { 'x-console-token': 'fixture-console-token' };
@@ -435,6 +438,148 @@ await test('R16 appendSocialV2Message 保留 kind/emojiId/summary/subType', asyn
     assert.ok(dirty.length <= 60, `摘要必须限长（实得 ${dirty.length}）`);
     // 兜底地址仍然能从落库后的字段推出来（这是 fetchOneBotImage 的实际输入）。
     assert.match(String(h.emojiCdnCandidates(stored.media[0].emojiId)[0] ?? ''), /gxh\.vip\.qq\.com/, '落库字段应足以推出 CDN 兜底地址');
+  } finally { await h.close(); }
+});
+
+// ── R17. 同一条 QQ 消息只处理一次 ───────────────────────────────────────────
+// 重复投递至少有四条来路：SnowLuma 的 WS 断线重连、协议端超时重投、桥接「重启桥接」时
+// 父子进程交接的那 1.5 秒、以及协议端对未 ack 消息的重发。没有入参级去重时，同一条消息
+// 会二次进未读、二次参与唤醒判定（概率触发下甚至二次唤醒）。
+await test('R17 同一 message_id 二次到达只落一次未读', async () => {
+  const h = await bridgeHarness();
+  try {
+    h.setMode('reserved2');
+    const key = 'group:456';
+    const event = {
+      self_id: 999,
+      group_id: 456,
+      user_id: 777,
+      message_id: 12345,
+      message_seq: 88,
+      time: Math.floor(Date.now() / 1000),
+      sender: { user_id: 777, nickname: '群友A', card: '群友A' },
+      message: [{ type: 'text', data: { text: '在吗' } }]
+    };
+    const before = h.getSocialV2State(key).unread.length;
+    await h.handleIncoming('group', '456', event, h.cfg);
+    const once = h.getSocialV2State(key).unread.length;
+    assert.equal(once, before + 1, '第一次必须落库');
+    await h.handleIncoming('group', '456', event, h.cfg);
+    assert.equal(h.getSocialV2State(key).unread.length, once, '重投的同一条不得再落一次未读');
+    // 有的 OneBot 实现只给 message_seq 不给 message_id：同 seq 仍然算同一条。
+    await h.handleIncoming('group', '456', { ...event, message_id: undefined }, h.cfg);
+    assert.equal(h.getSocialV2State(key).unread.length, once, '只有 seq 相同的重投也要挡住');
+    // 换了 id 的新消息必须照常落库，别把去重写成吞消息。
+    await h.handleIncoming('group', '456', { ...event, message_id: 12346, message_seq: 89 }, h.cfg);
+    assert.equal(h.getSocialV2State(key).unread.length, once + 1, '新消息不能被误杀');
+    // reserved2 的契约：普通群消息只进未读缓存，不直接打 DSH。
+    // 唤醒是合并窗口 + 触发器的事，收消息这条路径一个 sessions.prompt 都不该产生。
+    assert.equal(h.calls.prompts.length, 0, 'reserved2 下收消息不得直接投递 DSH prompt');
+  } finally { await h.close(); }
+});
+
+await test('R18 收到的消息同时进长历史库，重投不重复落', async () => {
+  const h = await bridgeHarness();
+  try {
+    h.setMode('reserved2');
+    const key = 'group:456';
+    const event = (id, seq, text) => ({
+      self_id: 999,
+      group_id: 456,
+      user_id: 777,
+      message_id: id,
+      message_seq: seq,
+      time: Math.floor(Date.now() / 1000),
+      sender: { user_id: 777, nickname: '群友A', card: '群友A' },
+      message: [{ type: 'text', data: { text } }]
+    });
+    await h.handleIncoming('group', '456', event(7001, 1, '第一句'), h.cfg);
+    await h.handleIncoming('group', '456', event(7002, 2, '第二句'), h.cfg);
+    await h.handleIncoming('group', '456', event(7001, 1, '第一句'), h.cfg); // 重投
+    const reader = createGroupStore({ file: path.join(h.temp, 'state', 'history.db') });
+    try {
+      const rows = reader.recent(key, 10);
+      assert.deepEqual(rows.map((r) => r.text), ['第一句', '第二句'], '重投的不得重复落库');
+      assert.equal(rows[0].nickname, '群友A');
+      assert.equal(rows[0].userId, '777');
+      assert.equal(rows[0].isSelf, false);
+      assert.equal(reader.count(key), 2);
+      // 内存里的 recentMessages 仍然是主路径，库只是「往前翻」的补充。
+      assert.equal(h.getSocialV2State(key).recentMessages.length, 2);
+    } finally {
+      reader.close();
+    }
+  } finally { await h.close(); }
+});
+
+//   R19 读复用历史的次数有配额（一轮里反复翻历史 = 烧 token）
+await test('R19 读历史的次数有配额，超了回 429 且提示先用快照', async () => {
+  const h = await bridgeHarness();
+  try {
+    h.setMode('reserved2');
+    const key = 'group:456';
+    await withServer(h, async (port) => {
+      const token = h.getSocialV2State(key).agentToken;
+      assert.ok(token, '会话应该已经有 agent token');
+      const pathname = '/api/socialV2/recent?key=group%3A456&limit=5';
+      const first = await call(port, pathname, { token });
+      assert.equal(first.status, 200, `第一次读历史应放行，实际 ${first.status} ${first.body}`);
+      await call(port, pathname, { token });
+      await call(port, pathname, { token });
+      const blocked = await call(port, pathname, { token });
+      assert.equal(blocked.status, 429, '超过 3 次应回 429');
+      assert.match(String(blocked.json?.error ?? ''), /先用唤醒快照/, '错误信息里要给出替代做法');
+      // 控制台（不带 x-agent-token）不受这条配额限制。
+      const consoleRead = await call(port, pathname);
+      assert.equal(consoleRead.status, 200, '控制台读历史不该被智能体配额拦住');
+    });
+  } finally { await h.close(); }
+});
+
+//   R20 换绑 QQ 账号后同一个群只告警、不静默串状态
+await test('R20 换绑 QQ 账号后同群仍有会话，但记下原账号并告警', async () => {
+  const h = await bridgeHarness();
+  try {
+    h.setMode('reserved2');
+    const base = {
+      self_id: 999, group_id: 456, user_id: 777, message_id: 15001, message_seq: 501,
+      sender: { card: '老王', nickname: '老王' },
+      message: [{ type: 'text', data: { text: '在吗' } }]
+    };
+    await h.handleIncoming('group', '456', base, h.cfg);
+    const st = h.getSocialV2State('group:456');
+    assert.equal(st.botAccountId, '999', '第一次收到消息要把账号记下来');
+    // 换一台手机的号发进来：状态还是同一份（不静默开新键），只是账号字段不被覆盖。
+    await h.handleIncoming('group', '456', { ...base, self_id: 888, message_id: 15002, message_seq: 502 }, h.cfg);
+    assert.equal(st.botAccountId, '999', '账号字段不许被后来者覆盖');
+    assert.ok(st.unread.length >= 2, '换号后的消息仍进同一个会话桶');
+  } finally { await h.close(); }
+});
+
+//   R21 群策略：静音的群不落状态，群级 wake 覆盖只作用于该群
+await test('R21 群策略：静音不落未读，群级关键词只对该群生效', async () => {
+  const h = await bridgeHarness();
+  try {
+    h.setMode('reserved2');
+    const msg = (id, seq, text) => ({
+      self_id: 999, group_id: 456, user_id: 777, message_id: id, message_seq: seq,
+      sender: { card: '老王', nickname: '老王' },
+      message: [{ type: 'text', data: { text } }]
+    });
+    // ① 静音：连未读都不攒
+    h.cfg.socialV2 = { ...(h.cfg.socialV2 ?? {}), groups: { 'group:456': { muted: true } } };
+    await h.handleIncoming('group', '456', msg(16001, 601, '在吗'), h.cfg);
+    assert.equal(h.getSocialV2State('group:456').unread.length, 0, '静音的群不该落未读');
+
+    // ② 取消静音 + 群级关键词：只有这个群认「开工」
+    h.cfg.socialV2.groups = {
+      'group:456': { wake: { triggers: { atMention: false, nameMention: false, question: false, probability: 0, keywords: ['开工'] } } }
+    };
+    await h.handleIncoming('group', '456', msg(16002, 602, '开工'), h.cfg);
+    const st = h.getSocialV2State('group:456');
+    assert.equal(st.unread.length, 1, '取消静音后要恢复落库');
+    await h.handleIncoming('group', '789', msg(16003, 603, '开工'), h.cfg);
+    assert.equal(h.getSocialV2State('group:789').unread.length, 0, '789 不在白名单，本来就不收');
   } finally { await h.close(); }
 });
 
