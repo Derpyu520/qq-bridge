@@ -26,6 +26,18 @@ import { unwrap, createTurnCollector } from '../src/dsh-client.js';
 const root = fileURLToPath(new URL('..', import.meta.url));
 export async function bridgeHarness({ config = {}, savedState, files = {}, globals = {} } = {}) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-audit-bridge-'));
+  // 把「家」搬到临时目录：`bindHomeSession` 会去读 `~/.dsh/worlds/default/life.json` 拿家会话 id，
+  // 不隔离的话测试会读到真机上的家会话、还会真的去连它（2026-10-26 实测：test-audit-bridge
+  // 断言里出现真实 session-5e4ae458，还卡满 180s 超时）。os.homedir() 在 Windows 先看 USERPROFILE。
+  const realProfile = { USERPROFILE: process.env.USERPROFILE, HOME: process.env.HOME };
+  process.env.USERPROFILE = temp;
+  process.env.HOME = temp;
+  const restoreProfile = () => {
+    for (const [k, v] of Object.entries(realProfile)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  };
   fs.mkdirSync(path.join(temp, 'src'));
   fs.mkdirSync(path.join(temp, 'state'));
   fs.writeFileSync(path.join(temp, 'config.json'), JSON.stringify({
@@ -225,6 +237,7 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
   bridge.setReady(true);
   return { ...bridge, calls, temp, async close() {
     for (const timer of timers) clearTimeout(timer);
+    restoreProfile();
     fs.rmSync(temp, { recursive: true, force: true });
   } };
 }
