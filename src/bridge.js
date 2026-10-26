@@ -10293,6 +10293,17 @@ async function main() {
     }
   }
 
+  // 把一条消息里的媒体下载下来，转成视觉模型能直接吃的 data URL。
+  // 为什么要走这一趟：百炼去下载 QQ 的图片链接经常 400（链接带时效、要 referer），
+  // 本地先取到 base64 再喂过去才稳。拿不到就返回空串，调用方回退到 URL。
+  async function mediaDataUrlFor(item) {
+    try {
+      const [img] = await fetchMediaData([item]);
+      if (img?.data && img?.mimeType) return `data:${img.mimeType};base64,${img.data}`;
+    } catch { /* 下载失败就不给 dataUrl，让上层回退 */ }
+    return '';
+  }
+
   // 把这次唤醒里涉及的图片尽力转成文字，最多等 timeoutMs，返回可拼进 prompt 的一段。
   async function buildVisionNoteV2(key, timeoutMs = 8000) {
     if (cfg.socialV2?.vision?.enabled === false) return '';
@@ -10303,13 +10314,13 @@ async function main() {
       for (const item of m?.media || []) {
         if (item?.kind !== 'image' || !item?.url || seen.has(item.url)) continue;
         seen.add(item.url);
-        targets.push({ msg: m, url: item.url });
+        targets.push({ msg: m, url: item.url, item });
       }
     }
     if (!targets.length) return '';
     const work = Promise.all(targets.map(async (t) => {
       if (t.msg.imageDesc) return t.msg.imageDesc;
-      const desc = await describeImageV2(t.url);
+      const desc = await describeImageV2(t.url, { dataUrl: await mediaDataUrlFor(t.item) });
       if (desc) t.msg.imageDesc = desc;
       return desc;
     }));
