@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { bridgeHarness } from './audit-bridge-harness.mjs';
 import http from 'node:http';
 
@@ -91,6 +92,109 @@ await test('malformed HTTP request targets return 400 without hanging', async (h
     });
     assert.equal(status, 400);
   } finally { await new Promise((resolve) => server.close(resolve)); }
+});
+await test('DSH model catalog drives complete effort options, model persistence, and live session selection', async (h) => {
+  const catalog = {
+    groups: [
+      {
+        id: 'provider-a', name: 'Provider A', models: [{
+          id: 'model-a', name: 'Model A', reasoning: {
+            efforts: ['off', 'low', 'medium', 'high', 'max'].map((id) => ({ id, name: id })),
+            defaultEffort: 'high',
+          },
+        }, { id: 'plain-model', name: 'Plain model' }],
+      },
+      {
+        id: 'provider-b', name: 'Provider B', models: [{
+          id: 'model-b', name: 'Model B', reasoning: {
+            efforts: [{ id: 'minimal', name: 'Minimal' }, { id: 'xhigh', name: 'Extra high' }],
+            defaultEffort: 'xhigh',
+          },
+        }],
+      },
+    ],
+  };
+  Object.assign(h.cfg.dsh, { provider: 'provider-a', model: 'model-a', reasoningEffort: 'max' });
+  const selections = [];
+  h.api.callUnary = async () => ({ result: { ok: true, value: catalog } });
+  h.api.sessions.selectModel = async (params) => {
+    selections.push(params);
+    return { result: { ok: true, value: { selected: params } } };
+  };
+  const server = h.startConsoleServer();
+  try {
+    if (!server.listening) await new Promise((resolve) => server.once('listening', resolve));
+    const call = async (path, method = 'GET', body) => {
+      const response = await fetch(`http://127.0.0.1:${server.address().port}${path}`, {
+        method,
+        headers: { 'x-console-token': 'fixture-console-token', ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+      return { status: response.status, body: await response.json() };
+    };
+    const modelInfo = await call('/api/dsh/model');
+    assert.equal(modelInfo.status, 200);
+    assert.deepEqual(modelInfo.body.options, ['off', 'low', 'medium', 'high', 'max']);
+    assert.equal(modelInfo.body.groups.length, 2);
+
+    const invalidModel = await call('/api/dsh/model', 'POST', { provider: 'provider-a', model: 'missing-model' });
+    assert.equal(invalidModel.status, 400);
+
+    const sessionId = await h.ensureSession('private:123');
+    assert.ok(sessionId);
+    assert.equal(selections.at(-1).reasoningEffort, 'max');
+    const changedModel = await call('/api/dsh/model', 'POST', {
+      provider: 'provider-b', model: 'model-b', reasoningEffort: 'xhigh',
+    });
+    assert.equal(changedModel.status, 200);
+    assert.deepEqual(changedModel.body, {
+      ok: true, provider: 'provider-b', model: 'model-b', reasoningEffort: 'xhigh',
+    });
+    await h.ensureSession('private:123');
+    assert.deepEqual({ ...selections.at(-1) }, {
+      sessionId, provider: 'provider-b', model: 'model-b', reasoningEffort: 'xhigh',
+    });
+    const savedConfig = JSON.parse(fs.readFileSync(`${h.temp}/config.json`, 'utf8'));
+    assert.equal(savedConfig.dsh.provider, 'provider-b');
+    assert.equal(savedConfig.dsh.model, 'model-b');
+    assert.equal(savedConfig.dsh.reasoningEffort, 'xhigh');
+
+    const invalidEffort = await call('/api/dsh/effort', 'POST', { reasoningEffort: 'medium' });
+    assert.equal(invalidEffort.status, 400, 'effort must be valid for the selected model');
+    const invalidModelEffort = await call('/api/dsh/model', 'POST', {
+      provider: 'provider-b', model: 'model-b', reasoningEffort: 'medium',
+    });
+    assert.equal(invalidModelEffort.status, 400, 'an explicit unsupported effort must not silently select another level');
+
+    const customEffort = await call('/api/dsh/effort', 'POST', { reasoningEffort: 'minimal' });
+    assert.equal(customEffort.status, 200);
+    await h.ensureSession('private:123');
+    assert.equal(selections.at(-1).reasoningEffort, 'minimal');
+
+    const plainModel = await call('/api/dsh/model', 'POST', { provider: 'provider-a', model: 'plain-model' });
+    assert.equal(plainModel.status, 200);
+    assert.equal(plainModel.body.reasoningEffort, null);
+    await h.ensureSession('private:123');
+    assert.equal(selections.at(-1).model, 'plain-model');
+    assert.equal(Object.hasOwn(selections.at(-1), 'reasoningEffort'), false);
+    const plainModelInfo = await call('/api/dsh/model');
+    assert.deepEqual(plainModelInfo.body.options, []);
+    assert.equal(plainModelInfo.body.catalogSource, 'dsh');
+
+    h.api.callUnary = async () => { throw new Error('DSH unavailable'); };
+    const unavailable = await call('/api/dsh/model', 'POST', { provider: 'provider-b', model: 'model-b' });
+    assert.equal(unavailable.status, 503);
+    assert.equal(h.cfg.dsh.model, 'plain-model', 'failed catalog lookup must preserve the active selection');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+await test('provider reasoning effort IDs and provider-default selection survive config loading', async () => {
+  for (const effort of ['medium', 'xhigh', 'AdapterSpecific', null]) {
+    const h = await bridgeHarness({ config: { dsh: { reasoningEffort: effort } } });
+    try { assert.equal(h.cfg.dsh.reasoningEffort, effort); }
+    finally { await h.close(); }
+  }
 });
 { // 控制台重置路径必须与 retireSession 一样：清掉权限元数据并终止 DSH 侧排队的工作。
   const h = await bridgeHarness();
@@ -361,7 +465,7 @@ await test('malformed HTTP request targets return 400 without hanging', async (h
       ['POST', '/api/roles/rename'], ['POST', '/api/roles/delete'],
       ['GET', '/api/preset/sim-prompt'], ['POST', '/api/preset/sim-prompt'],
       ['GET', '/api/preset/sim-prompt/backups'], ['POST', '/api/preset/sim-prompt/restore'],
-      ['GET', '/api/dsh/model'], ['POST', '/api/dsh/effort'],
+      ['GET', '/api/dsh/model'], ['POST', '/api/dsh/model'], ['POST', '/api/dsh/effort'],
       ['GET', '/api/whitelist'], ['POST', '/api/whitelist'], ['POST', '/api/restart'],
       ['POST', '/api/console/token'], ['GET', '/api/role'], ['POST', '/api/role'],
     ];

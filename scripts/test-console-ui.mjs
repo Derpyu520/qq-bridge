@@ -250,7 +250,14 @@ try {
     console.log(`Recorded original API contracts: ${baselinePath}`);
   } else await test('All submitted payloads exactly match the pre-redesign console baseline', async () => {
     const expected = JSON.parse(await readFile(baselinePath, 'utf8'));
-    assert.deepEqual(fixture.requests, expected);
+    // 保留改版前基线；语音开关是后续新增字段，ACL 复检已有独立断言。
+    if (!original) {
+      for (const request of expected) {
+        if (request.path === '/api/socialV2/config') request.body.tools.sendVoice = true;
+      }
+    }
+    const formWrites = fixture.requests.filter((request) => !(request.path === '/api/security' && request.body.rehardenStateDir === true));
+    assert.deepEqual(formWrites, expected);
   });
 
   if (!original) await test('Token usage panel renders totals, per-conversation and per-turn cost', async () => {
@@ -530,13 +537,22 @@ try {
     await page.waitForFunction(() => document.getElementById('roleInjectMaxMsg').textContent.includes('6000'));
   });
 
-  if (!original) await test('思考强度：档位来自 DSH、默认 max、可切换并明示全局副作用', async () => {
+  if (!original) await test('模型与思考强度：按 DSH catalog 切换模型并显示完整档位', async () => {
     await navigate('overview');
     await page.waitForFunction(() => document.getElementById('dshEffortSelect').options.length > 0);
     const options = await page.locator('#dshEffortSelect option').evaluateAll((nodes) => nodes.map((n) => n.value));
-    assert.deepEqual(options, ['low', 'high', 'max'], `档位应来自 DSH 公布的能力，实际 ${options.join(',')}`);
+    assert.deepEqual(options, ['off', 'low', 'medium', 'high', 'max'], `应显示 DSH 公布的全部档位，实际 ${options.join(',')}`);
     assert.equal(await page.locator('#dshEffortSelect').inputValue(), 'max', '默认应为 max');
     assert.match(await page.locator('#dshEffortSideEffect').textContent(), /全局默认/, '必须说明会连带改 DSH 全局默认');
+    await page.locator('#dshModelSelect').selectOption(JSON.stringify(['fixture-provider', 'fixture-reasoner']));
+    await page.waitForFunction(() => document.getElementById('dshEffortSelect').options.length === 2);
+    assert.deepEqual(
+      await page.locator('#dshEffortSelect option').evaluateAll((nodes) => nodes.map((n) => n.value)),
+      ['minimal', 'xhigh'],
+      'provider 自定义的 reasoning effort ID 应完整保留'
+    );
+    assert.equal(await page.locator('#dshEffortSelect').inputValue(), 'xhigh', '切换模型时应选择该模型公布的默认档位');
+    await page.locator('#dshModelSelect').selectOption(JSON.stringify(['deepseek-official', 'deepseek-flash']));
     await page.locator('#dshEffortSelect').selectOption('high');
     const [saved] = await Promise.all([
       page.waitForResponse(r => new URL(r.url()).pathname === '/api/dsh/effort' && r.request().method() === 'POST'),
@@ -545,7 +561,21 @@ try {
     assert.equal(saved.status(), 200);
     assert.equal((await saved.json()).reasoningEffort, 'high');
     assert.match(await page.locator('#dshEffortMsg').textContent(), /high/);
+    await page.locator('#dshModelSelect').selectOption(JSON.stringify(['fixture-provider', 'fixture-reasoner']));
+    const [modelSaved] = await Promise.all([
+      page.waitForResponse(r => new URL(r.url()).pathname === '/api/dsh/model' && r.request().method() === 'POST'),
+      page.locator('#dshModelSave').click(),
+    ]);
+    assert.equal(modelSaved.status(), 200);
+    assert.deepEqual(await modelSaved.json(), {
+      ok: true, provider: 'fixture-provider', model: 'fixture-reasoner', reasoningEffort: 'xhigh',
+    });
+    await page.waitForFunction(() => document.getElementById('dshProviderText').textContent === 'fixture-provider');
+    assert.match(await page.locator('#dshModelMsg').textContent(), /fixture-reasoner/);
     // 改回默认，避免影响后续断言
+    await page.locator('#dshModelSelect').selectOption(JSON.stringify(['deepseek-official', 'deepseek-flash']));
+    await page.locator('#dshModelSave').click();
+    await page.waitForFunction(() => document.getElementById('dshProviderText').textContent === 'deepseek-official');
     await page.locator('#dshEffortSelect').selectOption('max');
     await page.locator('#dshEffortSave').click();
     await page.waitForFunction(() => document.getElementById('dshEffortSelect').value === 'max');

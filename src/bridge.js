@@ -577,18 +577,20 @@ function forgetAgentToken(key) {
 // 读取 DSH 模型能力的在途 Promise：withTimeout 只做 Promise.race，不会取消底层 RPC，
 // 因此并发刷新会各自留下一个不可取消的请求。这里做去重，同一时刻只发一个。
 let modelCatalogInFlight = null;
-// DSH 思考强度（reasoningEffort）热切换代号。
-// 控制台改强度后递增它，让已在运行的会话在下一条消息重新 selectModel；
+// DSH 模型与思考强度（reasoningEffort）热切换代号。
+// 控制台修改后递增它，让已在运行的会话在下一条消息重新 selectModel；
 // 放在模块级是为了不依赖 main() 内部声明的执行顺序（避免 TDZ）。
 let modelSelectionEpoch = 0;
-// DeepSeek provider 明确支持的取值（见 dsh-llm-deepseek：其它值会抛 UNSUPPORTED_REASONING_EFFORT）。
-// 'off' 虽然合法（关闭思考），但 QQ 聊天助手依赖思考，控制台不提供该档。
-const REASONING_EFFORT_OPTIONS = ['low', 'high', 'max'];
+// DSH catalog 不可用时的兼容选项；正常情况下以每个模型公布的完整能力为准。
+const REASONING_EFFORT_OPTIONS = ['off', 'low', 'high', 'max'];
 const REASONING_EFFORT_DEFAULT = 'max';
-function normalizeReasoningEffort(value) {
-  const v = String(value ?? '').trim().toLowerCase();
-  if (!REASONING_EFFORT_OPTIONS.includes(v)) {
-    throw new Error(`思考强度只能是 ${REASONING_EFFORT_OPTIONS.join(' / ')}`);
+function normalizeReasoningEffort(value, options = null) {
+  const v = String(value ?? '').trim();
+  if (!v) {
+    throw new Error('思考强度不能为空');
+  }
+  if (Array.isArray(options) && !options.includes(v)) {
+    throw new Error(`该模型支持的思考强度为 ${options.join(' / ') || '无'}`);
   }
   return v;
 }
@@ -1032,10 +1034,11 @@ function loadConfig() {
   cfg.dsh.authTokenExplicit = Boolean(cfg.dsh.authToken);
   if (!cfg.dsh.authToken) cfg.dsh.authToken = discoverDshLaunchToken();
 
-  // 思考强度可能被手工改成非法值（config.json 是用户可编辑的）。DeepSeek 适配器对非法值
-  // 会硬拒绝，若直接透传会让每个会话的 selectModel 每次都失败；这里统一规范化并告警。
+  // effort ID 属于 provider；加载时只检查非空，保存接口再按当前模型的 catalog 校验。
   try {
-    cfg.dsh.reasoningEffort = normalizeReasoningEffort(cfg.dsh.reasoningEffort ?? REASONING_EFFORT_DEFAULT);
+    cfg.dsh.reasoningEffort = cfg.dsh.reasoningEffort === null
+      ? null
+      : normalizeReasoningEffort(cfg.dsh.reasoningEffort ?? REASONING_EFFORT_DEFAULT);
   } catch (error) {
     log(`⚠️ config.json 的 dsh.reasoningEffort「${cfg.dsh.reasoningEffort}」非法，已回退 ${REASONING_EFFORT_DEFAULT}（${error?.message ?? error}）`);
     cfg.dsh.reasoningEffort = REASONING_EFFORT_DEFAULT;
@@ -2530,6 +2533,23 @@ async function main() {
       if (!/not.?found|unknown|unsupported|404|invalid server-response/i.test(message)) throw error;
       return api.callUnary('session.models', {});
     }
+  }
+  async function getModelCatalog() {
+    if (!modelCatalogInFlight) {
+      modelCatalogInFlight = withTimeout(fetchModelCatalog(), 3000, 'session/modelCatalog')
+        .finally(() => { modelCatalogInFlight = null; });
+    }
+    return unwrap(await modelCatalogInFlight, 'session/modelCatalog');
+  }
+  function findCatalogModel(groups, provider, model) {
+    const group = groups.find((item) => item?.id === provider);
+    const entry = group?.models?.find((item) => item?.id === model);
+    return { group, entry };
+  }
+  function reasoningOptions(entry) {
+    return (entry?.reasoning?.efforts ?? [])
+      .map((effort) => String(effort?.id ?? ''))
+      .filter(Boolean);
   }
   const collectors = new Map(); // sessionId -> turn collector
   const sendToolSucceededSessions = new Set(); // sessionId：当前 turn 内 MCP 发送类工具至少成功一次
@@ -4591,25 +4611,22 @@ async function main() {
         if (req.method === 'GET' && url.pathname === '/api/dsh/model') {
           const provider = String(cfg.dsh?.provider || 'deepseek-official');
           const model = String(cfg.dsh?.model || 'deepseek-flash');
-          // 档位优先取 DSH 实际公布的能力（DSH 换档位词汇或换 provider 时自动跟随），失败退回内置白名单。
+          // 模型与档位均以 DSH catalog 为准；reasoning effort ID 由 provider 定义，不做本地枚举过滤。
           let options = REASONING_EFFORT_OPTIONS.slice();
           let labels = {};
           let providerDefault = null;
           let catalogSource = 'fallback';
+          let groups = [];
           try {
-            if (!modelCatalogInFlight) {
-              modelCatalogInFlight = withTimeout(fetchModelCatalog(), 3000, 'session/modelCatalog')
-                .finally(() => { modelCatalogInFlight = null; });
-            }
-            const catalog = unwrap(await modelCatalogInFlight, 'session.modelCatalog');
-            const group = (catalog?.groups ?? []).find((g) => g?.id === provider);
-            const entry = (group?.models ?? []).find((m) => m?.id === model);
+            const catalog = await getModelCatalog();
+            groups = Array.isArray(catalog?.groups) ? catalog.groups : [];
+            const { entry } = findCatalogModel(groups, provider, model);
             const efforts = entry?.reasoning?.efforts ?? [];
-            const advertised = efforts.map((e) => String(e?.id ?? '')).filter((id) => REASONING_EFFORT_OPTIONS.includes(id));
-            if (advertised.length) {
+            const advertised = reasoningOptions(entry);
+            if (entry) {
               options = advertised;
               labels = Object.fromEntries(efforts.map((e) => [String(e.id), { name: e.name ?? '', description: e.description ?? '' }]));
-              providerDefault = entry.reasoning.defaultEffort ?? null;
+              providerDefault = entry.reasoning?.defaultEffort ?? null;
               catalogSource = 'dsh';
             }
           } catch (error) {
@@ -4623,9 +4640,10 @@ async function main() {
           sendJson({
             provider,
             model,
-            reasoningEffort: String(cfg.dsh?.reasoningEffort || REASONING_EFFORT_DEFAULT),
+            reasoningEffort: cfg.dsh?.reasoningEffort == null ? null : String(cfg.dsh.reasoningEffort),
             options,
             labels,
+            groups,
             default: REASONING_EFFORT_DEFAULT,
             providerDefault,
             catalogSource,
@@ -4635,10 +4653,71 @@ async function main() {
           });
           return;
         }
+        if (req.method === 'POST' && url.pathname === '/api/dsh/model') {
+          const body = await readBody();
+          const provider = typeof body.provider === 'string' ? body.provider.trim() : '';
+          const model = typeof body.model === 'string' ? body.model.trim() : '';
+          if (!provider || !model) {
+            sendJson({ ok: false, error: 'provider 和 model 必须填写' }, 400);
+            return;
+          }
+          let groups;
+          try {
+            const catalog = await getModelCatalog();
+            groups = Array.isArray(catalog?.groups) ? catalog.groups : [];
+          } catch (error) {
+            sendJson({ ok: false, error: `读取 DSH 模型目录失败：${error?.message ?? error}` }, 503);
+            return;
+          }
+          const { entry } = findCatalogModel(groups, provider, model);
+          if (!entry) {
+            sendJson({ ok: false, error: '该 provider/model 不在 DSH 当前公布的模型目录中' }, 400);
+            return;
+          }
+          const options = reasoningOptions(entry);
+          let effort = null;
+          if (options.length) {
+            const requested = body.reasoningEffort == null || body.reasoningEffort === ''
+              ? null
+              : String(body.reasoningEffort);
+            const current = cfg.dsh?.reasoningEffort;
+            if (requested !== null) {
+              try { effort = normalizeReasoningEffort(requested, options); }
+              catch (error) { sendJson({ ok: false, error: error?.message ?? '思考强度无效' }, 400); return; }
+            } else {
+              const preferred = options.includes(current)
+                ? current
+                : entry.reasoning?.defaultEffort;
+              effort = options.includes(preferred) ? preferred : options[0];
+            }
+          } else if (body.reasoningEffort != null && body.reasoningEffort !== '') {
+            sendJson({ ok: false, error: '该模型没有公布可选的思考强度' }, 400);
+            return;
+          }
+          const configFile = path.join(ROOT, 'config.json');
+          const file = readConfigObject(configFile);
+          file.dsh = { ...(file.dsh ?? {}), provider, model, reasoningEffort: effort };
+          atomicWriteJson(configFile, file);
+          cfg.dsh = { ...(cfg.dsh ?? {}), provider, model, reasoningEffort: effort };
+          modelSelectionEpoch += 1;
+          log(`控制台：DSH 模型已设为 ${provider}/${model}${effort ? `（${effort}）` : ''}（对已有会话于下一条消息生效）`);
+          sendJson({ ok: true, provider, model, reasoningEffort: effort });
+          return;
+        }
         if (req.method === 'POST' && url.pathname === '/api/dsh/effort') {
           const body = await readBody();
+          const provider = String(cfg.dsh?.provider || 'deepseek-official');
+          const model = String(cfg.dsh?.model || 'deepseek-flash');
+          let options = REASONING_EFFORT_OPTIONS;
+          try {
+            const catalog = await getModelCatalog();
+            const { entry } = findCatalogModel(Array.isArray(catalog?.groups) ? catalog.groups : [], provider, model);
+            if (entry) options = reasoningOptions(entry);
+          } catch {
+            // model catalog unavailable: retain the compatibility options above.
+          }
           let effort;
-          try { effort = normalizeReasoningEffort(body.reasoningEffort); }
+          try { effort = normalizeReasoningEffort(body.reasoningEffort, options); }
           catch (error) { sendJson({ ok: false, error: error?.message ?? '思考强度无效' }, 400); return; }
           const configFile = path.join(ROOT, 'config.json');
           // fail-fast：配置损坏时直接 500，绝不回写（与白名单接口同语义）
@@ -8731,18 +8810,17 @@ async function main() {
   }
 
   // 会话模型应用去重：每个 DSH 会话在本进程内只 selectModel 一次；
-  // 控制台热切换思考强度时递增 modelSelectionEpoch，使旧记录失效并在下一条消息重新应用。
-  // 四种 QQ 模式共用 DSH 会话，统一强制使用多模态模型 DeepSeek-V41-Flash（id: deepseek-flash）；
-  // 它同时支持 text/image 输入，取代已下线的 deepseek-v4-flash-vision-exp。
+  // 控制台热切换模型或思考强度时递增 modelSelectionEpoch，下一条消息应用当前配置。
   const modelAppliedSessions = new Map(); // sessionId -> 已应用的 modelSelectionEpoch
   // 返回 'applied' | 'not-found' | 'failed'。
   // 'not-found' 表示 DSH 侧会话已经不存在（DSH 重启、异常退出、归档竞态），
   // 本地映射已失效，调用方必须退役重建，否则每条消息都会对着一个不存在的会话重试。
   async function ensureChatModel(sessionId) {
     if (modelAppliedSessions.get(sessionId) === modelSelectionEpoch) return 'applied';
+    const selectionEpoch = modelSelectionEpoch;
     const provider = String(cfg.dsh?.provider || 'deepseek-official');
     const model = String(cfg.dsh?.model || 'deepseek-flash');
-    const effort = String(cfg.dsh?.reasoningEffort || REASONING_EFFORT_DEFAULT);
+    const effort = cfg.dsh?.reasoningEffort == null ? '' : String(cfg.dsh.reasoningEffort);
     let lastError = null;
     // 两段式降级（P1，repo-auditor 提的「effort 不对就 100% 哑掉」）：
     //   第 1 段按配置带 reasoningEffort；
@@ -8761,7 +8839,10 @@ async function main() {
           const payload = { sessionId, provider, model };
           if (plan.effort) payload.reasoningEffort = plan.effort;
           const result = unwrap(await api.sessions.selectModel(payload), 'session.selectModel');
-          modelAppliedSessions.set(sessionId, modelSelectionEpoch);
+          // If the console changes model while this request is in flight, keep the
+          // old selection tied to its starting epoch so the next message reapplies
+          // the newer selection instead of treating this stale request as current.
+          modelAppliedSessions.set(sessionId, selectionEpoch);
           log(`已设置会话模型 ${sessionId} -> ${result.selected.provider}/${result.selected.model} (${result.selected.reasoningEffort ?? '默认'})`);
           return 'applied';
         } catch (error) {

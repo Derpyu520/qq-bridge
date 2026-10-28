@@ -298,7 +298,33 @@ export function makeFixtureState() {
       'qq-chat': '你是 QQ 群里的仿真群友（一代）。\n\n【一代仿真模式 —— 安全规则】\n1. 你没有本地工具。\n\n【一代仿真模式 —— 工具协议】\n1. 回复会自动转发到 QQ。',
     },
     roleInjectMax: 8000,
+    dshProvider: 'deepseek-official',
+    dshModel: 'deepseek-flash',
     dshEffort: 'max',
+    dshCatalog: [
+      {
+        id: 'deepseek-official', name: 'DeepSeek 官方', models: [
+          {
+            id: 'deepseek-flash', name: 'DeepSeek V4 Flash', description: '多模态模型',
+            reasoning: {
+              efforts: ['off', 'low', 'medium', 'high', 'max'].map((id) => ({ id, name: id.toUpperCase() })),
+              defaultEffort: 'high',
+            },
+          },
+        ],
+      },
+      {
+        id: 'fixture-provider', name: 'Fixture Provider', models: [
+          {
+            id: 'fixture-reasoner', name: 'Fixture Reasoner',
+            reasoning: {
+              efforts: [{ id: 'minimal', name: 'Minimal' }, { id: 'xhigh', name: 'Extra high' }],
+              defaultEffort: 'xhigh',
+            },
+          },
+        ],
+      },
+    ],
     whitelist: { allow: { groups: [123456789, 100003], private: [100001] }, deny: { groups: [], private: [] }, ownerQQ: '100001' },
     sessions: [
       { key: 'group:123456789', sessionId: 'demo-community-20260920', owner: false },
@@ -435,17 +461,22 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
             const preset = url.searchParams.get('preset') === 'qq-chat' ? 'qq-chat' : 'qq-chat-v2';
             return json({ ok: true, backups: [{ file: `${preset}.agent.cordis.yml.fixture`, mtime: Date.parse(timestamp) }] });
           }
-          case '/api/dsh/model': return json({
-            provider: 'deepseek-official',
-            model: 'deepseek-flash',
-            reasoningEffort: state.dshEffort,
-            options: ['low', 'high', 'max'],
-            labels: { low: { name: 'Low', description: 'routine' }, high: { name: 'High', description: 'default balance' }, max: { name: 'Max', description: 'hardest tasks' } },
-            default: 'max',
-            providerDefault: 'high',
-            catalogSource: 'dsh',
-            globalSideEffect: true,
-          });
+          case '/api/dsh/model': {
+            const group = state.dshCatalog.find((item) => item.id === state.dshProvider);
+            const model = group?.models.find((item) => item.id === state.dshModel);
+            return json({
+              provider: state.dshProvider,
+              model: state.dshModel,
+              reasoningEffort: state.dshEffort,
+              options: model?.reasoning?.efforts.map((item) => item.id) ?? [],
+              labels: Object.fromEntries((model?.reasoning?.efforts ?? []).map((item) => [item.id, { name: item.name }])),
+              groups: state.dshCatalog,
+              default: 'max',
+              providerDefault: model?.reasoning?.defaultEffort ?? null,
+              catalogSource: 'dsh',
+              globalSideEffect: true,
+            });
+          }
           case '/api/whitelist': return json(state.whitelist);
           case '/api/sessions': return json({ sessions: state.sessions });
           case '/api/pending': return json({ pending: [{ key: 'group:123456789', kind: 'approval', toolName: '演示工具', reason: '等待管理员确认（离线示例）' }] });
@@ -541,6 +572,11 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
             const preset = body.preset === 'qq-chat' ? 'qq-chat' : 'qq-chat-v2';
             return json({ ok: true, restoredFrom: `${preset}.agent.cordis.yml.fixture`, requiresRestart: true });
           }
+          case '/api/dsh/model':
+            state.dshProvider = body.provider;
+            state.dshModel = body.model;
+            state.dshEffort = body.reasoningEffort ?? null;
+            return json({ ok: true, provider: state.dshProvider, model: state.dshModel, reasoningEffort: state.dshEffort });
           case '/api/dsh/effort': state.dshEffort = body.reasoningEffort; return json({ ok: true, reasoningEffort: body.reasoningEffort });
           case '/api/role-mode': state.roleMode = body.mode; return json({ ok: true });
           case '/api/whitelist': state.whitelist = body; return json({ ok: true });

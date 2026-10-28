@@ -2465,7 +2465,13 @@ button:active:not(:disabled) {
       <h2 data-note="下一条消息生效">DSH 模型与思考强度</h2>
       <div class="meta">模型：<span id="dshModelText">-</span> ｜ 提供方：<span id="dshProviderText">-</span></div>
       <div class="row" style="margin-top:10px">
-        <label style="flex:0 0 auto">思考强度</label>
+        <label for="dshModelSelect" style="flex:0 0 auto">模型</label>
+        <select id="dshModelSelect" style="flex:0 1 360px"></select>
+        <button id="dshModelSave">保存模型</button>
+        <span class="meta" id="dshModelMsg"></span>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label for="dshEffortSelect" style="flex:0 0 auto">思考强度</label>
         <select id="dshEffortSelect" style="flex:0 1 220px"></select>
         <button id="dshEffortSave">保存</button>
         <span class="meta" id="dshEffortMsg"></span>
@@ -2947,36 +2953,104 @@ async function refreshSimPrompt() {
 }
 
 // ── DSH 模型与思考强度 ──────────────────────────────────────────────────────
+let dshModelGroups = [];
+let dshActiveModel = null;
+function dshModelChoice(select = document.getElementById('dshModelSelect')) {
+  try {
+    const choice = JSON.parse(select.value);
+    return Array.isArray(choice) && choice.length === 2 ? { provider: choice[0], model: choice[1] } : null;
+  } catch { return null; }
+}
+function dshModelEntry(choice) {
+  const group = dshModelGroups.find((item) => item.id === choice?.provider);
+  return { group, entry: group?.models?.find((item) => item.id === choice?.model) };
+}
+function refreshDshEfforts(choice, preferred, fallbackOptions = [], fallbackLabels = {}, fallbackDefault = null) {
+  const select = document.getElementById('dshEffortSelect');
+  const { entry } = dshModelEntry(choice);
+  const advertised = entry?.reasoning?.efforts;
+  const options = advertised?.map((item) => item.id) ?? fallbackOptions;
+  const labels = advertised
+    ? Object.fromEntries(advertised.map((item) => [item.id, { name: item.name || '', description: item.description || '' }]))
+    : fallbackLabels;
+  select.replaceChildren();
+  for (const option of options) {
+    const el = document.createElement('option');
+    el.value = option;
+    const info = labels[option] || {};
+    const isDefault = option === (entry?.reasoning?.defaultEffort || fallbackDefault);
+    el.textContent = `${info.name ? `${info.name} (${option})` : option}${isDefault ? '（默认）' : ''}`;
+    if (info.description) el.title = info.description;
+    select.appendChild(el);
+  }
+  if (!options.length) {
+    const el = document.createElement('option');
+    el.value = '';
+    el.textContent = '该模型未公布可选档位';
+    select.appendChild(el);
+  }
+  const defaultEffort = entry?.reasoning?.defaultEffort || fallbackDefault;
+  select.value = options.includes(preferred) ? preferred
+    : options.includes(defaultEffort) ? defaultEffort
+      : options[0] || '';
+  select.disabled = options.length === 0;
+  document.getElementById('dshEffortSave').disabled = select.disabled
+    || JSON.stringify(choice) !== JSON.stringify(dshActiveModel);
+}
+function updateDshModelSelection() {
+  const choice = dshModelChoice();
+  const { entry } = dshModelEntry(choice);
+  const isCurrent = JSON.stringify(choice) === JSON.stringify(dshActiveModel);
+  document.getElementById('dshModelSave').disabled = isCurrent || !entry;
+  refreshDshEfforts(choice, document.getElementById('dshEffortSelect').value);
+}
 async function refreshDshModel() {
   try {
     const r = await api('/api/dsh/model');
     document.getElementById('dshModelText').textContent = r.model || '-';
     document.getElementById('dshProviderText').textContent = r.provider || '-';
-    const select = document.getElementById('dshEffortSelect');
-    const labels = r.labels || {};
-    select.replaceChildren();
-    for (const option of (r.options || [])) {
-      const el = document.createElement('option');
-      el.value = option;
-      const info = labels[option] || {};
-      const isDefault = option === (r.providerDefault || r.default);
-      el.textContent = `${option}${isDefault ? '（默认）' : ''}`;
-      if (info.description) el.title = info.description;
-      select.appendChild(el);
+    dshActiveModel = { provider: r.provider, model: r.model };
+    dshModelGroups = Array.isArray(r.groups) ? r.groups : [];
+    const modelSelect = document.getElementById('dshModelSelect');
+    modelSelect.replaceChildren();
+    let activeFound = false;
+    for (const group of dshModelGroups) {
+      const groupElement = document.createElement('optgroup');
+      groupElement.label = `${group.name || group.id} (${group.id})`;
+      for (const entry of (group.models || [])) {
+        const el = document.createElement('option');
+        el.value = JSON.stringify([group.id, entry.id]);
+        el.textContent = `${entry.name || entry.id} (${entry.id})`;
+        if (entry.description) el.title = entry.description;
+        if (group.id === r.provider && entry.id === r.model) activeFound = true;
+        groupElement.appendChild(el);
+      }
+      modelSelect.appendChild(groupElement);
     }
-    select.value = r.reasoningEffort;
+    if (!activeFound) {
+      const current = document.createElement('option');
+      current.value = JSON.stringify([r.provider, r.model]);
+      current.textContent = `${r.model} (${r.provider}) · 当前配置，未出现在 DSH 目录`;
+      current.disabled = true;
+      modelSelect.prepend(current);
+    }
+    modelSelect.value = JSON.stringify([r.provider, r.model]);
+    modelSelect.disabled = dshModelGroups.length === 0;
+    document.getElementById('dshModelSave').disabled = true;
+    refreshDshEfforts(dshActiveModel, r.reasoningEffort, r.options || [], r.labels || {}, r.providerDefault || r.default);
     const parts = [];
     if (r.providerDefault) parts.push(`DSH 出厂默认是 ${r.providerDefault}`);
-    parts.push(r.catalogSource === 'dsh' ? '档位取自 DSH 实际公布的能力' : '未能读取 DSH 能力，档位为内置清单');
+    parts.push(r.catalogSource === 'dsh' ? '模型和档位取自 DSH 实际公布的能力' : '未能读取 DSH 模型目录，当前仅显示内置档位');
+    if (r.catalogSource === 'dsh' && !dshModelEntry(dshActiveModel).entry?.reasoning?.efforts?.length) parts.push('当前模型未公布可选推理档位');
     document.getElementById('dshEffortNote').textContent = parts.join('；') + '。';
     document.getElementById('dshEffortSideEffect').textContent = r.globalSideEffect
-      ? '注意：切换会同时写入 DSH 的全局默认（~/.dsh/settings.yaml 的 agent-default-model），也就是 Web GUI 里新建会话的默认强度也会跟着变。'
+      ? '切换模型或强度也会更新 DSH 全局默认（~/.dsh/settings.yaml 的 agent-default-model），影响 Web GUI 新建会话；QQ 现有会话在下一条消息生效。'
       : '';
-    document.getElementById('dshEffortMsg').textContent = '';
   } catch (error) {
     document.getElementById('dshEffortMsg').textContent = '读取失败：' + (error?.message ?? error);
   }
 }
+document.getElementById('dshModelSelect').addEventListener('change', updateDshModelSelection);
 
 async function refreshWhitelist() {
   try {
@@ -3142,6 +3216,23 @@ document.getElementById('roleInjectMaxSave').addEventListener('click', async () 
 });
 
 // ── DSH 思考强度 ────────────────────────────────────────────────────────────
+document.getElementById('dshModelSave').addEventListener('click', async () => {
+  const choice = dshModelChoice();
+  if (!choice) return;
+  const effort = document.getElementById('dshEffortSelect').value;
+  const msg = document.getElementById('dshModelMsg');
+  msg.textContent = '保存中…';
+  msg.className = 'meta';
+  document.getElementById('dshModelSave').disabled = true;
+  const r = await api('/api/dsh/model', 'POST', {
+    ...choice,
+    ...(effort ? { reasoningEffort: effort } : {}),
+  });
+  msg.textContent = r.ok ? `✅ 已设为 ${r.provider}/${r.model}，下一条消息生效` : ('❌ ' + (r.error || '保存失败'));
+  msg.className = r.ok ? 'meta ok' : 'meta err';
+  if (r.ok) refreshDshModel();
+  else updateDshModelSelection();
+});
 document.getElementById('dshEffortSave').addEventListener('click', async () => {
   const effort = document.getElementById('dshEffortSelect').value;
   const msg = document.getElementById('dshEffortMsg');
