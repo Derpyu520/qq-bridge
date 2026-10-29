@@ -995,7 +995,13 @@ function loadConfig() {
   }
 
   // 人格卡注入上限（字符）。历史硬编码 6000，现在可配：每条约 4~6k token 的成本护栏。
-  cfg.role = { maxInjectChars: ROLE_INJECT_MAX_CHARS_DEFAULT, ...(file.role ?? {}) };
+  cfg.role = {
+    maxInjectChars: ROLE_INJECT_MAX_CHARS_DEFAULT,
+    // 每 N 次唤醒注入一次完整角色卡；其余唤醒只给一行提醒（省 token）。
+    // 0/1 = 每次都注入（旧行为）；默认 4。
+    injectEveryNWakes: 4,
+    ...(file.role ?? {})
+  };
   roleInjectMaxChars = applyRoleInjectLimit(cfg.role.maxInjectChars);
   if (roleInjectMaxChars !== cfg.role.maxInjectChars) {
     log(`人格注入上限已按范围校正为 ${roleInjectMaxChars} 字符（配置值 ${cfg.role.maxInjectChars}，允许 1000~20000）`);
@@ -4354,7 +4360,15 @@ async function main() {
           }
           const isV2 = currentMode === 'reserved2';
           const roleState = readRoleState();
-          const roleLine = roleState.role ? `【当前角色】${roleState.role}（完整角色卡请调用 qq_get_prompt 查看）\n\n` : '';
+          // 角色卡按 injectEveryNWakes 的节奏注入：首次/换卡后全量，其余只给一行提醒。
+    // 早期实现只给「角色名 + 请自行调用 qq_get_prompt」，实测模型几乎不会去调，人格卡等于没生效。
+    const rolePick = roleForWake(key);
+    if (roleState.role) log(`[role] 操作者提示词：${rolePick.full ? `全量角色卡（${rolePick.text.length} 字符）` : '一行提醒'}「${roleState.role}」`);
+    const roleLine = roleState.role
+      ? (rolePick.full
+        ? `【当前角色】${roleState.role}\n【角色卡 —— 以下是你的设定，必须按它说话，不要复述这份卡】\n${rolePick.text || '（角色卡为空，按仿真提示词行动）'}\n【角色卡结束】\n\n`
+        : `${rolePick.text}\n\n`)
+      : '';
           // 二代必须带会话令牌，否则 AI 调用任何 MCP 状态/发送工具都会被拒。
           let tokenLine = '';
           if (isV2) {
@@ -9554,6 +9568,88 @@ async function main() {
     return `第 ${bad.join('，')} 条之间像是把同一句话拆开了；如果两条拼起来才完整，请合并成一条，或把断点移到完整句子的边界。`;
   }
 
+  // ── 角色卡注入节奏 ────────────────────────────────────────────────────────
+  // 每次唤醒都拼完整角色卡（常见 3~6k 字符 ≈ 2~4k token 输入）成本很高。
+  // 策略：① 角色名/卡文件变化 → 立刻全量注入并重置计数；
+  //       ② 之后每 injectEveryNWakes 次唤醒注入一次全卡；
+  //       ③ 其余唤醒只给一行提醒（模型已在本会话里看过卡，且随时可 qq_get_prompt 复查）。
+  // 计数按会话存 state/role-inject.json —— 不能塞进 getSocialV2State()：
+  // social-v2.json 的持久化只写白名单字段，自定义字段会被静默丢弃。
+  function roleCardSignature() {
+    const rs = readRoleState();
+    if (!rs.role) return '';
+    const safeName = sanitizeRoleName(rs.role);
+    if (!safeName) return '';
+    try {
+      const st = fs.statSync(path.join(ROLES_DIR, safeName + '.md'));
+      return `${safeName}:${Math.round(st.mtimeMs)}:${st.size}`;
+    } catch {
+      return `${safeName}:missing`;
+    }
+  }
+
+  const ROLE_INJECT_FILE = path.join(STATE_DIR, 'role-inject.json');
+  let roleInjectMap = null;
+  function roleInjectStore() {
+    if (roleInjectMap) return roleInjectMap;
+    try { roleInjectMap = JSON.parse(fs.readFileSync(ROLE_INJECT_FILE, 'utf8')) || {}; }
+    catch { roleInjectMap = {}; }
+    return roleInjectMap;
+  }
+  function saveRoleInjectStore() {
+    try {
+      fs.mkdirSync(STATE_DIR, { recursive: true });
+      fs.writeFileSync(ROLE_INJECT_FILE, JSON.stringify(roleInjectMap ?? {}, null, 2));
+    } catch {}
+  }
+
+  /**
+   * 决定这次唤醒注入「全卡」还是「一行提醒」。
+   * @param {string|null} key 会话 key（null = 不计数，直接全量）
+   * @param {{ allowStub?: boolean, forceFull?: boolean }} opts
+   * @returns {{ text: string, full: boolean }}
+   */
+  function roleForWake(key, { allowStub = true, forceFull = false } = {}) {
+    const rs = readRoleState();
+    if (!rs.role) return { text: '', full: false };
+    const every = Math.max(1, Number(cfg.role?.injectEveryNWakes) || 4);
+    const sig = roleCardSignature();
+    const fullText = () => currentRoleHintV2();
+    let full = true;
+    if (key && allowStub) {
+      const store = roleInjectStore();
+      const rec = store[key] && typeof store[key] === 'object' ? store[key] : { sig: '', n: 0 };
+      const n = Math.max(0, Number(rec.n) || 0);
+      const now = Date.now();
+      // 同一次唤醒里 buildWakePromptV2 可能被调用两次（投递 + 复核），
+      // 8 秒内重复构建沿用上次判定，避免「每 4 轮」被消耗成「每 2 轮」。
+      const sameWake = rec.lastAt && now - Number(rec.lastAt) < 8000 && rec.sig === sig;
+      if (rec.sig !== sig) {
+        rec.sig = sig;
+        rec.n = 1;
+        rec.lastFull = true;
+        rec.lastAt = now;
+        full = true;
+      } else if (sameWake) {
+        full = rec.lastFull === true;
+      } else {
+        full = forceFull || every <= 1 || n % every === 0;
+        rec.n = n + 1;
+        rec.lastFull = full;
+        rec.lastAt = now;
+      }
+      store[key] = rec;
+      saveRoleInjectStore();
+    }
+    if (!full) {
+      return {
+        text: `【当前角色】${rs.role}（角色卡已在本会话前面完整给过，继续按它说话；需要回顾可调用 qq_get_prompt）`,
+        full: false
+      };
+    }
+    return { text: fullText(), full: true };
+  }
+
   function currentRoleHintV2() {
     // 先按 〔二代〕/〔一代〕 标记筛小节；下面的逐行过滤只是给「没标记的老卡片」兜底。
     const raw = roleHintForMode('v2');
@@ -10292,7 +10388,17 @@ async function main() {
 
   function buildWakePromptV2(key, reason) {
     const roleState = readRoleState();
-    const roleLine = roleState.role ? `【当前角色】${roleState.role}（完整角色卡请调用 qq_get_prompt 查看）\n\n` : '';
+    // 角色卡按 injectEveryNWakes 的节奏注入：首次/换卡后全量，其余只给一行提醒。
+    // 早期实现只给「角色名 + 请自行调用 qq_get_prompt」，实测模型几乎不会去调，人格卡等于没生效。
+    const rolePick = roleForWake(key);
+    if (roleState.role) {
+      log(`[role] 唤醒提示词：${rolePick.full ? `全量角色卡（${rolePick.text.length} 字符）` : '一行提醒'}「${roleState.role}」`);
+    }
+    const roleLine = roleState.role
+      ? (rolePick.full
+        ? `【当前角色】${roleState.role}\n【角色卡 —— 以下是你的设定，必须按它说话，不要复述这份卡】\n${rolePick.text || '（角色卡为空，按仿真提示词行动）'}\n【角色卡结束】\n\n`
+        : `${rolePick.text}\n\n`)
+      : '';
     const identityLine = selfIdentityTextV2();
     const st = getSocialV2State(key);
     const tokenLine = `【会话令牌】${st.agentToken}（调用二代状态工具时请在参数中带上此令牌）\n\n`;
@@ -10369,7 +10475,10 @@ async function main() {
 
   function buildWakeReminderPromptV2(key) {
     const roleState = readRoleState();
-    const roleLine = roleState.role ? `【当前角色】${roleState.role}（完整角色卡请调用 qq_get_prompt 查看）\n\n` : '';
+    // 同一回合内的收尾提醒：刚看过的卡不必再来一遍。
+    const roleLine = roleState.role
+      ? `【当前角色】${roleState.role}（继续按角色卡说话）\n\n`
+      : '';
     const identityLine = selfIdentityTextV2();
     const st = getSocialV2State(key);
     const tokenLine = `【会话令牌】${st.agentToken}（调用二代状态工具时请在参数中带上此令牌）\n\n`;
