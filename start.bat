@@ -4,6 +4,13 @@ cd /d "%~dp0"
 rem Harden state/ ACLs (Windows needs WRITE_DAC; the directory owner normally has it,
 rem so no UAC prompt in the usual case). This NEVER blocks startup.
 node scripts\harden-state-acl.mjs --quiet
+rem 自检：DSH profile 里必须有 snowluma MCP 条目。装/更新插件会重写 profile，
+rem 冲掉之后模型调用 qq_* 工具会变成 unknown tool，群里就发不出话。
+node scripts\check-dsh-mcp.mjs >nul 2>&1
+if errorlevel 1 (
+    echo [start] profile 缺少 snowluma MCP 条目，自动重新注册...
+    node scripts\setup-dsh.mjs desktop
+)
 
 rem 等待 DSH 就绪：开机自启时桥接可能比桌面版先跑。没等到就只会连旧端口，一直重试。
 rem 最多等 5 分钟，超时也继续（用户可能暂时不开 DSH），之后重启桥接即可。

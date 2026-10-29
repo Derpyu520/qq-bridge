@@ -7771,6 +7771,8 @@ async function main() {
   const suppressSendsUntil = new Map();
   // 工具参数 JSON 非法时的重试计数（5 分钟内最多重试一次，防止死循环刷 token）。
   const jsonRetryState = new Map();
+  // 「DSH 里没有 snowluma 工具」的通知节流（同一会话 10 分钟内只提醒一次）。
+  const unknownToolNoticeAt = new Map();
   function sendsSuppressed(kind, id) {
     const until = suppressSendsUntil.get(`${kind}:${id}`) || 0;
     return until > Date.now();
@@ -12193,6 +12195,26 @@ async function main() {
                   log(`♻️ ${key} 的 DSH 会话工作目录已失效，已重置映射（原 ${stale ?? '无'}）；完整错误见 state/agent-errors.log`);
                   appendActivity(`${key} 会话工作目录失效，已自动重置映射，等待重发`);
                   await sendToQQ(key, '⚠️ 这个 QQ 会话用的工作目录已经不存在了（项目被移动过），已自动重置会话；麻烦再发一次刚才的消息。');
+                  continue;
+                }
+                // DSH profile 里的 snowluma MCP 条目丢了（实测：装/更新 dsh-qqbot 插件后，
+                // 桌面 profile 的 cordis.patch.yml 被重写，3 个 MCP 条目消失）。
+                // 表现：模型能调 qq_send_message，但 DSH 报 unknown tool，于是它只写内心戏、
+                // 群里什么也看不到。这里给出明确指引，而不是让它继续猜。
+                if (/unknown tool\s+"?mcp__snowluma__/i.test(String(msg))) {
+                  const nowTs = Date.now();
+                  const last = unknownToolNoticeAt.get(key) || 0;
+                  log(`⛔ ${key} DSH 里找不到 snowluma MCP 工具：profile 的 cordis.patch.yml 缺少 mcp-snowluma 条目。`);
+                  log('   修复：cd D:\\dev\\fatfishbot && node scripts/setup-dsh.mjs desktop');
+                  appendActivity(`${key} 缺少 snowluma MCP 工具（profile 配置丢失）`);
+                  if (nowTs - last > 10 * 60 * 1000) {
+                    unknownToolNoticeAt.set(key, nowTs);
+                    if (cfg.ownerQQ) {
+                      try {
+                        await sendToQQ(`private:${cfg.ownerQQ}`, '⚠️ DSH profile 里缺少 snowluma MCP 工具（qq_* 工具全部失效），所以群里发不出话。\n修复：在 D:\\dev\\fatfishbot 跑 node scripts/setup-dsh.mjs desktop，然后重试。');
+                      } catch {}
+                    }
+                  }
                   continue;
                 }
                 // 模型偶尔会把工具参数写成非法 JSON（实测：messages 的值漏了引号，
