@@ -1000,6 +1000,8 @@ function loadConfig() {
     // 每 N 次唤醒注入一次完整角色卡；其余唤醒只给一行提醒（省 token）。
     // 0/1 = 每次都注入（旧行为）；默认 4。
     injectEveryNWakes: 4,
+    // 同一次唤醒内 buildWakePromptV2 会跑两次，这个窗口内的重复构建沿用上次判定（0 = 关闭去重）
+    injectDedupeWindowMs: 8000,
     ...(file.role ?? {})
   };
   roleInjectMaxChars = applyRoleInjectLimit(cfg.role.maxInjectChars);
@@ -9623,7 +9625,8 @@ async function main() {
       const now = Date.now();
       // 同一次唤醒里 buildWakePromptV2 可能被调用两次（投递 + 复核），
       // 8 秒内重复构建沿用上次判定，避免「每 4 轮」被消耗成「每 2 轮」。
-      const sameWake = rec.lastAt && now - Number(rec.lastAt) < 8000 && rec.sig === sig;
+      const dedupeMs = Number.isFinite(Number(cfg.role?.injectDedupeWindowMs)) ? Number(cfg.role.injectDedupeWindowMs) : 8000;
+      const sameWake = dedupeMs > 0 && rec.lastAt && now - Number(rec.lastAt) < dedupeMs && rec.sig === sig;
       if (rec.sig !== sig) {
         rec.sig = sig;
         rec.n = 1;
