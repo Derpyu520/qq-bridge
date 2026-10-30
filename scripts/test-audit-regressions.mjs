@@ -606,6 +606,37 @@ await test('R28 同一会话的第二个 wait 返回 429，且带 retryAfterMs �
   } finally { await h.close(); }
 });
 
+// ── R29. 唤醒配置不再把 batchWindowMs 钉死在会话上（吸收 #93 的可取部分）────
+//
+// 旧实现：AI 不传 batchWindowMs 时沿用会话里的旧值。于是只要历史上有一次传过/默认过 8000，
+// 之后把全局 wake.batchWindowMs 改成别的值都不会生效 —— 调参静默失效。
+await test('R29 不传 batchWindowMs 时跟随全局值，显式传入时仍以显式值为准', async () => {
+  const h = await bridgeHarness({ config: { socialV2: { wake: { batchWindowMs: 5000 } } } });
+  try {
+    h.setMode('reserved2');
+    const key = 'group:456';
+    const st = h.getSocialV2State(key);
+    st.wakeConfig.batchWindowMs = 12000; // 模拟历史会话里的旧值
+    // 沉睡前观察窗口不是这条测试的对象：把「最后来信」推到 10 分钟前，闸门自然放行。
+    st.lastIncomingAt = Date.now() - 10 * 60 * 1000;
+    await withServer(h, async (port) => {
+      const res = await call(port, '/api/socialV2/wake-config', {
+        method: 'POST', token: st.agentToken, body: { key, config: { mode: 'diving', infinite: true } }
+      });
+      assert.equal(res.status, 200, String(res.body));
+    });
+    assert.equal(st.wakeConfig.batchWindowMs, 5000, '不传时应跟随全局 5000，而不是沿用 12000');
+
+    await withServer(h, async (port) => {
+      const res = await call(port, '/api/socialV2/wake-config', {
+        method: 'POST', token: st.agentToken, body: { key, config: { batchWindowMs: 9000 } }
+      });
+      assert.equal(res.status, 200, String(res.body));
+    });
+    assert.equal(st.wakeConfig.batchWindowMs, 9000, '显式传入时以显式值为准');
+  } finally { await h.close(); }
+});
+
 // ── R2. 分条发送失败：错误必须可读，且预占额度要回滚 ─────────────────────────
 await test('R2 send-burst 失败路径不再抛 ReferenceError，并回滚发送额度', async () => {
   const h = await bridgeHarness({
