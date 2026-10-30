@@ -155,7 +155,7 @@ npm run test-stickers
 This project is licensed under the **[PolyForm Noncommercial License 1.0.0](LICENSE)**:
 **commercial use is not permitted**; noncommercial use, modification, and redistribution are allowed,
 and you do **not** need to notify the author. This is a source-available license, **not OSI open source**.
-See [NOTICE.md](NOTICE.md) for a plain-language summary and the license boundaries of third-party components.
+See [NOTICE.md](NOTICE.md) for the scope of this license and the license boundaries of third-party components.
 
 > Versions up to `v0.2.1-r1` were released under MIT; copies already obtained under MIT remain usable
 > under MIT.

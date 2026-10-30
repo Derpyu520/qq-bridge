@@ -1,173 +1,202 @@
-# NOTICE — 许可说明、第三方组件与合规边界
+# NOTICE
 
-**本文件不是许可证正文**，许可证见 [LICENSE](LICENSE)。这里放两件事：① 本项目的许可范围用白话
-重述一遍；② 第三方组件各自的许可与合规边界（原先写在 `LICENSE` 末尾，现移到此处，内容不变）。
+本文件载明 qq-bridge（下称「本软件」）的著作权归属、许可范围、第三方组件与合规边界。
 
----
-
-## 一、本项目的许可（白话版）
-
-`LICENSE` 采用 **[PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0)**
-（SPDX 标识符：`PolyForm-Noncommercial-1.0.0`）。
-
-**可以做的：**
-
-- **非商业用途随便用**：个人学习、研究、实验、自娱自乐、hobby 项目、搭给自己用。
-- **随便改**，改成什么样都行。
-- **改完在别的地方发布/分享**，无需告知作者、无需取得同意、无需署名到作者本人头上
-  （保留上面的 `Required Notice:` 版权行即可）。
-- 慈善组织、教育机构、公共研究机构、公共安全与卫生机构、环保组织、政府机构的使用，
-  **无论经费来源**，都算非商业用途。
-
-**不可以做的：**
-
-- **任何商业用途**。具体指：出售、并入付费产品或服务、提供**付费**托管/部署/代搭/代运营、
-  以收费方式对外提供服务、把赞助或捐赠与"可获得服务"绑定。
-- 再许可（sublicense）或转让你从本许可获得的权利。
-
-**你对别人的义务只有一条**（PolyForm §Notices）：把原版或改过的副本交给别人时，
-**随附 `LICENSE` 条款或它的 URL**。这不是"告知作者"——作者不需要收到任何通知。
-
-> ⚠️ 这是一份 **source-available** 许可，**不是 OSI 认可的开源许可**（因为它禁止商业用途）。
-> 如果你要找 OSI 开源，这个项目不适合你。
->
-> ⚠️ **许可变更的时效**：`v0.2.1-r1` 及更早的版本发布时使用的是 MIT 许可，**已经拿到那些版本的人
-> 仍然可以按 MIT 使用**——许可变更只对此后的版本生效。同理，变更前已 fork 的副本不受影响。
->
-> ℹ️ **为什么 GitHub 仓库页面显示 "Other / NOASSERTION" 而不是一个许可名**：
-> GitHub 的许可识别只覆盖它自己维护的常用许可清单（`agpl-3.0` … `unlicense`，共 13 个，
-> **全部是开源许可**），**不包含 PolyForm 一族**（`GET /licenses/polyform-noncommercial-1.0.0`
-> 返回 404）。也就是说「禁止商用」与「GitHub 页面显示许可徽章」这两件事**无法同时满足**。
-> 权威声明以 `LICENSE` 正文与 `package.json` 的 `"license": "PolyForm-Noncommercial-1.0.0"`
-> （SPDX 标识符）为准。**请不要为了让徽章好看而改回 MIT**——那等于放弃禁止商用。
+本文件不是许可条款，亦不构成对许可条款的补充、限制或解释。本软件的许可条款以 `LICENSE` 为准；
+本文件与 `LICENSE` 不一致时，以 `LICENSE` 为准。
 
 ---
 
-## 二、第三方组件与合规边界
+## 一、著作权与许可
 
-本项目（qq-bridge，将来的 QSH）自己的代码采用上述许可。**该许可不覆盖下列第三方组件**，
-这些组件各自适用其原始许可，使用前请自行阅读并遵守：
+### 1.1 著作权归属
+
+本软件著作权由 Derpyu520 及 qq-bridge / QSH 贡献者共同享有，依
+**PolyForm Noncommercial License 1.0.0**（SPDX 标识符：`PolyForm-Noncommercial-1.0.0`）授权。
+许可全文见 [`LICENSE`](LICENSE)，官方文本见
+<https://polyformproject.org/licenses/noncommercial/1.0.0>。
+
+### 1.2 许可范围
+
+以下为条款索引，仅供查阅；权利义务以 `LICENSE` 正文为准。
+
+| 事项 | 规定 |
+| --- | --- |
+| 使用目的 | 限于非商业目的 |
+| 修改 | 允许 |
+| 分发 | 允许，包括分发含修改的版本 |
+| 商业使用 | 不允许 |
+| 再许可、转让 | 不允许 |
+| 分发时的义务 | 须随附本许可条款或其 URL，以及 `LICENSE` 中 `Required Notice:` 行 |
+
+依许可「Noncommercial Purposes」「Personal Uses」「Noncommercial Organizations」三条，个人学习、
+研究、实验、业余项目，以及慈善组织、教育机构、公共研究机构、公共安全与卫生机构、环境保护组织、
+政府机构的使用，均属许可用途，不受经费来源影响。
+
+### 1.3 版本适用
+
+`v0.2.1-r1` 及更早版本以 MIT 许可发布，该等版本仍适用其发布时的许可。本许可仅适用于
+`v0.2.1-r1` 之后的版本。许可变更前已取得副本或已完成 fork 的，不受本许可约束。
+
+### 1.4 托管平台的许可标识
+
+GitHub 的许可识别清单不包含 PolyForm 系列（2026-10-30 核验：`GET /licenses` 共返回 13 项，
+均为开源许可；`GET /licenses/polyform-noncommercial-1.0.0` 返回 404），其仓库页面因此显示
+`Other / NOASSERTION`。该显示不影响许可效力。许可类型以 `LICENSE` 正文及 `package.json`
+的 `license` 字段为准。
+
+---
+
+## 二、第三方组件
+
+### 2.1 组件与许可
+
+本软件包含或依赖下列第三方组件。各组件依其自身许可授权，不适用本软件的许可。
 
 | 组件 | 许可 | 说明 |
 | --- | --- | --- |
-| [`@deepseek-ai/dsh`](https://github.com/deepseek-ai/deepseek-harness) 及其 `@deepseek-ai/*` 包 | MIT | DeepSeek Harness 本体与官方 API 客户端 |
-| [`@snowluma/sdk`](https://www.npmjs.com/package/@snowluma/sdk) / [`@snowluma/mcp`](https://www.npmjs.com/package/@snowluma/mcp) | ⚠️ **声明为 `SEE LICENSE IN LICENSE`，但包里没有 LICENSE 文件**（见下） | 本项目通过 npm 依赖使用；计划在 QSH 里**移除这两个依赖**（见下） |
-| [SnowLuma](https://github.com/SnowLuma/SnowLuma) 本体 | SnowLuma 源码可见非商业许可（非 OSI 开源） | **本项目不在仓库内包含、也不分发 SnowLuma 的源码或二进制**，只通过 OneBot v11 协议与它通信（另只读其 `config/onebot_*.json` 以发现 token）。⚠️ 例外见下：`npm install` 会对两个 `@snowluma/*` **npm 包**的本地安装副本做一次机械修补（不触碰 SnowLuma 本体，也不触碰任何原生组件） |
+| [`@deepseek-ai/dsh`](https://github.com/deepseek-ai/deepseek-harness) 及 `@deepseek-ai/*` 各包 | MIT | DeepSeek Harness 本体与官方 API 客户端 |
+| [`@snowluma/sdk`](https://www.npmjs.com/package/@snowluma/sdk)、[`@snowluma/mcp`](https://www.npmjs.com/package/@snowluma/mcp) | 声明为 `SEE LICENSE IN LICENSE`，发布包内未附许可文件（见 2.2） | 经 npm 依赖使用；计划在 QSH 中移除 |
+| [SnowLuma](https://github.com/SnowLuma/SnowLuma) 本体 | 源码可见的非商业许可（非 OSI 开源许可） | 本软件不在仓库内包含或分发其源码与二进制，仅经 OneBot v11 协议通信（另只读其 `config/onebot_*.json` 以发现 token） |
 | `@modelcontextprotocol/sdk`、`js-yaml`、`zod` 等 | MIT / ISC | 见各自包内 LICENSE |
 
-#### ⚠️ 已知的依赖许可瑕疵（`@snowluma/sdk` / `@snowluma/mcp`）
+### 2.2 `@snowluma/sdk` 与 `@snowluma/mcp` 的许可状态
 
-**事实**（2026-09-20 实测，可自行复核）：
+**核验事实**（2026-09-20，可自行复核）：
 
-- 两个包的 `package.json` 都声明 `"license": "SEE LICENSE IN LICENSE"`；
-- 但**发布的 npm 包里没有 LICENSE 文件**：`npm pack @snowluma/sdk --dry-run` 的文件清单只有
-  `dist/`、`README.md`、`CHANGELOG.md`、`VERSIONING.md`；
-- 原因在源头：仓库里 `packages/sdk/package.json` 与 `packages/mcp/package.json` 的 `files` 数组
-  **没有包含 `LICENSE`**，且 `packages/sdk/LICENSE` 与 `packages/mcp/LICENSE` 在仓库中**不存在**（均 404）。
+1. 两个包的 `package.json` 均声明 `"license": "SEE LICENSE IN LICENSE"`；
+2. 发布的 npm 包内不含 LICENSE 文件：`npm pack @snowluma/sdk --dry-run` 的文件清单仅有
+   `dist/`、`README.md`、`CHANGELOG.md`、`VERSIONING.md`；
+3. 成因在源仓库：`packages/sdk/package.json` 与 `packages/mcp/package.json` 的 `files` 字段
+   未包含 `LICENSE`，且 `packages/sdk/LICENSE`、`packages/mcp/LICENSE` 均不存在。
 
-**这意味着什么**：这两个包的许可态**在包内不可判定**——`SEE LICENSE IN LICENSE` 指向一个不存在的文件。
-但注意：SnowLuma LICENSE §1 对 "Software" 的定义是「the SnowLuma source code and assets **in this repository**」，
-而 `packages/sdk` 与 `packages/mcp` **就在那个仓库里** ⇒ 它们在文本上**确实受同一份非商业许可约束**
-（这是 §1 定义的直接结论，不是"推断"）。所以**移除依赖的理由比其他处理更硬**，不只是"消除不确定性"。
+**认定**：上述两个包的许可状态在包内不可判定，`SEE LICENSE IN LICENSE` 指向的文件并不存在。
+但 SnowLuma LICENSE §1 对 "Software" 的定义为「the SnowLuma source code and assets **in this
+repository**」，而 `packages/sdk`、`packages/mcp` 位于该仓库之内，故二者受同一非商业许可约束。
+此为 §1 定义的直接结论。
 
-**本项目对它们的实际做法（据实陈述；不要写成"不修改"）**：
+**本软件的处理**：
 
-1. **仓库内不含、不分发**它们的代码：`node_modules/` 在 `.gitignore` 里，已跟踪文件中
-   没有任何原生二进制（`.node/.dll/.so`）或 `@snowluma` 路径下的文件；
-2. **但 `npm install` 会改本地安装副本**：`postinstall` 运行 `scripts/patch-snowluma-sdk.mjs`，
-   对 `node_modules/@snowluma/{sdk,mcp}` 的 `dist/**/*.js` 做**一次机械修补**（只给相对导入补 `.js`
-   扩展名，绕开这两个包自身的 ESM 打包问题）。许可 §2(c) 允许"为自己的非商业使用而修改"，
-   且**只作用于本机安装副本、不进入本仓库**；**所以"不修改 SnowLuma 的源码或二进制"这种说法是不准确的**，
-   本项目文档已统一改为上述据实描述；
-3. **在 QSH 里移除这两个依赖**（已列入 `QSH-plan` 的 M2 里程碑）——
-   - `@snowluma/sdk` 在本项目里只用到两样东西：**1 处 WebSocket 客户端构造**（`bridge.js` 末尾）
-     + **3 个 `text()` 调用点**（共 6 次调用；实测裸 `text(` 匹配数为 6；另有 3 个 `scripts/` 诊断脚本也 import 它）。
-     OneBot v11 是公开协议规范，自己实现一个最小客户端即可（约 150 行 + 回归）；
-     顺带可去掉 `postinstall` 补丁 —— ⚠️ **删依赖与换客户端必须同批落地**（补丁是 `postinstall` 载荷路径，
-     只删依赖会让 `npm install` 或启动直接失败）；
-   - `@snowluma/mcp` 在本项目里**运行时完全不用**（`src/` 里零引用，仅 `scripts/test-mcp-exec.mjs` 用到）
-     ——改成**自建能力矩阵**（只取动作名与参数名这类接口事实，措辞自己写；
-     ⚠️ **不要提交它的 `catalog.js` 快照**，那本身就是再分发其内容，会触发 §3(b)(c)）。
-4. 若你要更彻底地消除不确定性，可以在给 SnowLumaDevs 的邮件里**顺带问一句**
-   「`packages/sdk` 与 `packages/mcp` 适用哪个许可？」—— 这两个包**声明了却未附带**许可文件，
-   属于他们该修的打包疏漏，以"用户反馈"的口吻问很自然。
+1. 仓库内不含、不分发上述两个包的代码。`node_modules/` 已在 `.gitignore` 中；已跟踪文件内不包含
+   任何原生二进制（`.node` / `.dll` / `.so`），亦不包含 `@snowluma` 路径下的文件。
+2. `npm install` 的 `postinstall` 会运行 `scripts/patch-snowluma-sdk.mjs`，对
+   `node_modules/@snowluma/{sdk,mcp}` 的 `dist/**/*.js` 执行一次机械修补（为相对导入补充 `.js`
+   扩展名，规避该两包自身的 ESM 打包缺陷）。该修补仅作用于本机安装副本，不进入本仓库；
+   SnowLuma 许可 §2(c) 允许为自身非商业使用而修改。**本软件不对 SnowLuma 的源码或二进制作任何改动，
+   亦不对其作出「未修改」的陈述。**
+3. 移除计划（已列入 QSH 的 M2 里程碑）：
+   - `@snowluma/sdk` 在本软件中仅用于构造 1 处 WebSocket 客户端与 3 个 `text()` 调用点
+     （另有 3 个 `scripts/` 诊断脚本引用）。OneBot v11 为公开协议规范，可自行实现最小客户端；
+     移除依赖与替换客户端须同批完成，否则 `postinstall` 修补将失去作用对象。
+   - `@snowluma/mcp` 在本软件运行时不使用（`src/` 内无引用，仅 `scripts/test-mcp-exec.mjs` 引用），
+     计划改为自建能力矩阵。其 `catalog.js` 快照属再分发其内容，不得提交至本仓库。
+4. 如需消除上述不确定性，应向 SnowLumaDevs 书面确认 `packages/sdk` 与 `packages/mcp` 所适用的许可。
 
-### 使用风险提示
+---
 
-- SnowLuma 是独立第三方项目，与腾讯公司（Tencent）及 QQ **无任何隶属、合作、授权或背书关系**。
-- 使用非官方协议工具接入第三方平台**可能违反该平台的服务条款并导致账号受限**，风险由使用者自负。
-- 本项目会把 QQ 消息交给大语言模型处理，并可能让模型代替账号发言。请在
-  [README.md](README.md) 与 [RULES.md](RULES.md) 说明的白名单/审计机制下使用，不要
-  在未配置白名单的情况下直接暴露给任意群聊或陌生人。
+## 三、与 SnowLuma 的关系
 
-#### 📡 数据出机清单（**完整列出，不要只看"发给 LLM"这一句**）
+### 3.1 无关联声明
 
-| 目的地 | 什么数据 | 默认 | 怎么关 |
-| --- | --- | --- | --- |
-| **本机 DSH**（默认 `127.0.0.1:3080`） | 群/私聊消息文本、图片、昵称、会话上下文 | 开 | 不运行 DSH 就没有这个桥接的意义 |
-| **LLM 提供方**（经 DSH 调用，默认 provider `deepseek-official`） | 同上——**包括群里其他人的消息**（旁观者数据） | 开 | 在 DSH 里换 provider/model；或不用本程序 |
-| **OneBot 网关**（默认 `127.0.0.1:3000/3001`） | 你发出的消息、动作参数 | 开 | 不接 QQ 就没有这个程序的意义 |
-| ⚠️ **`web_search` → DeepSeek 联网搜索接口**（默认；与 LLM 同一提供方）/ **Bing**（仅 DeepSeek 不可用时兜底） | **搜索关键词**。**黑话学习默认开启**（`slang.autoResearch: true`），会把**从群聊里提取的词条**作为关键词发出去 | **开** | 不挂载 `mcp-web-search-safe`，或在控制台关掉黑话自动研究 |
-| ⚠️ **`web_fetch` → 任意公网 URL** | 被抓取的页面地址（由模型决定，可能包含从聊天内容里得到的线索） | **开** | 同上（`safe-fetch.js` 只拦内网/私有地址，公网都放行） |
+SnowLuma 为独立第三方项目，与本软件作者及腾讯公司（Tencent）、QQ 之间不存在任何隶属、合作、
+授权或背书关系。
 
-> **最后两行是容易被忽略的**：向群友告知"消息会被 AI 处理"时，也要想到**群聊里出现的陌生词**
-> 可能被当作搜索关键词发往搜索后端。默认后端是**已经在处理这段对话的同一个 DeepSeek 搜索接口**
-> （不额外多一个第三方）；只有它不可用时才回退 Bing。若你在意，请在群里启用前告知群成员、
-> 关闭黑话自动研究，或把 `webSearch.provider` 设为 `bing` 明确只用 Bing（也可用 `deepseek` 只走 DeepSeek）。
-> QSH 计划里有一条**"不引入遥测"的设计不变式**：本程序不上报任何遥测/统计/phone-home 数据
-> （已实测确认：源码中没有 telemetry/analytics 类调用，外部目的地只有上面这五个）。
+### 3.2 互操作性质
 
-### ⚠️ 关于 SnowLuma 许可的说明（读这段可以省掉你自己研究的一小时）
+本软件不在仓库内包含或分发 SnowLuma 的源码与二进制，仅通过 OneBot v11 协议与其通信，
+并只读其 `config/onebot_*.json` 以发现账号 token。本软件不是 SnowLuma 的修改版或衍生版本。
 
-SnowLuma 采用「源码可见非商业许可」（[LICENSE](https://github.com/SnowLuma/SnowLuma/blob/main/LICENSE)，以中文为准）。
-本项目与它的关系是**协议互操作**，据此逐条对照如下（**这是工程层面的理解，不是法律意见**）：
+### 3.3 条款对照
 
-| 条款 | SnowLuma 的要求 | 本项目的情况 |
+SnowLuma 采用源码可见的非商业许可（[LICENSE](https://github.com/SnowLuma/SnowLuma/blob/main/LICENSE)，
+以中文文本为准）。本软件与其为协议互操作关系，对照如下。**以下为工程层面的判断，不构成法律意见。**
+
+| 条款 | SnowLuma 的要求 | 本软件的判断 |
 | --- | --- | --- |
-| §2 授权 | 允许为非商业目的**使用、运行**，以及**为自己的非商业使用而修改** | ✅ 落在授权范围内 |
-| §3(d) | 公开发布「修改版或**衍生版**」须事先书面许可 | ❌ **不适用**：本项目不在仓库内包含或分发 SnowLuma 的源码与二进制，**不是它的修改版或衍生版**（关于 `@snowluma/*` npm 包与 `postinstall` 修补的据实说明见上文「已知的依赖许可瑕疵」） |
-| §4(a) | 禁止**商业使用** | ❌ **不适用**：本项目免费、无任何收费形态 |
-| §4(b) | 不得**基于本软件**开发、发布或分发另一个项目 | 见下 |
+| §2 授权 | 允许为非商业目的使用、运行，以及为自身非商业使用而修改 | 在授权范围内 |
+| §3(d) | 公开发布修改版或衍生版须事先取得书面许可 | 不适用：本软件不含、不分发其源码与二进制，非其修改版或衍生版 |
+| §4(a) | 禁止商业使用 | 不适用：本软件免费提供，无任何收费形态 |
+| §4(b) | 不得基于本软件开发、发布或分发另一个项目 | 见 3.4 |
 
-**关于 §4(b)——两种读法，我们要承认不确定性**：
+### 3.4 关于 §4(b) 的解释与不确定性
 
-- **较宽松的读法**（本项目最初采用）：§4(b) 紧接商业限制，且 §1 把「基于本软件的**付费**托管、部署、代搭」
-  明确列入商业用途 ⇒ 它的意图是**堵住"把商用包装成一个周边项目来绕过 §4(a)"**，而不是禁止一切互操作工具。
-- **较严格的读法（更站得住）**：§4(a) 已经写的是「Commercial Use of the Software **in any form** is
-  PROHIBITED」——「**任何形式**」本就涵盖伪装的商业使用。于是宽松读法会让 §4(b) **没有任何独立适用范围**，
-  这反而违背了"同一份许可内部应作一致解释"的准则。**能给 §4(b) 赋予独立含义的，恰恰是字面读法**：
-  它是一条**不带商业限定语**的独立禁止，而 QSH 确实是"另一个项目"。
-- 另有两个加重因素：§2 授予的权利是**可撤销（revocable）**的；EULA §8 允许著作权人**单方面更新条款**。
+本软件注意到该条存在两种解释：
 
-**⇒ 因此本项目的实际立场是：风险不高且大概率不会被追究，但"无需申请"是过于自信的说法。**
-正确处理是：**在公开发布/公开宣布之前，向 SnowLumaDevs 发一封简短邮件说明用途并询问是否需要额外条件**，
-把回复（或未回复的事实）记录在 `docs/design/decisions/` 里。成本是一封邮件；对价是这条许可里唯一
-可能让项目被迫改名或下架的条款。
+- 一种解释认为，§4(b) 紧接商业限制，且 §1 已将基于本软件的付费托管、部署、代搭列为商业用途，
+  故其意旨在于禁止将商业使用包装为周边项目以规避 §4(a)，而非禁止一切互操作工具。
+- 另一种解释更为严格，且更具文本依据：§4(a) 已表述为「Commercial Use of the Software **in any
+  form** is PROHIBITED」，若采用前一种解释，§4(b) 将不具独立适用范围，与同一许可内部应作一致
+  解释的原则相悖。赋予 §4(b) 独立含义的正是字面解释：它是一项不含商业限定语的独立禁止。
 
-**此外，有一条 EULA 条款是本项目**必须**遵守的硬边界（比 §4(b) 更容易踩到）**：
+此外，§2 授予的权利为可撤销（revocable），EULA §8 允许著作权人单方面更新条款。
 
-> EULA §5.4（中文为准）：「除事先取得著作权人的书面授权外，您仅可为 `LICENSE` 允许的非商业用途，
-> 以专有组件随本软件提供的形式运行该组件；不得复制、修改、单独再分发或再许可该组件。
-> **将其并入第三方安装包或 Docker 镜像、通过自动化脚本部署**，或者将其用于任何商业用途，均须事先取得书面授权。」
+**本软件的立场**：不以「无需授权」为前提。在公开发布或公开宣布之前，应向 SnowLumaDevs 书面说明
+用途并询问是否需额外条件，并将答复（或未获答复的事实）归档于 `docs/design/decisions/`。
 
-⇒ **本项目永不安装、复制、打包或自动部署 SnowLuma 及其原生组件，也不程序化启动/结束它的进程。**
-只做端口探测与状态查询，缺失时告诉用户自己去官方渠道下载与启动。（这条已升级为设计不变量 L6，
-见规划集的 `QSH_PLAN.md` §6.0；历史上 `src/mcp-host-server.js` 的 `start_snowluma`/`stop_snowluma`
-违反它，属待删除项。）
+### 3.5 EULA §5.4：必须遵守的边界
 
-**⚠️ 下面这些会让 §4(a) 直接生效（"变现即触发"，与代码是否开源无关），请不要做**：
+> EULA §5.4（以中文文本为准）：「除事先取得著作权人的书面授权外，您仅可为 `LICENSE` 允许的
+> 非商业用途，以专有组件随本软件提供的形式运行该组件；不得复制、修改、单独再分发或再许可该组件。
+> **将其并入第三方安装包或 Docker 镜像、通过自动化脚本部署**，或者将其用于任何商业用途，
+> 均须事先取得书面授权。」
 
-- 提供**付费**的托管 / 部署 / 代搭 / 代运营服务（哪怕只收成本价）；
-- 把它并入任何**付费**产品或服务；
-- 以**收费**方式运行它对外提供服务；
-- 把赞助/捐赠与"可获得服务"绑定。
+据此，本软件不安装、不复制、不打包、不自动部署 SnowLuma 及其原生组件，亦不以程序化方式启动或
+结束其进程；仅进行端口探测与状态查询，缺失时提示使用者自行经官方渠道获取并启动。
 
-> 免费 + 不卖服务 + 不代装 = 安全。这也是云部署定位为「**单租户自托管，不是 SaaS**」的原因——
-> 那条限制本身就是一道保护你的护栏。
->
-> 如果你将来打算做上述任一形态，**必须**先向 SnowLumaDevs 取得书面授权
-> （联系方式见其 LICENSE：`motricseven@foxmail.com`）。
+该约束已作为设计不变量 L6 记录于 `QSH-plan/QSH_PLAN.md` §6.0。原 `start_snowluma` /
+`stop_snowluma` 工具与 `snowluma.allowProcessControl` 配置项已于 v0.1.5 移除，并有回归断言
+（`scripts/test-audit-setup-guards.mjs`）防止回退。
 
-**结论**：本项目自己的版权许可（PolyForm Noncommercial 1.0.0）只覆盖本项目自己的代码，
-**不对 SnowLuma 授予任何权利，也不替使用者承担其许可义务**。
-使用者需自行取得 SnowLuma 并遵守其许可。
+### 3.6 构成本软件明示排除的使用形态
+
+下列形态将直接落入 SnowLuma §4(a) 的禁止范围，不因本软件采用何种许可而改变：
+
+1. 提供付费的托管、部署、代搭或代运营服务，包括以成本价收费；
+2. 将本软件并入任何付费产品或服务；
+3. 以收费方式运行本软件对外提供服务；
+4. 将赞助或捐赠与可获得的服务相绑定。
+
+### 3.7 结论
+
+本软件的版权许可仅覆盖本软件自身的代码，不对 SnowLuma 授予任何权利，亦不替代使用者依其许可
+应承担的义务。使用者应自行取得 SnowLuma 并遵守其许可。
+
+---
+
+## 四、数据传输
+
+本软件运行时会向下列目的地传输数据。部署方应在部署前知悉，并按适用法律与所在平台规则履行
+告知义务。
+
+| 目的地 | 传输的数据 | 默认 | 关闭方式 |
+| --- | --- | --- | --- |
+| 本机 DSH（默认 `127.0.0.1:3080`） | 群聊与私聊消息文本、图片、昵称、会话上下文 | 启用 | 不运行 DSH |
+| LLM 提供方（经 DSH 调用，默认 `deepseek-official`） | 同上，包含群内其他成员的消息 | 启用 | 在 DSH 中更换 provider 或 model |
+| OneBot 网关（默认 `127.0.0.1:3000/3001`） | 发出的消息与动作参数 | 启用 | 不接入 QQ |
+| `web_search` → DeepSeek 搜索接口（默认）／Bing（仅前者不可用时回退） | 搜索关键词。黑话自学习默认启用（`slang.autoResearch: true`），会将自群聊提取的词条作为关键词发出 | 启用 | 不挂载 `mcp-web-search-safe`，或关闭黑话自动研究 |
+| `web_fetch` → 任意公网 URL | 被抓取的页面地址（由模型决定，可能来自聊天内容中的线索） | 启用 | 不挂载 `mcp-web-search-safe`；`safe-fetch.js` 仅拦截内网与私有地址 |
+
+第 4、5 项的传输内容由模型决定，可能包含群聊中出现的词条或线索。部署方如愿限制，可将
+`webSearch.provider` 设为 `bing` 或 `deepseek`，或关闭黑话自动研究。
+
+本软件不包含遥测、统计或 phone-home 机制；上述五项为本软件全部对外数据传输目的地。
+
+---
+
+## 五、使用风险与免责
+
+1. 使用非官方协议工具接入第三方平台，可能违反该平台的服务条款并导致账号受限，风险由使用者承担。
+2. 本软件将聊天内容交由第三方大语言模型处理，并可能代账号发言。部署方应仅在
+   [RULES.md](RULES.md) 所述白名单与审计机制下运行，不应在未配置白名单的情况下向任意群聊或
+   陌生人开放。
+3. 部署方应保护控制台令牌、`config.json` 与 `state/` 的访问权限，不应将 DSH 或本软件的端口
+   暴露于公网。
+4. 本软件按「现状」提供，不附带任何明示或默示担保。在适用法律允许的最大范围内，著作权人
+   不对使用本软件所产生的任何后果承担责任。此条与 `LICENSE` 的 No Liability 条款一致。
+
+---
+
+## 六、联系
+
+- 安全漏洞：依 [SECURITY.md](SECURITY.md) 通过 GitHub 私密漏洞上报渠道提交，不得以公开 issue 披露。
+- 许可与合规问题：于本仓库提交 issue。

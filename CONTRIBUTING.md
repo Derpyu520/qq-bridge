@@ -65,7 +65,7 @@ PR 里请写清楚：
 ## 6. 许可
 
 提交 PR 即表示你同意你的贡献按本仓库的
-[PolyForm Noncommercial 1.0.0](LICENSE) 发布（范围与白话解释见 [NOTICE.md](NOTICE.md)）。
+[PolyForm Noncommercial 1.0.0](LICENSE) 发布（许可范围与第三方组件声明见 [NOTICE.md](NOTICE.md)）。
 
 如果你不能接受这一点（例如你的雇主对该代码有 CLA 或再许可要求），**请先开 issue 讨论**，
 不要直接提 PR。
