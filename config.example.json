@@ -280,7 +280,11 @@
       "maxChars": 200,
       "cacheDir": "state/tts-cache",
       "cacheTtlMs": 86400000,
-      "cacheMaxEntries": 200
+      "cacheMaxEntries": 200,
+      "maxPending": 4,
+      "maxPerMinute": 2,
+      "maxPerHour": 10,
+      "apiKeyEnv": ""
     }
   },
   "webSearch": {

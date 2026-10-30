@@ -175,11 +175,12 @@ SnowLuma 采用源码可见的非商业许可（[LICENSE](https://github.com/Sno
 | OneBot 网关（默认 `127.0.0.1:3000/3001`） | 发出的消息与动作参数 | 启用 | 不接入 QQ |
 | `web_search` → DeepSeek 搜索接口（默认）／Bing（仅前者不可用时回退） | 搜索关键词。黑话自学习默认启用（`slang.autoResearch: true`），会将自群聊提取的词条作为关键词发出 | 启用 | 不挂载 `mcp-web-search-safe`，或关闭黑话自动研究 |
 | `web_fetch` → 任意公网 URL | 被抓取的页面地址（由模型决定，可能来自聊天内容中的线索） | 启用 | 不挂载 `mcp-web-search-safe`；`safe-fetch.js` 仅拦截内网与私有地址 |
+| 使用者配置的 TTS 服务（默认地址 `127.0.0.1:9880`） | 待合成文本、音色引用；可能包含聊天上下文中的内容 | 关闭 | 保持 `socialV2.tts.enabled: false`；AI 另有 `tools.synthesizeVoice` 开关 |
 
 第 4、5 项的传输内容由模型决定，可能包含群聊中出现的词条或线索。部署方如愿限制，可将
 `webSearch.provider` 设为 `bing` 或 `deepseek`，或关闭黑话自动研究。
 
-本软件不包含遥测、统计或 phone-home 机制；上述五项为本软件全部对外数据传输目的地。
+本软件不包含遥测、统计或 phone-home 机制；上述六项为本软件全部对外数据传输目的地。
 
 ---
 

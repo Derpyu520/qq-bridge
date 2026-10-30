@@ -128,7 +128,11 @@ console.log('## qq-bridge 语音系统：路由与开关');
   ok(/shouldBlockSilentReply\(key\)/.test(bridge), 'AI 语音尊重静默模式');
   ok(/allowAbsolutePath/.test(bridge), 'AI 绝对路径受配置约束');
   // 操作者通道不应被 AI 开关挡住（否则默认关闭时你自己也发不了）
-  const opSection = bridge.slice(bridge.indexOf("url.pathname === '/api/voice/send' || url.pathname === '/api/send/voice'"), bridge.indexOf("'/api/socialV2/send-voice'"));
+  const opStart = bridge.indexOf("url.pathname === '/api/voice/send' || url.pathname === '/api/send/voice'");
+  // TTS 的 AI 路由也可能位于下一条语音发送路由之前，不能把它的开关算到操作者通道里。
+  const opTail = bridge.slice(opStart);
+  const nextAgentRoute = opTail.search(/if \(req.method === 'POST' && url.pathname === '\/api\/socialV2\//);
+  const opSection = opTail.slice(0, nextAgentRoute < 0 ? undefined : nextAgentRoute);
   ok(!/if \(!voice\.enabled\)/.test(opSection), '操作者通道不被 voice.enabled 挡住（默认关闭时仍可手动试发）');
   const agentSection = bridge.slice(bridge.indexOf("url.pathname === '/api/socialV2/send-voice'"), bridge.indexOf("'/api/socialV2/send-sticker'"));
   ok(/if \(!voice\.enabled\)/.test(agentSection), 'AI 通道受 voice.enabled 挡住');

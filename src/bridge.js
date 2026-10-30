@@ -5738,7 +5738,7 @@ async function main() {
         // ── TTS 试合成（操作者通道：控制台面板试听，只合成不发送） ────────────
         //
         // 与 /api/socialV2/synthesize-voice（AI 通道）分开：这里只做「文本 → wav」，
-        // 不碰任何会话/白名单/限流逻辑（没有发送就没有那些约束的适用场景），
+        // 不碰发送侧会话/白名单逻辑；合成请求仍受共享 TTS 额度与队列约束，
         // 产物同时落缓存——控制台试听过的句子，AI 再说同一句时零等待。
         // 两段式：POST /api/tts/preview-status 合成并返回元数据（含回放 key）；
         // GET  /api/tts/preview?key=… 同源回放 wav。两段式是为了绕开 CSP
@@ -5806,6 +5806,9 @@ async function main() {
           const text = String(body.text ?? '').trim();
           if (!text) { sendJson({ ok: false, error: 'text 不能为空' }, 400); return; }
           if (text.length > tcfg.maxChars) { sendJson({ ok: false, error: `文本过长（${text.length} 字 > maxChars=${tcfg.maxChars}）` }, 400); return; }
+          // 发送额度先检查，拒绝的请求不触发外部合成；发送前仍会复核。
+          try { voiceBudgetCheck('operator:cli', voiceCfg()); }
+          catch (error) { sendJson({ ok: false, error: error?.message ?? String(error) }, 429); return; }
           let synth;
           try {
             synth = await ttsSynth().synthesize(text, { voice: body.voice ? String(body.voice) : undefined });
@@ -6001,6 +6004,9 @@ async function main() {
             sendJson({ ok: false, error: `文本过长（${text.length} 字 > maxChars=${tcfg.maxChars}），请改用文字回复` }, 400);
             return;
           }
+          // 发送额度先检查，拒绝的请求不触发外部合成；发送前仍会复核。
+          try { voiceBudgetCheck(key, voice); }
+          catch (error) { sendJson({ ok: false, error: error?.message ?? String(error) }, 429); return; }
           let synth;
           try {
             synth = await ttsSynth().synthesize(text, { voice: body.voice ? String(body.voice) : undefined });
