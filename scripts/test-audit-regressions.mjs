@@ -352,6 +352,65 @@ await test('R22 非 owner 群友的回复不得被当作挂起提问的答案', 
   } finally { await h.close(); }
 });
 
+// ── R23. 全局 store 的备注必须按会话隔离 ──────────────────────────────────────
+//
+// 背景：表情备注（`desc`/`localNote`/`tags`）与黑话条目是 AI 在**某个会话里**写下的，
+// 但它们原来被 `buildStickerContext()` / `buildSlangContext()` 逐字注入**每一个会话**。
+// 于是「789 群阿豪发的，那边在聊本地部署」这种带群号/人名/话题的备注会原样出现在
+// 456 群的提示词里 —— 一条不需要知道任何群号就能成立的跨会话信息流。
+await test('R23 表情备注与黑话按会话隔离，不跨会话注入', async () => {
+  const h = await bridgeHarness({
+    config: {
+      ownerQQ: 123, allow: { private: ['123'], groups: ['456', '789'] },
+      agentPreset: 'qq-chat-v2',
+      socialV2: { enabled: true, sticker: { enabled: true, includeInPrompt: true, promptMaxStickers: 8 } }
+    }
+  });
+  try {
+    h.setMode('reserved2');
+    h.setSelfIdentity('樰', '10002');
+    h.getSocialV2State('group:456');
+    h.appendSocialV2Message('group:456', '小明', '那个本地部署的方案你还记得吗', '那个本地部署的方案你还记得吗', false, false, '9001', [], '999');
+
+    // 在 789 群写下的备注（带群号/人名/话题），归属 group:789
+    h.setStickerEntries([{
+      id: 's1', resId: 's1', desc: '笑死',
+      localNote: '这张是 789 群阿豪发的，那边在聊本地部署',
+      tags: ['789群', '部署'], useCount: 3, noteScope: 'group:789'
+    }]);
+
+    const p456 = h.buildWakePromptV2('group:456', 'test');
+    assert.equal(p456.includes('789群'), false, '456 群提示词里不得出现 789 群的备注');
+    assert.equal(p456.includes('阿豪'), false, '456 群提示词里不得出现 789 群的人名');
+    // 表情本身仍然"收藏着"（全局），只是备注不注入
+    assert.match(p456, /收藏表情里有 1 个表情/, '表情总数仍按全量统计（备注归属与收藏本身无关）');
+
+    // 正例：同一个备注在它自己的会话里必须照常注入
+    const p789 = h.buildWakePromptV2('group:789', 'test');
+    assert.ok(p789.includes('789群'), '备注在它自己的会话里必须可见');
+  } finally { await h.close(); }
+});
+
+// ── R24. 旧条目（无 scope）必须保持既有行为 ──────────────────────────────────
+//
+// 升级不能让已有备注突然消失：没有 noteScope 的条目一律视为 'global'。
+await test('R24 无 scope 的旧条目视为全局，升级后行为不变', async () => {
+  const h = await bridgeHarness({ config: { ownerQQ: 123, allow: { private: ['123'], groups: ['456', '789'] } } });
+  try {
+    h.setMode('reserved2');
+    h.setSelfIdentity('樰', '10002');
+    h.getSocialV2State('group:456');
+    // 旧格式：完全没有 noteScope 字段。注意 buildStickerContext 注入的是
+    // `desc || localNote`（二选一），所以这里用没有 desc 的条目让 localNote 成为标签。
+    h.setStickerEntries([{ id: 's1', resId: 's1', desc: '', localNote: '旧的全局备注', tags: ['旧'], useCount: 3 }]);
+    for (const key of ['group:456', 'group:789']) {
+      h.getSocialV2State(key);
+      const p = h.buildWakePromptV2(key, 'test');
+      assert.ok(p.includes('旧的全局备注'), `无 scope 的旧条目必须在 ${key} 里照常可见`);
+    }
+  } finally { await h.close(); }
+});
+
 // ── R2. 分条发送失败：错误必须可读，且预占额度要回滚 ─────────────────────────
 await test('R2 send-burst 失败路径不再抛 ReferenceError，并回滚发送额度', async () => {
   const h = await bridgeHarness({

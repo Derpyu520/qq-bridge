@@ -142,9 +142,11 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
   source = source.replaceAll('import.meta.url', JSON.stringify(pathToFileURL(path.join(temp, 'src/bridge.js')).href));
   source = source.slice(0, source.indexOf("process.on('SIGINT'"));
   source = source.replace('  bot.onPrivateMessage(async (event) => {', `
+  const setStickerEntries = (next) => { stickerEntries = Array.isArray(next) ? next : []; };
+  const getStickerEntries = () => stickerEntries;
   return {
     ensureSession, ensureSlangLearnerSession, resolvePresetName, deliverPrompt, drainPromptQueue,
-    sendToQQ, sendBurstToQQ, sendMessagesV2, sendStickerV2, handleIncoming, handleRecallNotice, handlePokeNotice, handlePendingAnswer, pending, startConsoleServer, cfg, state, api, promptQueues, forwardMediaRefs, rememberForwardMedia, forwardMediaKey,
+    sendToQQ, sendBurstToQQ, sendMessagesV2, sendStickerV2, handleIncoming, handleRecallNotice, handlePokeNotice, handlePendingAnswer, pending, startConsoleServer, cfg, state, api, promptQueues, forwardMediaRefs, rememberForwardMedia, forwardMediaKey, setStickerEntries, getStickerEntries,
     getSocialV2State, appendSocialV2Message, recordSentMessagesV2,
     buildWakePromptV2, buildWakeSnapshotV2, sendWakePromptV2, socialV2,
     syncStickerLibrary, listStickersForV2, getStickerImageData,
