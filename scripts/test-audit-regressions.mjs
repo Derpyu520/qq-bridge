@@ -23,6 +23,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { bridgeHarness } from './audit-bridge-harness.mjs';
 import { mdToPlain } from '../src/md-to-plain.js';
 import { extractJsonArray } from '../src/slang-learner.js';
