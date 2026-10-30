@@ -284,5 +284,23 @@
     "maxTokens": 4096,
     "maxResults": 8,
     "timeoutMs": 35000
+  },
+  "tts": {
+    "enabled": true,
+    "provider": "edge",
+    "timeoutMs": 60000,
+    "defaultInstruction": "",
+    "maxChars": 200,
+    "maxCacheFiles": 300,
+    "ffmpegPath": "",
+    "edgeCli": "edge-tts",
+    "edgeVoice": "zh-CN-XiaoyiNeural",
+    "edgeRate": "",
+    "edgeFallback": true,
+    "qwenBaseUrl": "https://dashscope.aliyuncs.com",
+    "qwenApiKey": "",
+    "qwenModel": "qwen3-tts-flash",
+    "qwenVoice": "Cherry",
+    "qwenInstructions": ""
   }
 }

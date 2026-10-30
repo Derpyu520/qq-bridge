@@ -366,6 +366,7 @@ const TOOL_CONFIG_FLAGS = {
   qq_slang_submit: 'slangSubmit',
   qq_send_voice: 'sendVoice',
   qq_list_voices: 'sendVoice',
+  qq_speak: 'sendVoice',
   // 下面这些曾经漏登记。漏一个不是"多注册一个工具"那么轻：桥接那边按 `v2ToolEnabled(flag)`
   // 在**调用期**一律 403，而这里不登记就等于"控制台显示已关闭、模型每次请求仍收到它的完整
   // 描述与参数 schema，然后调用它、再拿到 403"——既白烧 token（本文件开头 176 行起就是为省这份
@@ -1346,6 +1347,39 @@ if (cfg.socialV2?.voice?.enabled !== false && cfg.socialV2?.tools?.sendVoice !==
         return { content: [{ type: 'text', text: serializeModelData(data) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `发送语音失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+
+  server.tool(
+    'qq_speak',
+    '把一句话用「自己的声音」说出来（TTS 合成语音条发到当前会话）。当对方明确想听你的声音、让你“说句话/发语音/念一下”，或情绪上适合开口（晚安、撒娇、笑出声）时用。注意：① text 是一次要说的内容，短句更好（建议 ≤ 60 字，硬上限见返回的 limits）；② 合成需要几秒到十几秒，和文字回复不能同一条，别在同一回合既说又写；③ 可选 instruction 用来指定这一句的语气（如「语速放慢，带点困意」）；④ 返回 verified=true 才代表语音真的发到 QQ 了；⑤ 语音是强表达，别每条都发。',
+    {
+      key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+      token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+      text: z.string().describe('要说的内容（建议 ≤ 60 字，不要带 Markdown）'),
+      instruction: z.string().optional().describe('可选：这一句的声音表演指令，如「语速放慢，带点困意」；不传用默认音色'),
+      label: z.string().optional().describe('可选：写进会话记录的说明，如「说了句晚安」'),
+      verify: z.boolean().optional().describe('是否回读校验语音已落地（默认 true）')
+    },
+    async ({ key, token, text, instruction, label, verify }) => {
+      try {
+        const data = await agentApi('/api/socialV2/speak', {
+          method: 'POST',
+          body: JSON.stringify({
+            key,
+            token,
+            text: String(text),
+            ...(instruction ? { instruction: String(instruction) } : {}),
+            label: label || '',
+            verify: verify !== false
+          }),
+          headers: { 'x-agent-token': token },
+          timeoutMs: 300000
+        });
+        return { content: [{ type: 'text', text: serializeModelData(data) }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `语音合成失败：${error?.message ?? error}` }], isError: true };
       }
     }
   );

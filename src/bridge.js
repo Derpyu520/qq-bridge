@@ -28,6 +28,7 @@ import { safeFetchBuffer, looksLikeImageBuffer } from './safe-fetch.js';
 import { normalizeImageForModel } from './media-normalize.js';
 import { AUDIO_EXTS, cleanupTemp, describeAudio, formatBytes, formatDuration, inspectAudio, listAudioFiles, parseTargetKey, processAudioVolume, resolveAudioProcessing, resolveAudioSource, safeJoinLibrary } from './send-voice-lib.js';
 import { discoverSnowLumaConnection, persistSnowLumaEndpoint, persistToken } from './snowluma-conn.js';
+import { createTts } from './tts.js';
 import { hardenDir, manualDirCommand } from './state-acl.mjs';
 import { extractForwardIds, forwardIdFromData, sanitizeForwardId, formatForwardResponse } from './forward.js';
 import { resolvePriceTable } from './model-prices.js';
@@ -742,6 +743,36 @@ function loadConfig() {
     consoleToken: file.consoleToken ?? '',
     // 价目表覆盖项（可选）。留空即用 src/model-prices.js 的官方默认价。
     pricing: file.pricing ?? null,
+    // 文本 → 语音（TTS）。provider: 'qwen'（阿里云百炼）| 'edge'（微软 Edge 朗读，免费）| 'breeze'（OpenAI 风格 HTTP）
+    tts: {
+      enabled: true,
+      provider: 'edge',
+      baseUrl: 'http://127.0.0.1:7860',
+      timeoutMs: 60000,
+      sampleRate: 24000,
+      defaultCfgScale: 4,
+      defaultSeed: 42,
+      defaultInstruction: '',
+      maxChars: 200,
+      maxCacheFiles: 300,
+      ffmpegPath: '',
+      refAudio: '',
+      refText: '',
+      // edge-tts（免费，无 key）
+      edgeCli: 'edge-tts',
+      edgeVoice: 'zh-CN-XiaoyiNeural',
+      edgeRate: '',
+      edgePitch: '',
+      edgeVolume: '',
+      edgeFallback: true,
+      // qwen（DashScope / 阿里云百炼）
+      qwenBaseUrl: 'https://dashscope.aliyuncs.com',
+      qwenApiKey: '',
+      qwenModel: 'qwen3-tts-flash',
+      qwenVoice: 'Cherry',
+      qwenInstructions: '',
+      ...(file.tts ?? {})
+    },
     security: {
       interceptNotify: true,
       ...(file.security ?? {})
@@ -1658,6 +1689,14 @@ async function main() {
       autoReadback: v.autoReadback !== false
     };
   }
+
+  // TTS（文本 → 语音）：合成结果落到语音库下的 cache/ 子目录，
+  // 这样它天然属于语音库，AI 与操作者两条通道都能用同一条发送链路。
+  const tts = createTts({
+    readCfg: () => cfg.tts ?? {},
+    cacheDir: path.join(ROOT, String(cfg.socialV2?.voice?.dir ?? 'audio'), 'cache'),
+    log
+  });
 
   function voiceLibrary() {
     const dir = voiceCfg().dir;
@@ -6095,6 +6134,109 @@ async function main() {
         //
         // 与 /api/send/* 的 agent 通道分开：操作者可能不在任何 QQ 会话里，
         // 所以不套「会话/模式」闸门，但白名单 + 语音限流 + 文件名审计一个都不少。
+        // ── 文本 → 语音（TTS）──────────────────────────────────────────────────
+        // AI 通道：带 agent token，只能发自己那个会话；闸门与 /api/socialV2/send-voice 一致。
+        if (req.method === 'POST' && url.pathname === '/api/socialV2/speak') {
+          const body = await readBody();
+          const token = String(body.token ?? req.headers['x-agent-token'] ?? '').trim();
+          const key = String(body.key ?? body.target ?? '').trim();
+          const voice = voiceCfg();
+          if (!voice.enabled) { sendJson({ ok: false, error: '语音功能已关闭' }, 403); return; }
+          if (!key) { sendJson({ ok: false, error: 'key 不能为空（格式 group:群号 或 private:QQ号）' }, 400); return; }
+          if (currentMode !== 'reserved2') { sendJson({ ok: false, error: '该接口仅 reserved2 模式可用' }, 403); return; }
+          if (!token) { sendJson({ ok: false, error: 'reserved2 模式发送必须携带 agent token' }, 403); return; }
+          if (!agentTokenOk(key, token)) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          if (!v2ToolEnabled('sendVoice')) { sendJson({ ok: false, error: '工具未启用：qq_speak / qq_send_voice' }, 403); return; }
+          if (!v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
+          if (shouldBlockSilentReply(key)) { sendJson({ ok: false, error: '静默模式已开启，当前不允许发送' }, 403); return; }
+          const keyMatch = /^(group|private):(\d+)$/.exec(key);
+          if (!keyMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
+          const kind = keyMatch[1];
+          const id = Number(keyMatch[2]);
+          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, currentMode)) {
+            sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403);
+            return;
+          }
+          try {
+            const synth = await tts.synthesize({
+              text: body.text,
+              instruction: String(body.instruction ?? '').trim() || undefined,
+              cfgScale: body.cfgScale,
+              seed: body.seed,
+              refAudio: body.refAudio,
+              refText: body.refText
+            });
+            const rel = path.relative(voice.dir, synth.path).split(path.sep).join('/');
+            if (body.dryRun === true) {
+              const probe = await inspectAudio(synth.path, { maxBytes: voice.maxBytes, maxSeconds: voice.maxSeconds });
+              sendJson({ ok: true, dryRun: true, key, file: synth.path, cached: synth.cached === true, detail: describeAudio(probe) });
+              return;
+            }
+            const sent = await sendVoiceForV2(key, rel, {
+              label: body.label ? String(body.label).slice(0, 100) : '',
+              verify: body.verify
+            });
+            sendJson({
+              ok: true,
+              key,
+              messageId: sent.messageId,
+              file: path.basename(synth.path),
+              detail: sent.detail,
+              text: synth.text,
+              cached: synth.cached === true,
+              verified: sent.verification?.confirmed === true,
+              warnings: sent.warnings
+            });
+          } catch (error) {
+            sendJson({ ok: false, error: error?.message ?? String(error) }, 500);
+          }
+          return;
+        }
+
+        // 操作者通道：控制台 / CLI，凭 consoleToken。跳过会话闸门，但仍走白名单与限流。
+        if (req.method === 'POST' && url.pathname === '/api/voice/tts') {
+          const body = await readBody();
+          const key = String(body.target ?? body.key ?? '').trim();
+          const parsedTarget = parseTargetKey(key);
+          if (!parsedTarget) { sendJson({ ok: false, error: 'target 格式应为 group:群号 或 private:QQ号' }, 400); return; }
+          if (!modeAllowed(key, parsedTarget.kind, Number(parsedTarget.id), cfg, currentMode)) {
+            sendJson({ ok: false, error: `目标 ${key} 不在白名单内` }, 403);
+            return;
+          }
+          const voice = voiceCfg();
+          try {
+            const synth = await tts.synthesize({
+              text: body.text,
+              instruction: String(body.instruction ?? '').trim() || undefined,
+              cfgScale: body.cfgScale,
+              seed: body.seed,
+              refAudio: body.refAudio,
+              refText: body.refText
+            });
+            const probe = await inspectAudio(synth.path, { maxBytes: voice.maxBytes, maxSeconds: voice.maxSeconds });
+            if (!probe.ok) { sendJson({ ok: false, error: probe.error }, 400); return; }
+            if (body.dryRun === true) {
+              sendJson({ ok: true, dryRun: true, key, file: synth.path, cached: synth.cached === true, detail: describeAudio(probe) });
+              return;
+            }
+            const sent = await sendVoiceV2(key, synth.path, { guard: false, audit: true, audio: null });
+            sendJson({
+              ok: true,
+              key,
+              messageId: sent.messageId,
+              file: path.basename(synth.path),
+              detail: sent.detail,
+              text: synth.text,
+              cached: synth.cached === true,
+              verified: sent.verification?.confirmed === true,
+              warnings: sent.warnings
+            });
+          } catch (error) {
+            sendJson({ ok: false, error: error?.message ?? String(error) }, 500);
+          }
+          return;
+        }
+
         if (req.method === 'POST' && (url.pathname === '/api/voice/send' || url.pathname === '/api/send/voice')) {
           const body = await readBody();
           const agentToken = String(req.headers['x-agent-token'] ?? '').trim();

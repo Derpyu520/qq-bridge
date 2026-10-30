@@ -22,6 +22,7 @@ import * as modelPrices from '../src/model-prices.js';
 import * as tokenLedger from '../src/token-ledger.js';
 import * as voiceLib from '../src/send-voice-lib.js';
 import * as presetPrompt from '../src/preset-prompt.js';
+import * as ttsModule from '../src/tts.js';
 import * as roleCard from '../src/role-card.js';
 import * as stateAcl from '../src/state-acl.mjs';
 import { persistSnowLumaEndpoint, persistToken } from '../src/snowluma-conn.js';
@@ -211,7 +212,7 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     discoverDshBaseUrl: async () => null,
     resolveInstalledPreset, synchronizePreset, renderPatch, persistSnowLumaEndpoint, persistToken,
     ...markdown, ...sensitive, ...wait, ...safeFetch, ...forward, ...slang, ...sticker,
-    ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...presetPrompt, ...roleCard,
+    ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...presetPrompt, ...roleCard, ...ttsModule,
     // 桥接的出图出口会调归一化（体积/动图抽帧）：VM 里必须能拿到这几个函数。
     normalizeImageForModel: mediaNormalize.normalizeImageForModel,
     sniffImage: mediaNormalize.sniffImage,
