@@ -191,6 +191,85 @@ await test('R18 发送队列按会话分链：跨会话不阻塞，同会话仍�
   } finally { await h.close(); }
 });
 
+// ── R19. 重复投递的同一条消息必须幂等入库 ─────────────────────────────────────
+//
+// 背景：上游健康检查 / WS 重连 / OneBot 网关重试都会把同一条消息再投一次。不去重时
+// 同一条会被入库两次：模型看到重复消息、unread 长度虚高、已读水位多走一格
+// —— 而水位只增不减，走多了就再也回不来。
+await test('R19 重复投递的同一条消息幂等入库（按 messageId 去重）', async () => {
+  const h = await bridgeHarness();
+  try {
+    h.setMode('reserved2');
+    const KEY = 'group:456';
+    const st = h.getSocialV2State(KEY);
+    const ev = (id, text) => ({
+      post_type: 'message', message_type: 'group', self_id: 10002, group_id: 456,
+      user_id: 999, message_id: id,
+      sender: { nickname: '小明', card: '小明' },
+      raw_message: text, message: [{ type: 'text', data: { text } }]
+    });
+
+    await h.handleIncoming('group', '456', ev(9001, '第一次'), h.cfg);
+    await new Promise((r) => setTimeout(r, 120));
+    const afterFirst = st.unread.length;
+    const seqFirst = st.lastUnreadSeq;
+
+    // 同一条重放两次
+    await h.handleIncoming('group', '456', ev(9001, '第一次'), h.cfg);
+    await h.handleIncoming('group', '456', ev(9001, '第一次'), h.cfg);
+    await new Promise((r) => setTimeout(r, 120));
+
+    assert.equal(st.unread.length, afterFirst, `重放不得增加未读（${afterFirst} → ${st.unread.length}）`);
+    assert.equal(st.lastUnreadSeq, seqFirst, `重放不得推高 seq 水位（${seqFirst} → ${st.lastUnreadSeq}）`);
+    assert.equal(st.recentMessages.filter((m) => String(m.messageId) === '9001').length, 1, 'recentMessages 里同一条只应有一份');
+
+    // 但**新** messageId 必须照常入库（去重不能把正常消息也吃掉）
+    await h.handleIncoming('group', '456', ev(9002, '第二次'), h.cfg);
+    await new Promise((r) => setTimeout(r, 120));
+    assert.equal(st.unread.length, afterFirst + 1, '新 messageId 必须正常入库');
+  } finally { await h.close(); }
+});
+
+// ── R20. 撤回事件必须把原文从存储层清掉 ──────────────────────────────────────
+//
+// 背景：上游只挂了 `notify`（拍一拍），完全没有撤回分支。被撤回的消息仍然留在
+// recentMessages / unread 里，模型照旧能读到 —— "撤回"在用户认知里是"这句话不算数了"，
+// 但在模型上下文里它还是生效的。群友因此可以"发敏感内容 → 撤回"来规避。
+await test('R20 撤回事件把原文从存储层替换为占位，并保留 seq 不出现空洞', async () => {
+  const h = await bridgeHarness();
+  try {
+    h.setMode('reserved2');
+    const KEY = 'group:456';
+    const st = h.getSocialV2State(KEY);
+    const secret = '我的身份证号是 110101199001011234';
+    const ev = (id, text) => ({
+      post_type: 'message', message_type: 'group', self_id: 10002, group_id: 456,
+      user_id: 999, message_id: id,
+      sender: { nickname: '小明', card: '小明' },
+      raw_message: text, message: [{ type: 'text', data: { text } }]
+    });
+
+    await h.handleIncoming('group', '456', ev(9101, secret), h.cfg);
+    await new Promise((r) => setTimeout(r, 120));
+    const before = [...st.recentMessages, ...st.unread].find((m) => String(m.messageId) === '9101');
+    assert.ok(before && before.text.includes('110101199001011234'), '前置条件：消息已入库');
+    const seqBefore = before.seq;
+
+    const handled = h.handleRecallNotice({ notice_type: 'group_recall', group_id: 456, message_id: 9101 });
+    assert.equal(handled, true, '撤回事件必须被处理');
+
+    const stored = [...st.recentMessages, ...st.unread].find((m) => String(m.messageId) === '9101');
+    assert.ok(stored, '条目本身应当保留（删掉会让 seq 出现空洞，而已读水位按 seq 走）');
+    assert.equal(stored.text, '[该消息已被撤回]', '正文必须被替换为占位');
+    assert.equal(stored.seq, seqBefore, 'seq 必须保持不变（水位依赖它）');
+    assert.equal(stored.recalled, true, '必须打上 recalled 标记');
+    assert.equal(stored.media.length, 0, '撤回后媒体引用必须清掉');
+    // st 里有定时器句柄（循环引用），只序列化消息流本身。
+    const serialized = JSON.stringify([...st.recentMessages, ...st.unread]);
+    assert.equal(serialized.includes('110101199001011234'), false, '消息流里不得再残留原文');
+  } finally { await h.close(); }
+});
+
 // ── R2. 分条发送失败：错误必须可读，且预占额度要回滚 ─────────────────────────
 await test('R2 send-burst 失败路径不再抛 ReferenceError，并回滚发送额度', async () => {
   const h = await bridgeHarness({
