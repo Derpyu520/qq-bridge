@@ -1,0 +1,125 @@
+name: Bug 报告
+description: 程序行为与预期不符（崩溃、没反应、发错消息、报错）
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        报之前请先做两件事：
+        1. 搜一下已有 issue（本仓库有 60+ 条开放 issue，重复概率不低）；
+        2. 翻一下 [docs/README.md](https://github.com/Derpyu520/qq-bridge/blob/main/docs/README.md) 里的排障文档。
+
+        ⚠️ **这个表单是公开的。** 请删掉 token、Cookie、真实 QQ 号/群号、本机绝对路径再提交。
+        安全漏洞不要走这里，见 [SECURITY.md](https://github.com/Derpyu520/qq-bridge/blob/main/SECURITY.md)。
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我搜过已有 issue，没有找到重复
+          required: true
+        - label: 我已删除日志里的 token / Cookie / 真实 QQ 号 / 本机路径
+          required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: 运行模式
+      description: 控制台里的当前模式；不确定就选「不确定」
+      options:
+        - chat（一代，纯聊天）
+        - simulation（一代仿真）
+        - reserved2（二代仿真）
+        - 不确定
+    validations:
+      required: true
+
+  - type: input
+    id: bridge-version
+    attributes:
+      label: qq-bridge 版本
+      description: "`package.json` 的 `version`，或 release tag"
+      placeholder: v0.2.1-r1
+    validations:
+      required: true
+
+  - type: input
+    id: dsh-version
+    attributes:
+      label: DSH 版本
+      description: "`dsh --version` 的输出，或安装包的版本号"
+      placeholder: 0.2.1-rc.2
+    validations:
+      required: true
+
+  - type: input
+    id: snowluma-version
+    attributes:
+      label: SnowLuma 版本
+      placeholder: 1.14.20
+    validations:
+      required: false
+
+  - type: input
+    id: node-version
+    attributes:
+      label: Node.js 版本
+      description: "`node -v`"
+      placeholder: v22.13.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 实际发生了什么
+      description: 现象 + 出现频率（每次都这样 / 偶发 / 只在某个群）
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 你期望发生什么
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+      description: 越具体越好。如果是消息相关，写清是群聊还是私聊、有没有 @ 机器人、是不是二次唤醒
+      placeholder: |
+        1. 启动 dsh web 与 bridge
+        2. 在群里发「...」
+        3. 观察桥接日志出现 ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志（已脱敏）
+      description: 桥接控制台输出 / `~/.dsh` 日志片段。请删掉 token、Cookie、真实 QQ 号
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: config
+    attributes:
+      label: 相关配置（已脱敏）
+      description: 只贴与问题有关的那几段（如 `socialV2`、`webSearch`、`allow`），**不要贴整份 config.json**
+      render: json
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 其他
+      description: 已尝试过的排查、怀疑的方向、相关 issue 号
+    validations:
+      required: false

@@ -80,8 +80,11 @@ import fs from 'node:fs';
   // ④ 只读工具必须还在（别把整个 server 删空）
   assert.ok(host.includes("'snowluma_status'"), 'snowluma_status（只读探活）必须保留');
   // ⑤ 包元数据必须声明许可证（独立复核发现此前缺失）
+  // 断言具体值而不是"非空"：许可从 MIT 改成 PolyForm Noncommercial 是刻意的决定，
+  // 写死值才能在有人误改回去时立刻发现。
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-  assert.equal(pkg.license, 'MIT', 'package.json 必须声明 license 字段');
+  assert.equal(pkg.license, 'PolyForm-Noncommercial-1.0.0',
+    'package.json 的 license 必须是本仓库实际使用的许可（PolyForm Noncommercial 1.0.0，见 NOTICE.md）');
   console.log('L6 compliance: no SnowLuma process control, no allowProcessControl, license declared');
 }
 
