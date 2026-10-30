@@ -8,7 +8,8 @@
 >
 > **v0.2.1-r1 highlights**: DSH 0.2.1-rc.2 adaptation. Fixes a **P0** — the `{{cwd}}` prompt variable used by both QQ presets was removed in DSH 0.2.1, so *every* turn failed during system-prompt assembly before the model ran (QQ showed it as "no reply at all"). Also adds the newly global `working_directory` tool plus the terminal / session-query / plugin-market families to the safety guard. Details: [docs/guides/DSH_021_ADAPTATION.md](docs/guides/DSH_021_ADAPTATION.md).
 >
-> The default branch `main` **is** this version — a plain `git clone` gets it, no branch switching needed.
+> The default branch `main` is the **official release** — a plain `git clone` gets it, no branch switching needed.
+> `dev` is the **testing line**: continuously updated and normally **ahead of** `main`; switch to it if you want the latest changes (stability not guaranteed).
 
 For the detailed Chinese guide, see **docs/guides/PROJECT_GUIDE.md** (local-only, not published in this repository).
 The documentation index (one line per doc, with "still current?" notes) is **[docs/README.md](docs/README.md)**;

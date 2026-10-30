@@ -43,7 +43,8 @@
 > 与 terminal / session-query / plugin_market 一族补进安全守卫名单。
 > 逐条见 [docs/guides/DSH_021_ADAPTATION.md](docs/guides/DSH_021_ADAPTATION.md)。
 >
-> 默认分支 `main` **就是**本版本，`git clone` 直接拿到，无需切换分支。
+> 默认分支 `main` **就是**正式发布的版本，`git clone` 直接拿到，无需切换分支。
+> `dev` 是**测试线**，持续更新、随时开发，正常状态下**领先** `main`；想跟最新改动就切过去（不保证稳定）。
 
 ```
 QQ 消息 ──► SnowLuma（OneBot v11 WS）──► 本桥接进程 ──► DSH Web API (127.0.0.1:3080/api)
