@@ -137,8 +137,11 @@ await test('#角色卡注入：reserved2 唤醒提示必须带人格卡正文（
       '不能只留「请调用 qq_get_prompt」——实测模型不会去调，人设等于没注入',
     );
 
+    // 收尾提醒发生在同一回合内（刚看过全卡），按 #118 的节奏只点名角色、不重复整张卡；
+    // 「换卡/新会话必须重新全量」由 scripts/test-role-injection-cadence.mjs 覆盖。
     const reminder = h.buildWakeReminderPromptV2(KEY);
-    assert.match(reminder, /叫他「宝宝」/, '收尾提醒那条路径同样要带人格卡');
+    assert.match(reminder, /【当前角色】测试人格/, '收尾提醒仍须点名当前角色');
+    assert.doesNotMatch(reminder, /叫他「宝宝」/, '同一回合内不重复整张人格卡（省 token）');
 
     // 没有启用角色时不得凭空注入空段落
     const plain = await bridgeHarness({ files: { 'state/current-role.json': JSON.stringify({ role: null, mode: 'active' }) } });
