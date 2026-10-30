@@ -90,7 +90,9 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
       archiveSession: async ({ sessionId }) => { calls.archived.push(sessionId); return success({}); },
     },
     sessions: {
-      create: async (params) => { calls.created.push(params); return success({ sessionId: `fixture-${calls.created.length}` }); },
+      // 真实的 DSH 会采用调用方预分配的 sessionId（host-apiproxy：`payload.sessionId ?? session-<uuid>`），
+    // 夹具必须同样照做，否则「执行期会话绑定」在测试里永远看不到绑定形态的 id。
+    create: async (params) => { calls.created.push(params); return success({ sessionId: params?.sessionId ?? `fixture-${calls.created.length}` }); },
       selectModel: async () => success({ selected: { provider: 'fixture', model: 'fixture' } }),
       prompt: async (params) => { calls.prompts.push(params); return success({}); },
     },

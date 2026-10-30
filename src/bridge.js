@@ -1403,6 +1403,34 @@ function canonicalV2Key(key) {
   return `${m[1]}:${id}`;
 }
 
+// ── 执行期会话绑定（SELF_KEY）──────────────────────────────────────────────
+//
+// 问题：DSH 的 MCP 桥只传 name + arguments，协议里没有「这次调用来自哪个会话」的字段。
+// 于是「带 key 的 QQ 工具」只能按**模型给的 key** 去解析会话令牌 —— 模型（或被注入的
+// 群友文本）把 key 换成别的群号，就能读到那个群的会话状态。而 qq-tool-restrict 的
+// 执行期守卫只看工具名、不看参数，拦不住。
+//
+// 修法：桥接在建 DSH 会话时**预分配**一个把 QQ 会话 key 编码进去的 sessionId
+// （`qqb-<g|p>-<id>`）。DSH 的 Agent.id 就是 SessionId（dsh-agent-loop：
+// `create(id, …)` 的注释写明 "shared agent/session identity"），因此 preset 里的
+// `qq-tool-restrict` 守卫可以从 `exec.agent.id` 解回可信的「我是谁」，再与模型给的
+// key 比对。这个值模型看不到也改不了（host-apiproxy：`payload.sessionId ?? session-<uuid>`）。
+//
+// 为什么带随机后缀：host-apiproxy 的 `session/create` 在**显式**传 sessionId 时会优先
+// resume 已持久化的同 id 会话。固定 id 会带来两个真实故障：
+//   · `/reset` 之后重建 → resume 旧会话，等于没重置；
+//   · 换模式/换 preset 之后重建 → `assertPresetUnchanged` 抛 agent-preset-conflict。
+// 每次重建都换一个后缀，语义就与原来的随机 id 完全一致，只是多了可解码的会话身份。
+const BOUND_SESSION_ID_RE = /^qqb-[gp]-\d+(?:-[a-f0-9]{32})?$/;
+
+/** 把 QQ 会话 key 编码成桥接预分配的 DSH sessionId；key 不合法时返回 ''。 */
+function encodeSelfKey(key) {
+  const canonical = canonicalV2Key(key);
+  if (!canonical) return '';
+  const [kind, id] = canonical.split(':');
+  return `qqb-${kind === 'group' ? 'g' : 'p'}-${id}-${crypto.randomBytes(16).toString('hex')}`;
+}
+
 const APPROVE_WORDS = new Set(['通过', '同意', '允许', '批准', 'yes', 'y', 'approve', 'ok']);
 const REJECT_WORDS = new Set(['拒绝', '不同意', '不允许', '驳回', 'no', 'n', 'reject', 'deny']);
 
@@ -8234,7 +8262,15 @@ async function main() {
     const epoch = sessionEpoch;
     const policy = sessionPolicy(key);
     if (!isSessionAllowedInCurrentMode(key)) throw new Error(`当前模式不允许会话 ${key}`);
-    const existing = state.sessions[key];
+    let existing = state.sessions[key];
+    // 升级兼容：旧版本建的会话 id 由 DSH 自生成（session-…），解不出 QQ 会话 key，
+    // 新的执行期闸门会把这类会话的全部带 key 工具调用拒掉（表现为「机器人突然不能用
+    // 任何 QQ 工具」）。这里一次性退役重建；历史仍留在 DSH 里，不会丢。
+    if (existing && !BOUND_SESSION_ID_RE.test(String(existing))) {
+      log(`会话 ${key} 的 id 不是执行期绑定形态（${existing}），退役并按新规则重建`);
+      retireSession(key);
+      existing = state.sessions[key];
+    }
     if (existing) {
       // reset/清空工作区期间旧映射可能尚未清理；发现代际不匹配必须丢弃旧会话，防止复活。
       if (!isCurrentSession(key, existing)) {
@@ -8281,6 +8317,10 @@ async function main() {
           }
           const params = { workspaceId: wsValue.workspace.workspaceId };
           if (withPreset && preset) params.agentPreset = preset;
+          // 预分配带会话身份的 sessionId：preset 里的 qq-tool-restrict 守卫据此判断
+          // 「这次调用是不是当前会话」，这个值模型看不到也改不了（见 encodeSelfKey）。
+          const boundSessionId = encodeSelfKey(key);
+          if (boundSessionId) params.sessionId = boundSessionId;
           const value = unwrap(await api.sessions.create(params), 'session.create');
           sessionId = value.sessionId;
           if (withPreset && preset) {
