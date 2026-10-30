@@ -4496,8 +4496,9 @@ async function main() {
           // 早期实现只给「角色名 + 请自行调用 qq_get_prompt」，实测模型几乎不会去调，人格卡等于没生效。
           const rolePick = roleForWake(key);
           if (roleState.role) log(`[role] 操作者提示词：${rolePick.full ? `全量角色卡（${rolePick.text.length} 字符）` : '一行提醒'}「${roleState.role}」`);
+          const switchNotice = rolePick.notice ? `${rolePick.notice}\n\n` : '';
           const roleLine = roleState.role
-            ? (rolePick.full
+            ? switchNotice + (rolePick.full
               ? `【当前角色】${roleState.role}\n【角色卡 —— 以下是你的设定，必须按它说话，不要复述这份卡】\n${rolePick.text || '（角色卡为空，按仿真提示词行动）'}\n【角色卡结束】\n\n`
               : `${rolePick.text}\n\n`)
             : '';
@@ -9907,7 +9908,8 @@ async function main() {
    */
   function roleForWake(key, { allowStub = true, forceFull = false } = {}) {
     const rs = readRoleState();
-    if (!rs.role) return { text: '', full: false };
+    if (!rs.role) return { text: '', full: false, notice: '' };
+    let notice = '';
     const every = Math.max(1, Number(cfg.role?.injectEveryNWakes) || 4);
     // 签名里带上**当前 DSH 会话 id**：/reset、换模式、换 preset 都会重建会话，
     // 新会话的上下文是空的，必须立刻重新全量注入 —— 只按角色卡文件签名的话，
@@ -9926,13 +9928,30 @@ async function main() {
       const dedupeMs = Number.isFinite(Number(cfg.role?.injectDedupeWindowMs)) ? Number(cfg.role.injectDedupeWindowMs) : 8000;
       const sameWake = dedupeMs > 0 && rec.lastAt && now - Number(rec.lastAt) < dedupeMs && rec.sig === sig;
       if (rec.sig !== sig) {
+        // 只比签名里的「角色部分」（`名字:mtime:size`），忽略 @会话id：
+        // /reset、换模式会重建会话，那不是「换人格」，不该给切换事件。
+        const prevRoleSig = String(rec.sig || '').split('@')[0];
+        const nextRoleSig = String(sig).split('@')[0];
+        if (prevRoleSig && nextRoleSig && prevRoleSig !== nextRoleSig) {
+          const prevName = prevRoleSig.split(':')[0];
+          if (prevName && prevName !== rs.role) {
+            notice = `【人格切换事件】你的人设刚刚从「${prevName}」换成了「${rs.role}」。上面的历史对话是旧人设说的，从这条消息开始按下面的新角色卡说话：不要沿用旧人设的自称、口癖和语气。`;
+            log(`[role] ${key}：人格切换「${prevName}」→「${rs.role}」`);
+          } else {
+            notice = `【角色卡更新】「${rs.role}」的角色卡刚改过，以下面这份为准；上面的旧话不必回改，之后按新卡说话。`;
+            log(`[role] ${key}：角色卡更新「${rs.role}」`);
+          }
+        }
         rec.sig = sig;
         rec.n = 1;
         rec.lastFull = true;
         rec.lastAt = now;
+        rec.notice = notice;
         full = true;
       } else if (sameWake) {
         full = rec.lastFull === true;
+        // 同一次唤醒的第二份提示词也要带同样的切换说明，否则投递与复核不一致
+        notice = rec.notice || '';
       } else {
         full = forceFull || every <= 1 || n % every === 0;
         rec.n = n + 1;
@@ -9945,10 +9964,11 @@ async function main() {
     if (!full) {
       return {
         text: `【当前角色】${rs.role}（角色卡已在本会话前面完整给过，继续按它说话；需要回顾可调用 qq_get_prompt）`,
-        full: false
+        full: false,
+        notice
       };
     }
-    return { text: fullText(), full: true };
+    return { text: fullText(), full: true, notice };
   }
 
   function currentRoleHintV2() {
@@ -10717,8 +10737,9 @@ async function main() {
     if (roleState.role) {
       log(`[role] 唤醒提示词：${rolePick.full ? `全量角色卡（${rolePick.text.length} 字符）` : '一行提醒'}「${roleState.role}」`);
     }
+    const switchNotice = rolePick.notice ? `${rolePick.notice}\n\n` : '';
     const roleLine = roleState.role
-      ? (rolePick.full
+      ? switchNotice + (rolePick.full
         ? `【当前角色】${roleState.role}\n【角色卡 —— 以下是你的设定，必须按它说话，不要复述这份卡】\n${rolePick.text || '（角色卡为空，按仿真提示词行动）'}\n【角色卡结束】\n\n`
         : `${rolePick.text}\n\n`)
       : '';
