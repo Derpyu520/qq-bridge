@@ -164,7 +164,7 @@ export async function resolveSafeHost(hostname) {
   return first;
 }
 
-export async function validateFetchUrl(raw) {
+export async function validateFetchUrl(raw, opts = {}) {
   let url;
   try {
     url = new URL(String(raw ?? '').trim());
@@ -173,6 +173,18 @@ export async function validateFetchUrl(raw) {
   }
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('仅允许 http/https');
   if (url.username || url.password) throw new Error('URL 不能包含凭据');
+  // 可选端口白名单：默认不限（保持既有调用方行为），走公网抓取的入口显式传入。
+  //
+  // 为什么需要：SSRF 防护只判定"地址是不是内网"，不判定"端口是不是该服务的端口"。
+  // 一个**公网可达**的非常规端口（比如某内网服务通过端口映射暴露在 8081/9200）在
+  // 地址判定看来是合法的，于是能被拿来探测。端口白名单把"能抓什么"收窄到
+  // 常规 Web 端口，与地址判定互补。
+  if (Array.isArray(opts.allowPorts) && opts.allowPorts.length) {
+    const port = url.port ? Number(url.port) : (url.protocol === 'https:' ? 443 : 80);
+    if (!Number.isInteger(port) || !opts.allowPorts.includes(port)) {
+      throw new Error(`端口 ${port} 不在允许列表（${opts.allowPorts.join('/')}）内，已阻止`);
+    }
+  }
   const addresses = await resolveSafeAddresses(url.hostname);
   return { url, ip: addresses[0], addresses };
 }
@@ -327,16 +339,16 @@ async function requestOnce(url, addresses, limit, binary = false) {
   throw lastError ?? new Error(`请求失败：${url.hostname}`);
 }
 
-export async function safeFetch(urlString, maxChars = 50000) {
+export async function safeFetch(urlString, maxChars = 50000, opts = {}) {
   validateLimit(maxChars, 'maxChars');
   const MAX_REDIRECTS = 5;
-  let { url, addresses } = await validateFetchUrl(urlString);
+  let { url, addresses } = await validateFetchUrl(urlString, opts);
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
     const result = await requestOnce(url, addresses, maxChars);
     if ([301, 302, 303, 307, 308].includes(result.statusCode)) {
       if (!result.redirect) throw new Error(`重定向缺少 Location: ${result.statusCode}`);
       const next = new URL(result.redirect, url).toString();
-      ({ url, addresses } = await validateFetchUrl(next));
+      ({ url, addresses } = await validateFetchUrl(next, opts));
       continue;
     }
     const body = result.body || '';
@@ -361,16 +373,16 @@ export function looksLikeImageBuffer(buf) {
 }
 
 /** 抓取图片字节并返回 Buffer（带 SSRF 防护，且校验确实为图片）。 */
-export async function safeFetchBuffer(urlString, maxBytes = 8 * 1024 * 1024) {
+export async function safeFetchBuffer(urlString, maxBytes = 8 * 1024 * 1024, opts = {}) {
   validateLimit(maxBytes, 'maxBytes');
   const MAX_REDIRECTS = 5;
-  let { url, addresses } = await validateFetchUrl(urlString);
+  let { url, addresses } = await validateFetchUrl(urlString, opts);
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
     const result = await requestOnce(url, addresses, maxBytes, true);
     if ([301, 302, 303, 307, 308].includes(result.statusCode)) {
       if (!result.redirect) throw new Error(`重定向缺少 Location: ${result.statusCode}`);
       const next = new URL(result.redirect, url).toString();
-      ({ url, addresses } = await validateFetchUrl(next));
+      ({ url, addresses } = await validateFetchUrl(next, opts));
       continue;
     }
     if (result.statusCode < 200 || result.statusCode >= 300) {

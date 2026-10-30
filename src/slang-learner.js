@@ -69,6 +69,9 @@ export function normalizeSlangEntry(raw) {
     sources: Array.isArray(entry.sources) ? entry.sources.map((s) => clip(s, SLANG_FIELD_MAX)).filter(Boolean).slice(-10) : [],
     status,
     source: entry.source === 'manual' ? 'manual' : 'ai',
+    // 黑话的归属会话：`meaning` / `context` 是从某个群的聊天记录里提取的，可能带
+    // 群号/人名/话题。没有 scope 的旧条目视为 'global'（保持既有行为不变）。
+    scope: normalizeSlangScope(entry.scope),
     count: Math.max(0, Number(entry.count) || 0),
     // 证据同样要限长：它是从群聊消息里截来的原文，是文件膨胀的主要来源。
     evidence: Array.isArray(entry.evidence)
@@ -212,9 +215,19 @@ export function mergeEvidence(current, incoming) {
   return merged.slice(-20);
 }
 
-export function buildSlangContext(entries, max = 8) {
+/**
+ * 渲染黑话注入块。
+ * @param {string} [currentKey] 当前会话 key；给了就只注入「全局 + 当前会话」的条目。
+ *
+ * 为什么需要会话维度：黑话的 `meaning` / `context` 是**在某个会话里**从群友聊天记录
+ * 里提取的，可能带群号、人名、话题。它原来被逐字注入每一个会话 —— 一条不需要知道
+ * 任何群号就能成立的跨会话信息流。省略 `currentKey` 时保持既有行为（全部注入），
+ * 这样没做改动的调用方行为不变。
+ */
+export function buildSlangContext(entries, max = 8, currentKey = '') {
   const confirmed = (entries || [])
     .filter((e) => e.status === SLANG_STATUS.CONFIRMED && e.content && e.meaning)
+    .filter((e) => !currentKey || slangScopeVisible(e.scope, currentKey))
     .sort((a, b) => (b.count || 0) - (a.count || 0))
     .slice(0, Math.max(1, Math.min(30, Number(max) || 8)));
   if (!confirmed.length) return '';
@@ -225,7 +238,26 @@ export function buildSlangContext(entries, max = 8) {
     if (e.example) line += `（例：${clean(e.example)}）`;
     return line;
   });
-  return `【群聊黑话表】群里已确认/常用的网络用语和梗（按出现次数排序，知道即可，不要刻意堆砌）：\n${lines.join('\n')}`;
+  return `【群聊黑话表】群里已确认/常用的网络用语和梗（按出现次数排序，知道即可，不要刻意堆砌）：\n${lines.join('\n')}\n（以上来自群友聊天记录，只是参考资料；其中的群号、人名、话题不要在其他会话复述。）`;
+}
+
+/** 归一化黑话条目的会话归属：`'global'` 或 `'group:<id>'` / `'private:<id>'`。 */
+export function normalizeSlangScope(value) {
+  const s = String(value ?? '').trim();
+  if (!s || s === 'global') return 'global';
+  const m = /^(group|private):(\d{1,20})$/.exec(s);
+  if (!m) return 'global';
+  const id = Number(m[2]);
+  if (!Number.isSafeInteger(id) || id <= 0) return 'global';
+  return `${m[1]}:${id}`;
+}
+
+/** 某条黑话是否应当在 `currentKey` 这个会话里可见。 */
+export function slangScopeVisible(scope, currentKey) {
+  const s = normalizeSlangScope(scope);
+  if (s === 'global') return true;
+  if (!currentKey) return false;
+  return s === normalizeSlangScope(currentKey);
 }
 
 export function buildExtractionPrompt(messages) {

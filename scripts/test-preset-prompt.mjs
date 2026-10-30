@@ -133,32 +133,62 @@ test('删掉安全不变量或正文过短时阻断保存（保护 AI 效果与�
 });
 
 test('写回沿用文件主导行尾，且不吞掉块尾空行', () => {
-  const next = renderPresetPromptYaml(source, originalPrefix);
+  // 行尾不能假设检出形态：git 里 yml 以 LF 存储，作者机器的检出经 git 的
+  // autocrlf 转成 CRLF，而 GitHub 的 zip 存档/下载**不做**转换、拿到的是 LF。
+  // 要钉住的是「写回沿用**文件当时**的主导行尾」这一行为本身 —— 所以 CRLF 夹具
+  // 由测试自己构造（先归一成 LF 再统一换成 CRLF），不依赖检出来的文件是什么行尾。
+  const crlfSource = source.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
+  const next = renderPresetPromptYaml(crlfSource, originalPrefix);
   const crlf = (next.match(/\r\n/g) ?? []).length;
   const lfOnly = (next.match(/\n/g) ?? []).length - crlf;
   assert.ok(crlf > 0, 'CRLF 文件写回后应仍使用 CRLF');
   assert.equal(lfOnly, 0, '写回后不应残留/新增 LF-only 行');
   assert.ok(next.includes('prefix: |-\r\n'), '新增行应使用 CRLF');
   // 块之后的内容（空行、注释、后续条目）必须逐字保留
-  const before = locatePresetPromptBlock(source);
+  const before = locatePresetPromptBlock(crlfSource);
   const after = locatePresetPromptBlock(next);
   assert.deepEqual(
     next.split('\n').slice(after.blockEnd),
-    source.split('\n').slice(before.blockEnd),
+    crlfSource.split('\n').slice(before.blockEnd),
     'prefix 块之后的内容应逐字不变（含块尾空行与注释）',
   );
-  assert.ok(source.split('\n').slice(before.blockEnd).some((l) => l.trim() === ''), '样本应确实包含块尾空行，否则该断言无意义');
+  assert.ok(crlfSource.split('\n').slice(before.blockEnd).some((l) => l.trim() === ''), '样本应确实包含块尾空行，否则该断言无意义');
+});
+
+test('LF 文件（zip/公开仓库形态）写回后仍使用 LF', () => {
+  // 与上一条对偶：公开 clone / zip 下载拿到的 yml 是 LF。写回必须沿用 LF，
+  // 否则控制台保存一次仿真提示词就会把整个文件写成混合行尾（下一台 Windows
+  // 机器检出后语义不受影响，但 diff 噪声与行尾漂移都从这里来）。
+  const lfSource = source.replace(/\r\n/g, '\n');
+  const next = renderPresetPromptYaml(lfSource, originalPrefix);
+  assert.equal((next.match(/\r\n/g) ?? []).length, 0, 'LF 文件写回后不应出现 CRLF');
+  assert.ok(next.includes('prefix: |-\n'), '新增行应使用 LF');
+  const before = locatePresetPromptBlock(lfSource);
+  const after = locatePresetPromptBlock(next);
+  assert.deepEqual(
+    next.split('\n').slice(after.blockEnd),
+    lfSource.split('\n').slice(before.blockEnd),
+    'prefix 块之后的内容应逐字不变',
+  );
 });
 
 test('只含空格/Tab 的行也能安全往返（不会被当成空行读丢）', () => {
+  // 取**够用的**头部行而不是固定前 3 行：预设正文会随迭代增删段落，
+  // 写死行数会让"改预设"顺手把这条测试弄挂，而它想验证的其实是空白行往返。
+  const head = originalPrefix.split('\n');
+  const needed = presetBlockingSubstrings('v2');
+  let take = 0;
+  for (let i = 0; i < head.length && take === 0; i += 1) {
+    if (needed.every((s) => head.slice(0, i + 1).join('\n').includes(s))) take = i + 1;
+  }
+  assert.ok(take > 0, '前置条件：内置预设的头部若干行里应当已经覆盖全部安全不变量');
   const spaced = [
-    ...originalPrefix.split('\n').slice(0, 3),
+    ...head.slice(0, take),
     '   ',
     '\t',
     ' 带前后空格的正文 ',
     '正常一行',
   ].join('\n');
-  // 前 3 行来自原文，因此安全不变量仍然齐全
   const next = renderPresetPromptYaml(source, spaced);
   assert.equal(extractPresetPrefix(next), spaced, '空白行必须原样保留');
 });

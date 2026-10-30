@@ -326,6 +326,23 @@ export class NodeApiClient extends AbstractApiClient {
     return this.baseUrl;
   }
 
+  /**
+   * 换一个 DSH 基址（桌面版每次启动都会换端口，见 src/dsh-endpoint.js）。
+   *
+   * Cookie 的签名载荷里绑定了 authority（host:port），所以换地址必须同时作废
+   * 已铸造/已交换的 Cookie，否则新地址会收到 401 而旧 Cookie 看着「还没过期」。
+   * follow 集合（`_desiredFollows`）是会话级、与地址无关，刻意保留：重连后要重放。
+   * @param baseUrl - 新的 DSH 基址。
+   * @returns 是否真的换了地址。
+   */
+  rebind(baseUrl) {
+    const next = String(baseUrl ?? '').replace(/\/+$/, '');
+    if (!next || next === this.baseUrl) return false;
+    this.baseUrl = next;
+    this.invalidateAuth();
+    return true;
+  }
+
   /** 使当前 Cookie/launch token 失效；DSH 重启或 401 后会自动重新发现最新 token。 */
   invalidateAuth() {
     this._authEpoch += 1;
