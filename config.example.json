@@ -11,7 +11,8 @@
   },
   "role": {
     "maxInjectChars": 6000,
-    "injectEveryNWakes": 4
+    "injectEveryNWakes": 4,
+    "injectDedupeWindowMs": 8000
   },
   "snowluma": {
     "wsUrl": "ws://127.0.0.1:3001",
@@ -111,6 +112,9 @@
     "autoReplyCheckMs": 30000,
     "agentPreset": "qq-chat-v2",
     "provideRecommendations": true,
+    "privacy": {
+      "exposeUserId": false
+    },
     "tools": {
       "getPrompt": true,
       "getUnread": true,
