@@ -193,6 +193,9 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     NodeApiClient: class { constructor() { return api; } },
     SnowLumaWebSocketClient: FakeBot, text: (s) => s,
     discoverDshLaunchToken: () => '', unwrap, createTurnCollector,
+    // DSH 端点自愈（#63）只在探活失败时调用；夹具里给一个桩，避免测试真的去扫本机端口。
+    // 需要验证自愈逻辑的用例可以用 globals 覆盖它。
+    discoverDshBaseUrl: async () => null,
     resolveInstalledPreset, synchronizePreset, renderPatch,
     ...markdown, ...sensitive, ...wait, ...safeFetch, ...forward, ...slang, ...sticker,
     ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...presetPrompt, ...roleCard,
