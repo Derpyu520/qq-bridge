@@ -3,7 +3,7 @@
 > 根目录只留 `README.md` / `README.en.md` / `RULES.md` 三个文档，其余全部在本目录下。
 > 例外是 GitHub 社区健康文件与许可正文，它们按 GitHub 的约定放在根/`.github`：
 > `LICENSE`、`NOTICE.md`（许可范围白话版与第三方组件边界）、`SECURITY.md`、
-> `CONTRIBUTING.md`、`.github/`（issue 表单、PR 模板、CI、dependabot）。
+> `CONTRIBUTING.md`、`.github/`（issue 表单、PR 模板、CI）。
 > 仓库目录结构与 `scripts/` 命名约定见 **[FOLDER_MAP.md](FOLDER_MAP.md)**。
 >
 > **状态标记**：✅ 仍然有效（按它做就对） · ⚠️ 部分过时（见备注） · 🗄️ 已被取代（保留作背景）
