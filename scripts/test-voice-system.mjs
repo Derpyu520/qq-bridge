@@ -180,9 +180,16 @@ console.log('## qq-bridge 语音系统：控制台与 preset');
 
 console.log('## 文档');
 {
-  const voice = read(path.join('docs', 'guides', 'VOICE.md'));
-  for (const needle of ['图形界面', 'voice-gui.mjs', 'voice-cli.mjs', '默认是关的', '发语音-图形界面.cmd']) {
-    ok(voice.includes(needle), 'docs/guides/VOICE.md 提到「' + needle + '」');
+  // docs/guides/VOICE.md 在 .gitignore 里（含本机真实路径的本地专属文档，不入库），
+  // 所以干净 clone 上必然不存在。缺文件时跳过而不是 ENOENT 崩掉整条回归。
+  const voiceDoc = path.join('docs', 'guides', 'VOICE.md');
+  if (exists(voiceDoc)) {
+    const voice = read(voiceDoc);
+    for (const needle of ['图形界面', 'voice-gui.mjs', 'voice-cli.mjs', '默认是关的', '发语音-图形界面.cmd']) {
+      ok(voice.includes(needle), 'docs/guides/VOICE.md 提到「' + needle + '」');
+    }
+  } else {
+    console.log('  ⏭  docs/guides/VOICE.md 未入库（本地专属文档），跳过该文件的断言');
   }
   const readme = read('README.md');
   ok(readme.includes('voice-gui.mjs') && readme.includes('voice-cli.mjs'), 'README 含两个语音工具的入口说明');

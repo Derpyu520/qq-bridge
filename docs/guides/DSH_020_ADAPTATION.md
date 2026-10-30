@@ -163,7 +163,7 @@ POST /api/session/projections   { request: { sessionId } }
 ### 3.4 怎么验证
 
 `npm run scan:tool-names` → 悬空（假名）0 个、未覆盖的危险名 0 个；
-`npm run test:preset-local-tools` 7 项全过；`verify:adaptation` 增加两条对应断言。
+`node scripts/test-preset-local-tools.mjs` 7 项全过；`verify:adaptation` 增加两条对应断言。
 
 ---
 

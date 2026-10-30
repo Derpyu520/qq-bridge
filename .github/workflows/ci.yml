@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  syntax:
+    name: 语法与清单检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: node --check（全部 .js / .mjs / .cjs）
+        shell: bash
+        run: |
+          set -uo pipefail
+          fail=0
+          count=0
+          while IFS= read -r f; do
+            count=$((count + 1))
+            if ! node --check "$f"; then
+              echo "::error file=$f::语法错误"
+              fail=1
+            fi
+          done < <(git ls-files '*.js' '*.mjs' '*.cjs')
+          echo "检查了 $count 个 JS 文件"
+          exit $fail
+
+      - name: JSON 可解析
+        shell: bash
+        run: |
+          set -uo pipefail
+          fail=0
+          count=0
+          while IFS= read -r f; do
+            count=$((count + 1))
+            if ! node -e "JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8'))" "$f"; then
+              echo "::error file=$f::JSON 解析失败"
+              fail=1
+            fi
+          done < <(git ls-files '*.json')
+          echo "检查了 $count 个 JSON 文件"
+          exit $fail
+
+      - name: 许可证声明一致（LICENSE ↔ package.json）
+        shell: bash
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const pkg = require("./package.json");
+            const head = fs.readFileSync("LICENSE", "utf8").split("\n")[0].trim();
+            const want = "PolyForm-Noncommercial-1.0.0";
+            let bad = false;
+            if (pkg.license !== want) {
+              console.log(`::error file=package.json::license 应为 ${want}，实际 ${pkg.license}`);
+              bad = true;
+            }
+            if (!head.includes("PolyForm Noncommercial License 1.0.0")) {
+              console.log(`::error file=LICENSE::首行应为 PolyForm Noncommercial License 1.0.0，实际：${head}`);
+              bad = true;
+            }
+            if (bad) process.exit(1);
+            console.log("许可证声明一致");
+          '
+
+  audit:
+    name: 离线回归（test:audit）
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+
+      # 注意：不能用 --ignore-scripts。postinstall 会给 @snowluma/sdk 的相对导入补 .js，
+      # 跳过它 test-snowluma-upstream-health.mjs 必然失败（上游包的 ESM 打包问题）。
+      - name: npm ci
+        run: npm ci
+
+      - name: npm run test:audit
+        run: npm run test:audit
