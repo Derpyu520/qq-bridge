@@ -140,6 +140,57 @@ await test('R17 拆成两条发送的会话令牌同样被拦截', async () => {
   } finally { await h.close(); }
 });
 
+// ── R18. 发送队列按会话分链：一个会话刷屏不得阻塞另一个会话 ────────────────────
+//
+// 背景：发送队列以前是模块级唯一一条链，所有会话共用。A 群连发 6 条（条间还有随机间隔）
+// 时，B 群的一条消息要排在后面等着 —— 实测阻塞约 7.3 秒。除了拖慢，这还是一条
+// **时序侧信道**：观察"我的消息多久被回"可以推断另一个会话正在刷屏，而攻击者本来
+// 不该知道别的会话的存在。
+// 这里把「跨会话不串行」和「同会话仍严格保序」两条一起钉成断言。
+await test('R18 发送队列按会话分链：跨会话不阻塞，同会话仍保序', async () => {
+  const h = await bridgeHarness({
+    config: { sendDelayMs: 0, allow: { private: ['123'], groups: ['456', '789'] } }
+  });
+  try {
+    h.setMode('reserved2');
+    // 记录每条消息真正发出的时刻。注意 burstIntervalMinMs 走 `|| 1000`，
+    // 传 0 会被当成 1000，所以这里显式给一个较大的间隔，让"A 正在慢慢刷屏"这件事明显。
+    const order = [];
+    const original = h.bot.sendGroupMessage.bind(h.bot);
+    h.bot.sendGroupMessage = async (id, text) => {
+      await new Promise((r) => setTimeout(r, 50));
+      order.push({ id: String(id), text, at: Date.now() });
+      return original(id, text);
+    };
+
+    const social = { burstIntervalMinMs: 400, burstIntervalMaxMs: 400 };
+    const t0 = Date.now();
+    const burstA = h.sendBurstToQQ('group:456', ['a1', 'a2', 'a3', 'a4', 'a5', 'a6'], social);
+    // 稍等片刻再发 B，确保 A 的链已经在跑 —— 否则可能是"B 先跑完"而不是"B 没被阻塞"。
+    await new Promise((r) => setTimeout(r, 120));
+    const singleB = h.sendToQQ('group:789', 'b1');
+    await Promise.all([burstA, singleB]);
+    const elapsed = Date.now() - t0;
+
+    const aTimes = order.filter((x) => x.id === '456').map((x) => x.at);
+    const bEntry = order.find((x) => x.id === '789');
+
+    // 核心断言：B 必须在 A 的最后一条**之前**发出。全局单链时 B 只能排在 A 的 6 条之后。
+    assert.ok(bEntry, 'B 会话的消息必须真的发出去了');
+    assert.ok(
+      bEntry.at < Math.max(...aTimes),
+      `B 必须不被 A 的刷屏阻塞（B 在第 ${bEntry.at - t0}ms 发出，A 最后一条在第 ${Math.max(...aTimes) - t0}ms）`
+    );
+
+    // 同会话内部必须仍然严格保序：a1..a6 的出现顺序不能被并发打乱。
+    const aSeq = order.filter((x) => x.id === '456').map((x) => x.text);
+    assert.deepEqual(aSeq, ['a1', 'a2', 'a3', 'a4', 'a5', 'a6'], `同会话必须保序，实得 ${aSeq.join(',')}`);
+
+    // 总耗时应当接近"A 自己那条链"，而不是"A 的链 + B"。
+    assert.ok(elapsed < 6 * 400 + 300, `跨会话不得串行等待（总耗时 ${elapsed}ms）`);
+  } finally { await h.close(); }
+});
+
 // ── R2. 分条发送失败：错误必须可读，且预占额度要回滚 ─────────────────────────
 await test('R2 send-burst 失败路径不再抛 ReferenceError，并回滚发送额度', async () => {
   const h = await bridgeHarness({
