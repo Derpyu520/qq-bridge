@@ -68,6 +68,8 @@ const tests = [
   //   · 静默检测不得冒充 hook 检测（心跳是 SnowLuma 本地定时器无条件发的）；
   //   · 客户端库版本不得低于 bot_status 出现的版本。
   'test-snowluma-upstream-health.mjs',
+  // QQ 空间工具：读默认开 / 写默认关，写面四道串联闸门（注册期、运行期、令牌↔会话、正文上限）。
+  'test-qzone-tools.mjs',
 ];
 let failed = 0;
 for (const test of tests) {

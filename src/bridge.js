@@ -944,6 +944,9 @@ function loadConfig() {
     collectSticker: true,
     getSelfImage: true,
     sendVoice: false,
+    // 空间：读工具默认开、写工具默认关（写面是提示注入的高危面，见 SECURITY_BASELINE）。
+    qzone: true,
+    qzoneWrite: false,
     ...(cfg.socialV2.tools ?? {})
   };
 
@@ -3517,7 +3520,8 @@ async function main() {
             || url.pathname.startsWith('/api/socialV2/')
             || url.pathname.startsWith('/api/send/')
             || url.pathname.startsWith('/api/images/')
-            || url.pathname === '/api/authorize/read';
+            || url.pathname === '/api/authorize/read'
+            || url.pathname === '/api/qzone/write-allowed';
           if (!agentAllowed) {
             sendJson({ ok: false, error: '该接口仅控制台可用' }, 403);
             return;
@@ -3552,6 +3556,35 @@ async function main() {
           } catch {
             res.end('控制台页面缺失：qq-bridge/public/console.html');
           }
+          return;
+        }
+        // 空间写操作的执行期闸门（供 MCP 的 qzone 写工具调用）。
+        // 为什么判定放在桥接：/api/status 对 agent 流量只返回最小对象（不含 ownerQQ），
+        // 把 ownerQQ 下发给模型等于泄露管理身份；这里只回答「允不允许」+ 原因。
+        // 用 200 + {ok:true, allowed:false} 而不是 ok:false，避免 agentApi 把它当异常抛出。
+        if (req.method === 'GET' && url.pathname === '/api/qzone/write-allowed') {
+          const key = String(url.searchParams.get('key') ?? '').trim();
+          // 令牌 ↔ 会话绑定：没有它，模型自称的 key 就是唯一证据，闸门形同虚设。
+          const token = req.headers['x-agent-token'];
+          const ownerKey = cfg.ownerQQ ? `private:${cfg.ownerQQ}` : '';
+          if (!isLiveAgentToken(token)) {
+            sendJson({ ok: true, allowed: false, reason: '缺少有效的二代会话令牌' });
+            return;
+          }
+          if (!agentTokenOk(key, token)) {
+            sendJson({ ok: true, allowed: false, reason: `会话令牌与 ${key || '空 key'} 不匹配` });
+            return;
+          }
+          if (ownerKey && key === ownerKey) {
+            sendJson({ ok: true, allowed: true, reason: '管理员标记会话' });
+            return;
+          }
+          // 拒绝原因里**不能带 ownerKey**：那等于把管理员 QQ 号下发给任意持有活跃令牌的会话。
+          sendJson({
+            ok: true,
+            allowed: false,
+            reason: key ? `会话 ${key} 不是管理员会话` : '缺少 key 参数',
+          });
           return;
         }
         if (req.method === 'GET' && url.pathname === '/api/status') {

@@ -1462,4 +1462,233 @@ if (cfg.socialV2?.tools?.getForwardMsg !== false) {
   );
 }
 
+// ── QQ 空间工具（2026-10-19 用户授权）────────────────────────────────────────
+// 授权范围：读说说/读好友动态 + 发说说/评论/点赞/取消点赞/删说说。
+// 明确不开放：set_qzone_msg_right（改可见权限）、set_qzone_ban（空间拉黑）。
+// 开关：socialV2.tools.qzone（只读，默认开）、socialV2.tools.qzoneWrite（写，默认**关**）。
+// 与聊天类工具的区别：空间动作不属于任何会话上下文，因此不走桥接的 x-agent-token，
+// 直接以机器人账号调 OneBot HTTP API。这带来一个必须自己补的缺口：
+// 没有会话令牌就没有 #89 那道「令牌 ↔ 会话」绑定，任何群聊里的一句提示注入都可能
+// 让机器人发说说。所以写工具除注册期开关外，还要求调用方证明自己处在管理员会话里
+// （见 qzoneWriteDenied）；判定放在桥接侧，因为 ownerQQ 对 agent 流量是隐藏字段。
+const QZONE_TEXT_MAX = 1000;
+const QZONE_DENY_HINT = '空间写操作默认关闭，且只允许管理员会话（需二代会话令牌）';
+
+// 返回 null 表示放行，返回字符串表示拒绝原因。
+// 查不到一律拒绝（fail closed）：宁可这次发不出去，也不能把写权限漏给身份不明的会话。
+//
+// token 必须带：桥接对「声明了 x-agent-call 的请求」一律要求令牌命中某个活跃会话
+// （见 bridge.js 的 x-agent-call 关卡）。没有令牌时它只会看到模型自己声称的 key，
+// 而提示注入完全可以让模型声称 private:<管理员>，那样闸门等于不存在。
+async function qzoneWriteDenied(key, token) {
+  const sessionToken = String(token ?? '').trim();
+  if (!sessionToken) return '本次调用没有携带会话令牌';
+  try {
+    const verdict = await agentApi(`/api/qzone/write-allowed?key=${encodeURIComponent(String(key ?? ''))}`, {
+      headers: { 'x-agent-token': sessionToken }
+    });
+    if (verdict?.allowed === true) return null;
+    return verdict?.reason ? String(verdict.reason) : '桥接未确认这是管理员会话';
+  } catch (error) {
+    return `无法校验会话身份：${error?.message ?? error}`;
+  }
+}
+
+// 执行期开关检查：配置在启动时读一次，但控制台可能在运行期关掉写能力。
+// 只看注册期会让工具一直留在模型手里，所以每次写调用都重新读 config.json。
+// 读不到配置时 getConfig() 返回 {}，这里同样判为关闭（fail closed）。
+function qzoneWriteOff() {
+  const tools = getConfig()?.socialV2?.tools ?? {};
+  return tools.qzoneWrite === true ? null : '空间写工具未启用（socialV2.tools.qzoneWrite 不为 true）';
+}
+
+function qzoneTextDenied(text, label) {
+  if (!text) return `${label}不能为空`;
+  // 按 Unicode 码点计数：emoji 占两个 UTF-16 单元，用 .length 会把上限砍半。
+  const chars = [...text].length;
+  if (chars > QZONE_TEXT_MAX) return `${label} ${chars} 字，超过 ${QZONE_TEXT_MAX} 字上限`;
+  return null;
+}
+
+function qzoneDeniedResult(reason) {
+  return { content: [{ type: 'text', text: `拒绝：${QZONE_DENY_HINT}。当前：${reason}。` }], isError: true };
+}
+
+if (cfg.socialV2?.tools?.qzone !== false) {
+  server.tool(
+    'qq_list_qzone_posts',
+    '获取 QQ 空间说说列表（只读，默认机器人自己的空间）。返回每条说说的 tid、正文、发布时间与图片；tid 用于评论/点赞/删除。已知坑：空间里一条说说都没有时 SnowLuma 会报「响应结构异常」，因为它把 msglist:null 当成异常，不是工具坏了。',
+    {
+      targetUin: z.union([z.number(), z.string()]).optional().describe('要查看的 QQ 号（省略＝机器人自己）'),
+      pos: z.number().optional().describe('起始偏移，默认 0'),
+      num: z.number().optional().describe('条数，默认 10')
+    },
+    async ({ targetUin, pos, num }) => {
+      try {
+        const data = await onebot('get_qzone_msg_list', {
+          ...(targetUin != null ? { target_uin: Number(targetUin) } : {}),
+          pos: Number(pos ?? 0),
+          num: Number(num ?? 10)
+        });
+        return { content: [{ type: 'text', text: serializeModelData(data) }] };
+      } catch (error) {
+        const detail = String(error?.message ?? error);
+        // 空空间不是错误：SnowLuma 把 msglist:null 判成「响应结构异常」，据 payload 还原成人话。
+        if (detail.includes('msglist":null') || detail.includes('msglist:null')) {
+          return { content: [{ type: 'text', text: '这个空间目前没有任何说说（共 0 条）。SnowLuma 把空列表当成「响应结构异常」上报，属已知表现，不是工具故障。' }] };
+        }
+        return { content: [{ type: 'text', text: `读取说说失败：${detail}` }], isError: true };
+      }
+    }
+  );
+
+  server.tool(
+    'qq_list_qzone_feeds',
+    '获取 QQ 空间好友动态（只读）。返回每条动态的 uin、昵称、时间与 html 片段。page_num 仅首页可靠，深翻页未实现（要更早的动态得靠时间游标，SnowLuma 还没做）。',
+    {
+      pageNum: z.number().optional().describe('页码，默认 1'),
+      count: z.number().optional().describe('条数，默认 10')
+    },
+    async ({ pageNum, count }) => {
+      try {
+        const data = await onebot('get_qzone_feeds', {
+          page_num: Number(pageNum ?? 1),
+          count: Number(count ?? 10)
+        });
+        // SnowLuma 返回的是 QQ 空间的原始 HTML 片段（实测 2 条≈92KB），直接塞进上下文会吃掉预算。
+        // 这里只留「谁、什么时候、说了什么」三样，正文截断到 300 字。
+        const feeds = (Array.isArray(data?.feeds) ? data.feeds : []).map((f) => ({
+          uin: f?.uin,
+          nickname: f?.nickname,
+          time: f?.time,
+          text: String(f?.html ?? '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300)
+        }));
+        return { content: [{ type: 'text', text: serializeModelData({ total: data?.total ?? feeds.length, feeds }) }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `读取好友动态失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+}
+
+// 默认关闭：写能力必须由管理员显式打开（socialV2.tools.qzoneWrite=true），
+// 打开后仍要过 qzoneWriteDenied 的管理员会话判定。
+if (cfg.socialV2?.tools?.qzoneWrite === true) {
+  server.tool(
+    'qq_post_qzone',
+    '发表一条 QQ 空间说说（写操作，发出去就挂在机器人账号的空间上，好友可见）。content 为纯文字；要配图先传可公开访问的图片 URL。可见权限固定用空间默认值——本工具刻意不暴露 ugc_right，避免越权改权限。',
+    {
+      key: z.string().describe('会话 key，格式 private:QQ号 或 group:群号；必须是管理员会话'),
+      token: z.string().optional().describe('二代会话令牌（桥接唤醒提示里给出的 token）；缺失即拒绝写操作；必须原样回传'),
+      content: z.string().describe('说说正文，最多 1000 字'),
+      images: z.array(z.string()).optional().describe('图片 URL 列表（可选）')
+    },
+    async ({ key, token, content, images }) => {
+      const off = qzoneWriteOff();
+      if (off) return qzoneDeniedResult(off);
+      const denied = await qzoneWriteDenied(key, token);
+      if (denied) return qzoneDeniedResult(denied);
+      const text = String(content ?? '').trim();
+      const badText = qzoneTextDenied(text, '说说正文');
+      if (badText) {
+        return { content: [{ type: 'text', text: `拒绝：${badText}` }], isError: true };
+      }
+      try {
+        const data = await onebot('send_qzone_msg', {
+          content: text,
+          ...(Array.isArray(images) && images.length ? { images } : {})
+        });
+        return { content: [{ type: 'text', text: `已发表。${serializeModelData(data)}` }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `发表说说失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+
+  server.tool(
+    'qq_comment_qzone',
+    '评论一条 QQ 空间说说（写操作，以机器人账号发出）。tid 来自 qq_list_qzone_posts；评论别人的说说时同时传 targetUin（对方 QQ 号）。',
+    {
+      key: z.string().describe('会话 key，格式 private:QQ号 或 group:群号；必须是管理员会话'),
+      token: z.string().optional().describe('二代会话令牌（桥接唤醒提示里给出的 token）；缺失即拒绝写操作'),
+      tid: z.string().describe('说说 tid'),
+      content: z.string().describe('评论正文'),
+      targetUin: z.union([z.number(), z.string()]).optional().describe('说说所属 QQ 号（省略＝机器人自己）')
+    },
+    async ({ key, token, tid, content, targetUin }) => {
+      const off = qzoneWriteOff();
+      if (off) return qzoneDeniedResult(off);
+      const denied = await qzoneWriteDenied(key, token);
+      if (denied) return qzoneDeniedResult(denied);
+      const text = String(content ?? '').trim();
+      const badText = qzoneTextDenied(text, '评论内容');
+      if (badText) {
+        return { content: [{ type: 'text', text: `拒绝：${badText}` }], isError: true };
+      }
+      try {
+        const data = await onebot('comment_qzone', {
+          tid: String(tid),
+          content: text,
+          ...(targetUin != null ? { target_uin: Number(targetUin) } : {})
+        });
+        return { content: [{ type: 'text', text: `已评论。${serializeModelData(data)}` }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `评论失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+
+  server.tool(
+    'qq_like_qzone',
+    '给 QQ 空间说说点赞，或取消点赞（写操作）。like 默认 true，传 false 表示取消。',
+    {
+      key: z.string().describe('会话 key，格式 private:QQ号 或 group:群号；必须是管理员会话'),
+      token: z.string().optional().describe('二代会话令牌（桥接唤醒提示里给出的 token）；缺失即拒绝写操作'),
+      tid: z.string().describe('说说 tid'),
+      like: z.boolean().optional().describe('true=点赞（默认），false=取消点赞'),
+      targetUin: z.union([z.number(), z.string()]).optional().describe('说说所属 QQ 号（省略＝机器人自己）'),
+      abstime: z.number().optional().describe('说说发布时间戳（部分实现要求，取自列表返回的 createTime）')
+    },
+    async ({ key, tid, like, targetUin, abstime, token }) => {
+      const off = qzoneWriteOff();
+      if (off) return qzoneDeniedResult(off);
+      const denied = await qzoneWriteDenied(key, token);
+      if (denied) return qzoneDeniedResult(denied);
+      const action = like === false ? 'unlike_qzone' : 'like_qzone';
+      try {
+        const data = await onebot(action, {
+          tid: String(tid),
+          ...(targetUin != null ? { target_uin: Number(targetUin) } : {}),
+          ...(abstime != null ? { abstime: Number(abstime) } : {})
+        });
+        return { content: [{ type: 'text', text: `${action === 'like_qzone' ? '已点赞' : '已取消点赞'}。${serializeModelData(data)}` }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `${action === 'like_qzone' ? '点赞' : '取消点赞'}失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+
+  server.tool(
+    'qq_delete_qzone_post',
+    '删除一条 QQ 空间说说（写操作，不可撤销）。只用于机器人自己空间里的说说；tid 来自 qq_list_qzone_posts。',
+    {
+      key: z.string().describe('会话 key，格式 private:QQ号 或 group:群号；必须是管理员会话'),
+      token: z.string().optional().describe('二代会话令牌（桥接唤醒提示里给出的 token）；缺失即拒绝写操作'),
+      tid: z.string().describe('说说 tid')
+    },
+    async ({ key, token, tid }) => {
+      const off = qzoneWriteOff();
+      if (off) return qzoneDeniedResult(off);
+      const denied = await qzoneWriteDenied(key, token);
+      if (denied) return qzoneDeniedResult(denied);
+      try {
+        const data = await onebot('delete_qzone_msg', { tid: String(tid) });
+        return { content: [{ type: 'text', text: `已删除。${serializeModelData(data)}` }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `删除失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+}
+
 await server.connect(new StdioServerTransport());
