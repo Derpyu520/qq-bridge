@@ -77,6 +77,20 @@ jobs:
             console.log("许可证声明一致");
           '
 
+  privacy:
+    name: 隐私扫描（工作树）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      # 只扫将要提交的内容，不扫历史（历史检查需要完整 clone，见 PRIVACY.md）。
+      - name: privacy-scan --tracked-only
+        run: node scripts/privacy-scan.mjs --tracked-only
+
   audit:
     name: 离线回归（test:audit）
     runs-on: windows-latest

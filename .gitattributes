@@ -1,0 +1,14 @@
+# 批处理脚本：cmd.exe 对多行 if 块的行尾敏感，统一 CRLF。
+# 与 scripts/test-encoding.mjs 的断言保持一致（也是 07ad86a 里记为 F8 的缺口之一）。
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制资源：禁止当文本做换行转换 / diff。
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.mp4 binary
+*.mp3 binary
+*.wav binary

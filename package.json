@@ -57,6 +57,7 @@
     "scan:tool-names": "node scripts/scan-dsh-tool-names.mjs",
     "postinstall": "node scripts/patch-snowluma-sdk.mjs",
     "privacy-scan": "node scripts/privacy-scan.mjs",
+    "privacy-scan:history": "node scripts/privacy-scan.mjs --tracked-only --history",
     "diagnose:acl": "node scripts/diagnose-acl.mjs",
     "harden-acl": "node scripts/harden-state-acl.mjs"
   },
