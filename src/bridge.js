@@ -1827,7 +1827,9 @@ async function main() {
     let resolveSend;
     let rejectSend;
     const sendPromise = new Promise((resolve, reject) => { resolveSend = resolve; rejectSend = reject; });
-    sendChain = sendChainFor(key).then(async () => {
+    // 必须是**局部**声明：模块级 `sendChain` 已由 #83 换成按会话 Map，漏写 let 会在
+    // ESM 严格模式下直接 ReferenceError（测试 VM 之前是非严格模式，隐式全局把这个问题盖住了）。
+    let sendChain = sendChainFor(key).then(async () => {
       try {
         if (assertSendAllowed) assertSendAllowed();
         // 语音条比图片大、要过一次 SILK 转码，给 60s 预算（与文本/图片共用**同一会话**的
@@ -1856,6 +1858,9 @@ async function main() {
         rejectSend(error);
       }
     });
+    // 立刻登记链尾（而不是等发送完成）：否则这条语音在飞的时候，同会话的文本会以为没有在跑的链、
+    // 插到语音前面去 —— 「先文字后语音/表情」的顺序就是这样丢的。
+    rememberSendChain(key, sendChain);
     try {
       const data = await sendPromise;
       return {
@@ -1874,7 +1879,6 @@ async function main() {
     } finally {
       // 音量处理产物是一次性的：发完（或失败）就删，别把 temp 撑大
       cleanupTemp(sendPath, processed.converted);
-      rememberSendChain(key, sendChain);
     }
   }
 
@@ -2025,7 +2029,8 @@ async function main() {
       sendResolve = resolve;
       sendReject = reject;
     });
-    sendChain = sendChainFor(key).then(async () => {
+    // 同语音：必须局部声明，否则严格模式下 ReferenceError（见上方注释）。
+    let sendChain = sendChainFor(key).then(async () => {
       try {
         // 真人发表情前通常会有短暂停顿，避免“文字刚发完表情立刻跟上”的机械感。
         await sleep(randInt(800, 2000));
@@ -11723,7 +11728,8 @@ async function main() {
   }
 
   async function handlePokeNotice(event) {
-    if (!event || event.sub_type !== 'poke') return;    const selfId = event.self_id;
+    if (!event || event.sub_type !== 'poke') return;
+    const selfId = event.self_id;
     const groupId = event.group_id ?? event.groupId ?? null;
     const senderIdRaw = event.sender_id ?? event.user_id ?? event.sender?.user_id ?? null;
     const targetIdRaw = event.target_id ?? event.targetId ?? null;

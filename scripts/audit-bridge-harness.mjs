@@ -230,7 +230,11 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
   // should see the same prototypes as real bridge messages, just as in Node.
   const modelViewSource = fs.readFileSync(path.join(root, 'src/qq-model-view.js'), 'utf8').replace(/^export /gm, '');
   vm.runInContext(`Object.assign(globalThis, (() => { ${modelViewSource}\nreturn { compactModelMessage, compactModelData, serializeModelData, describeAge, sanitizeUntrustedText }; })());`, context);
-  vm.runInContext(source + '\nglobalThis.auditReady = main();', context);
+  // 严格模式：bridge.js 在生产里是 ESM（严格），而 vm 默认是 sloppy —— 后者会把
+  // 「赋值给未声明变量」变成隐式全局，把 ReferenceError 藏起来（真的因此漏过一个：
+  // #83 把模块级 sendChain 换成按会话 Map 后，语音/表情发送里的两处赋值没写 let，
+  // 测试全绿、生产必炸）。夹具必须与生产同模式。
+  vm.runInContext('"use strict";\n' + source + '\nglobalThis.auditReady = main();', context);
   const bridge = await context.auditReady;
   bridge.setPresets(['standard', 'qq-chat', 'qq-chat-v2']);
   bridge.setReady(true);
