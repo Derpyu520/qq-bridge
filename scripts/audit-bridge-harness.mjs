@@ -1,3 +1,5 @@
+import { resolveInstalledPreset, synchronizePreset } from '../src/preset-sync.js';
+import { renderPatch } from './build-agent-preset-patches.mjs';
 // Execute the real bridge initialization/functions against temporary files and fake peers.
 // No production config, QQ connection, DSH process, or persistent home is accessed.
 import fs from 'node:fs';
@@ -148,7 +150,7 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
   const setStickerEntries = (next) => { stickerEntries = Array.isArray(next) ? next : []; };
   const getStickerEntries = () => stickerEntries;
   return {
-    ensureSession, ensureSlangLearnerSession, resolvePresetName, deliverPrompt, drainPromptQueue,
+    syncInstalledPreset, installedPresetYaml, ensureSession, ensureSlangLearnerSession, resolvePresetName, deliverPrompt, drainPromptQueue,
     sendToQQ, sendBurstToQQ, sendMessagesV2, sendStickerV2, handleIncoming, handleRecallNotice, handlePokeNotice, handlePendingAnswer, pending, startConsoleServer, cfg, state, api, promptQueues, forwardMediaRefs, rememberForwardMedia, forwardMediaKey, setStickerEntries, getStickerEntries,
     getSocialV2State, appendSocialV2Message, recordSentMessagesV2,
     buildWakePromptV2, buildWakeSnapshotV2, sendWakePromptV2, socialV2,
@@ -191,6 +193,7 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     NodeApiClient: class { constructor() { return api; } },
     SnowLumaWebSocketClient: FakeBot, text: (s) => s,
     discoverDshLaunchToken: () => '', unwrap, createTurnCollector,
+    resolveInstalledPreset, synchronizePreset, renderPatch,
     ...markdown, ...sensitive, ...wait, ...safeFetch, ...forward, ...slang, ...sticker,
     ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...presetPrompt, ...roleCard,
     // 桥接的出图出口会调归一化（体积/动图抽帧）：VM 里必须能拿到这几个函数。

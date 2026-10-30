@@ -1,3 +1,5 @@
+import { resolveInstalledPreset, synchronizePreset } from './preset-sync.js';
+import { renderPatch } from '../scripts/build-agent-preset-patches.mjs';
 // QQ ↔ DeepSeek Harness 桥接主程序。
 //
 // 链路：
@@ -427,7 +429,11 @@ function dshHomeDir() {
 }
 
 function installedPresetYaml(name) {
-  return path.join(dshHomeDir(), '.agent-presets', name, 'agent.cordis.yml');
+  return resolveInstalledPreset(name, {home: dshHomeDir(), knownPresetName});
+}
+
+function syncInstalledPreset(name, target = installedPresetYaml(name)) {
+  return synchronizePreset(name, target, {knownPresetName, sourceFor: presetSourceYaml, renderPatch, writeText: atomicWriteText});
 }
 
 // 这里**没有**模块级的 resolvePresetName —— 曾经有一个，但它被 main() 内部同名函数完全遮蔽
@@ -3756,7 +3762,8 @@ async function main() {
             // 让一次"打开又保存"把整个提示词块变成全删全加的 diff，失去可复审性。
             const normalized = String(body.content ?? '').replace(/\r\n/g, '\n').replace(/\n+$/, '');
             if (normalized === prefix) {
-              sendJson({ ok: true, unchanged: true, chars: prefix.length, warnings: presetPromptWarnings(prefix), synced: fs.existsSync(installedPresetYaml(preset)), requiresRestart: false, status: presetStatus(preset) });
+              const sync = syncInstalledPreset(preset);
+              sendJson({ ok: true, unchanged: true, chars: prefix.length, warnings: presetPromptWarnings(prefix), synced: sync.synced, requiresRestart: sync.changed, status: presetStatus(preset) });
               return;
             }
             nextText = renderPresetPromptYaml(text, body.content, preset === PRESET_NAMES.v1 ? 'v1' : 'v2');
@@ -3772,10 +3779,7 @@ async function main() {
             // 同步到 DSH 实际读取的安装目录。
             // 注意：安装副本**不做仓库内备份**——它的内容与刚写好的源文件一致，
             // 备份它等于把含本机绝对路径的快照塞进仓库工作区，没有额外价值。
-            const installed = installedPresetYaml(preset);
-            if (fs.existsSync(installed)) {
-              fs.copyFileSync(presetSourceYaml(preset), installed);
-            }
+            syncInstalledPreset(preset);
           } catch (error) {
             // 尽力回滚源文件，避免留下半截状态
             if (sourceBackup && fs.existsSync(sourceBackup)) {
@@ -3829,8 +3833,7 @@ async function main() {
             }
             backupPresetFile(preset);
             atomicWriteText(presetSourceYaml(preset), restored);
-            const installed = installedPresetYaml(preset);
-            if (fs.existsSync(installed)) fs.copyFileSync(presetSourceYaml(preset), installed);
+            syncInstalledPreset(preset);
             log(`控制台：${preset} 仿真提示词已还原自备份 ${target}；需重启 DSH 生效`);
             sendJson({ ok: true, restoredFrom: target, requiresRestart: true });
           } catch (error) {
