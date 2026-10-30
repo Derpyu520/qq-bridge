@@ -7,6 +7,10 @@
 > 仓库目录结构与 `scripts/` 命名约定见 **[FOLDER_MAP.md](FOLDER_MAP.md)**。
 >
 > **状态标记**：✅ 仍然有效（按它做就对） · ⚠️ 部分过时（见备注） · 🗄️ 已被取代（保留作背景）
+>
+> **未入库文档**：`audits/`、`design/`、`legacy/`、`research/` 四个目录，以及
+> `guides/PROJECT_GUIDE.md`、`guides/VOICE.md`，只存在于本地开发副本（已被 `.gitignore` 排除），
+> 公开仓库中无法访问。索引保留这些条目是为了本地检索。
 
 ---
 
