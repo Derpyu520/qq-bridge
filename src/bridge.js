@@ -1967,7 +1967,7 @@ async function main() {
     // 在桥接内完成带 DNS 固定、逐跳校验和大小限制的下载；不能把 URL 交给网关重新抓取。
     let image;
     try {
-      image = await safeFetchBuffer(url, MAX_MEDIA_BYTES);
+      image = await safeFetchBuffer(url, MAX_MEDIA_BYTES, { allowPorts: MEDIA_FETCH_ALLOW_PORTS });
     } catch (error) {
       throw new Error(`表情 ${entry.id} 的图片下载失败（QQ CDN 网络异常或地址已失效）：${error?.message ?? error}`);
     }
@@ -5491,7 +5491,7 @@ async function main() {
           if (req.headers['x-agent-token'] && !v2ToolEnabled('getStickerImage')) { sendJson({ ok: false, error: '工具未启用：qq_get_sticker_image' }, 403); return; }
           try {
             const entry = await getStickerImageData(stickerId);
-            const fetched = await safeFetchBuffer(entry.url, MAX_MEDIA_BYTES);
+            const fetched = await safeFetchBuffer(entry.url, MAX_MEDIA_BYTES, { allowPorts: MEDIA_FETCH_ALLOW_PORTS });
             const dims = getImageDimensions(fetched.buffer);
             if (dims && dims.width * dims.height > MAX_MEDIA_PIXELS) {
               sendJson({ ok: false, error: `表情图片像素超限（${dims.width}x${dims.height}），已拒绝` }, 400);
@@ -6556,6 +6556,9 @@ async function main() {
                 nestedPreviews.push({ id: fid, error: error?.message ?? '嵌套转发读取失败' });
               }
             }
+            // 把本层出现的媒体登记为「本会话确实见过」，供 qq_get_forward_media 取图。
+            // 与 seenForwardIds 是同一套思路：只允许取回本会话见过的转发内容。
+            rememberForwardMedia(key, formatted.messages || []);
             sendJson({ ok: true, key, id, ...formatted, nestedPreviews });
           } catch (error) {
             log(`合并转发查询失败 ${key} ${id}: ${error?.message ?? error}`);
@@ -6566,12 +6569,35 @@ async function main() {
         if (req.method === 'POST' && url.pathname === '/api/socialV2/forward-media') {
           const body = await readBody();
           const key = String(body.key ?? '').trim();
-          const media = Array.isArray(body.media) ? body.media : [];
+          const requestedMedia = Array.isArray(body.media) ? body.media : [];
           if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
           if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
           if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
           if (req.headers['x-agent-token'] && !v2ToolEnabled('getForwardMsg')) { sendJson({ ok: false, error: '工具未启用：qq_get_forward_msg' }, 403); return; }
           if (currentMode !== 'reserved2') { sendJson({ ok: false, error: '转发媒体读取仅 reserved2 模式可用' }, 403); return; }
+          if (body.media != null && !Array.isArray(body.media)) { sendJson({ ok: false, error: 'media 必须是数组' }, 400); return; }
+          if (requestedMedia.length > MAX_MEDIA_COUNT) { sendJson({ ok: false, error: `media 数量超限（最多 ${MAX_MEDIA_COUNT} 项）` }, 400); return; }
+          // ── 只允许取回「本会话确实见过的」转发媒体 ────────────────────────────
+          //
+          // 原来这里直接把请求体的 media 交给 fetchMediaData()，而它会按 item.url /
+          // item.file 真的去下载。于是模型（或被注入的群友文本）可以**凭空编一个 URL**
+          // 让桥接去抓 —— 转发媒体的读取本该只覆盖"这条转发里确实有的图"，
+          // 而不是"调用方说它有什么"。
+          //
+          // 与 qq_get_forward_msg 的 seenForwardIds 校验是同一套边界：那个校验保证
+          // "只能读本会话见过的 forward id"，这个保证"只能取本会话见过的媒体"。
+          // 登记发生在 qq_get_forward_msg 成功返回时（rememberForwardMedia）。
+          const refs = forwardMediaRefs.get(canonicalV2Key(key));
+          const media = [];
+          for (const requested of requestedMedia) {
+            const ref = forwardMediaKey(requested);
+            const record = ref && refs?.get(ref);
+            if (!record || record.until <= Date.now()) {
+              sendJson({ ok: false, error: '媒体不在当前会话已读取的转发节点中' }, 403);
+              return;
+            }
+            media.push({ ...record.media });
+          }
           if (!media.length) { sendJson({ ok: true, key, media: [], images: [] }); return; }
           try {
             const images = await fetchMediaData(media);
@@ -7642,6 +7668,12 @@ async function main() {
     return Number.isFinite(n) && n > 0 ? Math.min(8, Math.max(1, Math.round(n))) : 5;
   })();
   const MAX_MEDIA_BYTES = maxMediaBytesLimit; // 单条消息图片总字节上限
+  // 媒体抓取的端口白名单：只允许常规 Web 端口（与 web-search 的 web_fetch 对齐）。
+  //
+  // SSRF 判定只看「地址是不是内网」，不看端口 —— 一个**公网可达**的非常规端口
+  // （某内网服务通过端口映射暴露在 8081/9200 之类）在地址判定看来是合法的，
+  // 于是能被拿来探测。端口白名单把"能抓什么"收窄到常规 Web 端口，与地址判定互补。
+  const MEDIA_FETCH_ALLOW_PORTS = [80, 443, 8080, 8443];
   const MAX_MEDIA_PIXELS = (() => {
     const n = Number(cfg.socialV2?.media?.maxPixels);
     return Number.isFinite(n) && n > 0 ? Math.min(64_000_000, Math.max(1_000_000, Math.round(n))) : 64_000_000;
@@ -7766,7 +7798,7 @@ async function main() {
     const tryUrls = async () => {
       for (const url of urls) {
         try {
-          const fetched = await safeFetchBuffer(url, MAX_MEDIA_BYTES);
+          const fetched = await safeFetchBuffer(url, MAX_MEDIA_BYTES, { allowPorts: MEDIA_FETCH_ALLOW_PORTS });
           const accepted = acceptImageBuffer(fetched.buffer, `${label} URL `);
           if (accepted) return { ...accepted, mimeType: accepted.mimeType || mimeFromUrl(url) };
           failures.push(`${url} 不是有效图片`);
@@ -7795,7 +7827,7 @@ async function main() {
         }
         if (obj.url) {
           try {
-            const fetched = await safeFetchBuffer(String(obj.url), MAX_MEDIA_BYTES);
+            const fetched = await safeFetchBuffer(String(obj.url), MAX_MEDIA_BYTES, { allowPorts: MEDIA_FETCH_ALLOW_PORTS });
             const accepted = acceptImageBuffer(fetched.buffer, 'get_image URL 图片');
             if (accepted) return { ...accepted, mimeType: accepted.mimeType || mimeFromUrl(obj.url) };
           } catch (error) {
@@ -7838,7 +7870,7 @@ async function main() {
         const desc = face.q_des || (Array.isArray(face.emoji_name_alias) && face.emoji_name_alias[0]) || '';
         if (face.url) {
           try {
-            const fetched = await safeFetchBuffer(String(face.url), MAX_MEDIA_BYTES);
+            const fetched = await safeFetchBuffer(String(face.url), MAX_MEDIA_BYTES, { allowPorts: MEDIA_FETCH_ALLOW_PORTS });
             const accepted = acceptImageBuffer(fetched.buffer, '表情图片');
             if (accepted) return { ...accepted, mimeType: accepted.mimeType || mimeFromUrl(face.url), text: desc ? `[表情:${desc}]` : '' };
           } catch (error) {
@@ -8295,6 +8327,50 @@ async function main() {
   // 已读水位多走一格（水位只增不减，走多了就再也回不来）。
   const seenMessageIds = new Set();
   const MAX_SEEN_MESSAGE_IDS = 500;
+
+  // 本会话「确实见过的」转发媒体登记表：key -> Map<ref, { media, until }>。
+  //
+  // 为什么需要：qq_get_forward_msg 有 seenForwardIds 校验（只能读本会话见过的
+  // forward id），但 forward-media 接口原来**直接信任请求体的 media** 并真的去下载。
+  // 于是模型可以凭空编一个 URL 让桥接去抓 —— 校验必须落在「这个媒体是不是本会话见过的」，
+  // 而不是「调用方说它是什么」。登记发生在 qq_get_forward_msg 成功返回时。
+  const forwardMediaRefs = new Map();
+  const FORWARD_MEDIA_TTL_MS = 10 * 60 * 1000;
+  const MAX_FORWARD_MEDIA_REFS = 1000;
+
+  /** 把一个媒体项归一化成可比较的引用串；不合法（缺字段/超长）返回 ''。 */
+  function forwardMediaKey(item) {
+    if (!item || typeof item !== 'object') return '';
+    const kind = item.kind === 'face' ? 'face' : 'image';
+    const values = ['file', 'url', 'faceId'].map((name) => (item[name] == null ? '' : String(item[name])));
+    if (!values.some(Boolean)) return '';
+    if (values.some((v) => v.length > 8192)) return '';
+    return JSON.stringify([kind, ...values]);
+  }
+
+  /** 登记一批转发消息里的媒体（来自 get_forward_msg 的返回值，不是请求体）。 */
+  function rememberForwardMedia(key, messages) {
+    const canonical = canonicalV2Key(key);
+    if (!canonical) return;
+    const now = Date.now();
+    // 顺手清掉过期条目，避免长期运行无界增长。
+    for (const [owner, refs] of forwardMediaRefs) {
+      for (const [ref, record] of refs) if (record.until <= now) refs.delete(ref);
+      if (!refs.size) forwardMediaRefs.delete(owner);
+    }
+    const refs = forwardMediaRefs.get(canonical) ?? new Map();
+    for (const message of Array.isArray(messages) ? messages : []) {
+      for (const item of message?.media ?? []) {
+        const ref = forwardMediaKey(item);
+        if (!ref) continue;
+        const media = { kind: item.kind === 'face' ? 'face' : 'image' };
+        for (const name of ['file', 'url', 'faceId']) if (item[name] != null) media[name] = String(item[name]);
+        refs.set(ref, { media, until: now + FORWARD_MEDIA_TTL_MS });
+      }
+    }
+    while (refs.size > MAX_FORWARD_MEDIA_REFS) refs.delete(refs.keys().next().value);
+    forwardMediaRefs.set(canonical, refs);
+  }
 
   // 归一化“指定群友发言唤醒”名单：
   // - 只保留正整数 QQ 号（字符串形式），拒绝 null/对象/“null”/非法字符等脏数据；
