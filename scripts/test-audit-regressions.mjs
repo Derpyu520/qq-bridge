@@ -566,6 +566,46 @@ await test('R27 桥接为 QQ 会话预分配可解码的 sessionId，并迁移�
   } finally { await h.close(); }
 });
 
+// ── R28. 并发等待被拒时必须说清「等多久、别重试」（#24 剩余项）──────────────
+//
+// 旧文案只说「请等待它结束」，模型只会立刻重试 —— 2026-10-07 那次事故里它空转了
+// 13 步、每一步都带着十几万到几十万 token 的上下文。给 retryAfterMs + 可执行提示，
+// 才有机会让它安静下来。
+await test('R28 同一会话的第二个 wait 返回 429，且带 retryAfterMs 与可执行提示', async () => {
+  const h = await bridgeHarness({ config: { socialV2: {
+    proactive: { enabled: false }, sticker: { enabled: false },
+    wait: { minMs: 100, maxMs: 600000, minQuietAfterNewMs: 100 }
+  } } });
+  try {
+    h.setMode('reserved2');
+    const key = 'group:456';
+    const st = h.getSocialV2State(key);
+    await withServer(h, async (port) => {
+      const post = (body) => new Promise((resolve, reject) => {
+        const req = http.request({
+          hostname: '127.0.0.1', port, path: '/api/socialV2/wait', method: 'POST',
+          headers: { 'x-console-token': 'fixture-console-token', 'x-agent-token': st.agentToken, 'content-type': 'application/json' }
+        }, (res) => {
+          let raw = '';
+          res.on('data', (c) => { raw += c; });
+          res.on('end', () => { try { resolve({ status: res.statusCode, ...JSON.parse(raw) }); } catch { resolve({ status: res.statusCode, raw }); } });
+        });
+        req.on('error', reject);
+        req.end(JSON.stringify(body));
+      });
+      const first = post({ key, purpose: 'messages', timeoutMs: 800, quietMs: 100 });
+      await new Promise((r) => setTimeout(r, 150));
+      const second = await post({ key, purpose: 'messages', timeoutMs: 200, quietMs: 100 });
+      assert.equal(second.status, 429, '同一会话的第二个等待必须被拒绝');
+      assert.ok(Number.isFinite(second.retryAfterMs) && second.retryAfterMs > 0,
+        '必须给出 retryAfterMs：模型不知道还要等多久就会立刻重试');
+      assert.match(String(second.error), /不要立刻重试/, '文案必须劝阻立刻重试');
+      assert.ok(typeof second.hint === 'string' && second.hint.length > 0, '必须给出可执行的替代动作');
+      await first;
+    });
+  } finally { await h.close(); }
+});
+
 // ── R2. 分条发送失败：错误必须可读，且预占额度要回滚 ─────────────────────────
 await test('R2 send-burst 失败路径不再抛 ReferenceError，并回滚发送额度', async () => {
   const h = await bridgeHarness({

@@ -6171,7 +6171,15 @@ async function main() {
           // 租约过期则视为残留（handler 异常退出没清干净），允许接管而不是永久 429。
           const leaseKey = canonicalV2Key(key) ?? key;
           if (activeWaits.has(leaseKey) && Date.now() - activeWaits.get(leaseKey) < ACTIVE_WAIT_LEASE_MS) {
-            sendJson({ ok: false, error: '该会话已有一个等待中的 qq_wait_for_messages，请等待它结束' }, 429);
+            // 带上「还要等多久」和可执行动作：只说「请等待它结束」时，模型只会立刻重试，
+            // 十几分钟里把几十万 token 的上下文空转烧掉（2026-10-07 那次事故）。
+            const waitUntil = activeWaits.get(leaseKey) + ACTIVE_WAIT_LEASE_MS;
+            sendJson({
+              ok: false,
+              error: '该会话已有一个等待中的 qq_wait_for_messages，请等待它结束；不要立刻重试（重试只会再拿到同样的拒绝）。',
+              retryAfterMs: Math.max(0, waitUntil - Date.now()),
+              hint: '若你只是要完成沉睡前观察：静候即可，观察窗口会随时间自然届满，不需要再发等待。'
+            }, 429);
             return;
           }
           const leaseStamp = Date.now();
