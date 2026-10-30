@@ -33,6 +33,13 @@
 >
 > ⚠️ **许可变更的时效**：`v0.2.1-r1` 及更早的版本发布时使用的是 MIT 许可，**已经拿到那些版本的人
 > 仍然可以按 MIT 使用**——许可变更只对此后的版本生效。同理，变更前已 fork 的副本不受影响。
+>
+> ℹ️ **为什么 GitHub 仓库页面显示 "Other / NOASSERTION" 而不是一个许可名**：
+> GitHub 的许可识别只覆盖它自己维护的常用许可清单（`agpl-3.0` … `unlicense`，共 13 个，
+> **全部是开源许可**），**不包含 PolyForm 一族**（`GET /licenses/polyform-noncommercial-1.0.0`
+> 返回 404）。也就是说「禁止商用」与「GitHub 页面显示许可徽章」这两件事**无法同时满足**。
+> 权威声明以 `LICENSE` 正文与 `package.json` 的 `"license": "PolyForm-Noncommercial-1.0.0"`
+> （SPDX 标识符）为准。**请不要为了让徽章好看而改回 MIT**——那等于放弃禁止商用。
 
 ---
 
