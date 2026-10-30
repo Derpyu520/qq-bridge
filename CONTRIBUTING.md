@@ -29,13 +29,15 @@ npm run test:audit
 | 命令 | 环境要求 | 说明 |
 | --- | --- | --- |
 | `npm run test:audit` | 离线，无需 QQ / DSH | **提 PR 前必须跑**。fixtures + mock，不碰真实账号 |
-| `npm run privacy-scan` | 无需额外环境 | 扫入库文件里的 token、本机路径、真实 QQ 号/群号 |
+| `npm run privacy-scan` | 无需额外环境 | 扫入库文件里的 token、本机路径、真实 QQ 号/群号（CI 会跑） |
+| `npm run privacy-scan:history` | 需要完整 clone | 追加扫描全部 git 历史（发布前必跑，历史未清理时会报出已知泄漏） |
 | `npm run verify:adaptation` | **需要活的 DSH** | DSH 协议适配对账（含活体回合），CI 里跑不了 |
 | `npm run test:mcp-servers` | 离线 | 三个 MCP server 的工具清单 |
 | `node src/self-test.js` | 需要 DSH + SnowLuma 在线 | 端到端链路 |
 
 `privacy-scan` 的规则文件 `scripts/privacy-rules.json` **不进仓库**（它本身会记录敏感判断依据）。
-没有它时扫描只走内置默认规则，会有 3 处已知误报（`src/media-normalize.js` 里的测试夹具），可以忽略。
+没有它时扫描只走内置默认规则；干净 clone 上应当**直接通过**（内置规则已把测试夹具与文档占位符排除）。
+如果本机补了 `privacy-rules.json`（含你自己的真实 QQ 号/路径），扫描会用你的规则覆盖默认值。
 
 ## 4. 提交 PR
 

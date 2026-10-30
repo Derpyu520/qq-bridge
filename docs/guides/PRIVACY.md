@@ -13,8 +13,14 @@
 ```bash
 node scripts/privacy-scan.mjs                # 扫"将要提交的内容"（推荐）
 node scripts/privacy-scan.mjs --tracked-only # 只扫 git 已跟踪文件
+node scripts/privacy-scan.mjs --history      # 追加扫描全部 git 历史（发布前必跑）
 node scripts/privacy-scan.mjs --json         # 机读输出（给 CI 用）
 ```
+
+> `--history` 需要**完整克隆**（`git fetch --unshallow`），且只跑低误报规则。
+> 它按「历史 blob」逐份扫描，因此不会因为同一文件在几十个提交里没变而重复报告。
+> 目前它会稳定报出 `docs/AUDIT_REPORT_2026-09-18.md` 里的本机路径泄漏 ——
+> **清掉历史之前，这条不会被消除**，这正是它应该起的作用。
 
 退出码：`0` = 干净，`1` = 有命中（**必须逐个判读**），`2` = 规则文件坏了或目录扫不动。
 
@@ -79,6 +85,8 @@ node scripts/privacy-scan.mjs --json         # 机读输出（给 CI 用）
 ```
 
 CI 上只扫**已跟踪**文件（未跟踪文件在干净 checkout 里不存在），命中即失败。
+历史扫描（`--history`）**不进 CI**：CI 默认浅克隆看不到历史，且它需要完整 clone、更慢；
+它属于发布前的人工检查（`npm run privacy-scan:history`）。
 
 ## 六、本仓库 2026-09-20 的扫描结果（存档）
 
