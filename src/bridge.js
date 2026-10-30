@@ -4438,7 +4438,7 @@ async function main() {
           }
           const isV2 = currentMode === 'reserved2';
           const roleState = readRoleState();
-          const roleLine = roleState.role ? `【当前角色】${roleState.role}（完整角色卡请调用 qq_get_prompt 查看）\n\n` : '';
+          const roleLine = roleLineV2();
           // 二代必须带会话令牌，否则 AI 调用任何 MCP 状态/发送工具都会被拒。
           let tokenLine = '';
           if (isV2) {
@@ -9803,6 +9803,19 @@ async function main() {
     return kept.join('\n');
   }
 
+  // 二代提示词里的【当前角色】段。历史实现只给名字 + 「完整角色卡请调用 qq_get_prompt 查看」，
+  // 等于把「是否遵守人设」交给模型自觉——实测模型几乎不会去调 qq_get_prompt，
+  // 只会回「人设就给我了个名字，别的栏空着」，然后按预设即兴发挥。
+  // 所以这里直接把完整人格卡拼进唤醒提示（人格卡本身有 6000 字符上限兜底）。
+  function roleLineV2() {
+    const rs = readRoleState();
+    if (!rs.role) return '';
+    const card = currentRoleHintV2();
+    return card
+      ? `【当前角色】${rs.role}\n${card}\n\n`
+      : `【当前角色】${rs.role}（完整角色卡请调用 qq_get_prompt 查看）\n\n`;
+  }
+
   // QQ 群成员名片/昵称缓存：@ 段解析用，避免每条消息都调一次 OneBot API。
   const groupMemberNameCache = new Map(); // `groupId:userId` -> { name, ts }
   const GROUP_MEMBER_NAME_TTL_MS = 5 * 60 * 1000;
@@ -10533,7 +10546,7 @@ async function main() {
 
   function buildWakePromptV2(key, reason) {
     const roleState = readRoleState();
-    const roleLine = roleState.role ? `【当前角色】${roleState.role}（完整角色卡请调用 qq_get_prompt 查看）\n\n` : '';
+    const roleLine = roleLineV2();
     const identityLine = selfIdentityTextV2();
     const st = getSocialV2State(key);
     const tokenLine = `【会话令牌】${st.agentToken}（调用二代状态工具时请在参数中带上此令牌）\n\n`;
@@ -10610,7 +10623,7 @@ async function main() {
 
   function buildWakeReminderPromptV2(key) {
     const roleState = readRoleState();
-    const roleLine = roleState.role ? `【当前角色】${roleState.role}（完整角色卡请调用 qq_get_prompt 查看）\n\n` : '';
+    const roleLine = roleLineV2();
     const identityLine = selfIdentityTextV2();
     const st = getSocialV2State(key);
     const tokenLine = `【会话令牌】${st.agentToken}（调用二代状态工具时请在参数中带上此令牌）\n\n`;
