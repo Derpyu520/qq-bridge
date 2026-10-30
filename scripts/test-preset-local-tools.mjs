@@ -103,7 +103,20 @@ const OPTIONAL_BUNDLE_TOOLS = new Set(['subagent_codex', 'subagent_claude_code']
  * 现在只保留一条实现，两边不可能再漂移。
  */
 function collectDshToolNames() {
-  const { names } = collectDshToolNamesShared();
+  let shared;
+  try {
+    shared = collectDshToolNamesShared();
+  } catch (err) {
+    // 没装 DSH（干净 clone / CI）不是"测试失败"，是"前提不满足"：走到下面调用方
+    // 已有的 null ⇒ 跳过 分支，而不是让整个套件变红。装了 DSH 的机器（含作者本机）
+    // 仍然会真的跑这条 L7 断言——跳过时会打印原因，不会静默当作通过。
+    if (err?.code === 'DSH_MODULES_NOT_FOUND') {
+      console.log('  ⏭  ' + String(err.message).split('\n')[0]);
+      return null;
+    }
+    throw err;
+  }
+  const { names } = shared;
   return names.size === 0 ? null : new Set(names.keys());
 }
 /** 允许出现在名单里、但不属于"本地执行"语义的名字（开发/注入器）。 */

@@ -1,0 +1,32 @@
+version: 2
+
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 5
+    target-branch: "main"
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      # 常规的 minor + patch 合并成一个 PR，避免 43 个开放 PR 里再堆十几条流水账。
+      # 安全更新（security advisories 触发的）不并入，保持单独 PR —— 那种需要逐条看可达性。
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      # @snowluma/* 的版本跟 SnowLuma 运行时绑定，升级必须人工核对：
+      # postinstall 的补丁脚本按 dist 里的相对导入做匹配，包结构一变就会静默失效。
+      # 另外这两个包的许可态本身不清晰（见 NOTICE.md），不自动升。
+      - dependency-name: "@snowluma/sdk"
+      - dependency-name: "@snowluma/mcp"
+      # @deepseek-ai/dsh-host-apiproxy 必须与运行中的 DSH 版本对齐，
+      # 自动升会让桥接连上一个协议对不上的 DSH。
+      - dependency-name: "@deepseek-ai/dsh-host-apiproxy"

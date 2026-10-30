@@ -2,7 +2,7 @@
   "name": "qq-bridge",
   "version": "0.2.1-r1",
   "private": true,
-  "license": "MIT",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "description": "Bridge between SnowLuma (OneBot v11 / QQ) and DeepSeek Harness Web API: QQ messages become DSH agent prompts, agent replies go back to QQ. Targets the DSH Cookie-auth / slash-RPC / remote.mux protocol generation, so it deliberately names no DSH version here.",
   "type": "module",
   "engines": {
