@@ -11021,9 +11021,15 @@ async function main() {
     const roleState = readRoleState();
 
     // 若该会话有挂起的提问/审批，先当作回答处理（用当前消息自己的文字，不含引用原文）。
-    // 审批只有管理员消息会被消费；群友消息不能因为“审批挂起”而被吞掉，应继续走正常处理。
+    //
+    // 只有管理员消息能被消费 —— 提问与审批都是这样：
+    //   · 审批天然是 owner 的权限（`handlePendingAnswer` 里对非 owner 直接拒绝）；
+    //   · 提问原来**没有**这道门：任何群友的一句话都会被当成 agent 提问的权威答案
+    //     回执给 agent loop，而那条消息既不会进聊天流、群友也收不到任何回应。
+    //     群友因此可以（有意或无意）替 agent 回答它向管理员问的问题。
+    // 群友消息不能因为「有挂起」而被吞掉，应继续走正常处理。
     const p = pending.get(key);
-    if (p && (p.kind === 'question' || isOwner)) {
+    if (p && isOwner) {
       await handlePendingAnswer(p, plainContent, key, isOwner);
       return;
     }
@@ -11334,9 +11340,12 @@ async function main() {
     }
   }
 
-  // 回答挂起的提问/审批
+  // 回答挂起的提问/审批。返回 true 表示这次消息被消费掉了（不再进聊天流）。
   async function handlePendingAnswer(p, answerText, key, isOwner = false) {
     if (p.kind === 'question') {
+      // 提问的答案会作为 agent 提问的权威回执发回 agent loop，因此与审批同级：只认 owner。
+      // 非 owner 的回复既不该被当成答案，也不该被吞掉（调用方已按 isOwner 过滤，这里兜底）。
+      if (!isOwner) return false;
       const answers = [];
       for (const q of p.questions) {
         const opts = q.options ?? [];

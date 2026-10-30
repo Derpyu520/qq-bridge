@@ -307,6 +307,51 @@ await test('R21 forward-media 拒绝请求体里凭空编造的媒体引用', as
   } finally { await h.close(); }
 });
 
+// ── R22. 提问通道必须有 owner 门（非 owner 群友不能替 agent 回答问题）──────────
+//
+// 背景：审批天然是 owner 权限（handlePendingAnswer 里对非 owner 直接拒绝），
+// 但**提问原来没有这道门**。任何群友的一句话都会被当成 agent 提问的权威答案回执给
+// agent loop —— 而那条消息既不会进聊天流、群友也收不到任何回应。
+// 群友因此可以（有意或无意）替 agent 回答它向管理员问的问题。
+await test('R22 非 owner 群友的回复不得被当作挂起提问的答案', async () => {
+  const h = await bridgeHarness({ config: { allow: { private: ['123'], groups: ['456'] } } });
+  try {
+    h.setMode('reserved2');
+    const KEY = 'group:456';
+    h.getSocialV2State(KEY);
+
+    // 造一个挂起的提问（模拟 agent 在群里问了"要不要继续"）
+    h.pending.set(KEY, {
+      kind: 'question', clientId: 'fixture-client', eventId: 'fixture-event',
+      questions: [{ id: 'q1', question: '要不要继续？', options: [{ label: '继续' }, { label: '算了' }] }]
+    });
+
+    // 非 owner 群友回一句选项
+    const memberEv = {
+      post_type: 'message', message_type: 'group', self_id: 10002, group_id: 456,
+      user_id: 999, message_id: 9201,
+      sender: { nickname: '小明', card: '小明' },
+      raw_message: '继续', message: [{ type: 'text', data: { text: '继续' } }]
+    };
+    await h.handleIncoming('group', '456', memberEv, h.cfg);
+    await new Promise((r) => setTimeout(r, 150));
+
+    assert.equal(h.calls.responded.length, 0, '非 owner 的回复绝不能产生 agent 回执');
+    assert.ok(h.pending.has(KEY), '挂起提问必须仍然存在（不能被非 owner 消费掉）');
+    // 而且那条消息不能被吞掉，应当照常进聊天流
+    assert.ok(h.getSocialV2State(KEY).recentMessages.some((m) => String(m.messageId) === '9201'),
+      '非 owner 消息必须照常进聊天流，不能因为"有挂起"而被吞');
+
+    // 正例：owner 回复必须被消费
+    const ownerEv = { ...memberEv, user_id: 123, message_id: 9202 };
+    await h.handleIncoming('group', '456', ownerEv, h.cfg);
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(h.calls.responded.length, 1, 'owner 的回复必须产生 agent 回执');
+    assert.equal(h.calls.responded[0].outcome.value.answers[0].selected[0], '继续', '回执内容必须是对应的选项');
+    assert.equal(h.pending.has(KEY), false, 'owner 回答后挂起必须被清除');
+  } finally { await h.close(); }
+});
+
 // ── R2. 分条发送失败：错误必须可读，且预占额度要回滚 ─────────────────────────
 await test('R2 send-burst 失败路径不再抛 ReferenceError，并回滚发送额度', async () => {
   const h = await bridgeHarness({
