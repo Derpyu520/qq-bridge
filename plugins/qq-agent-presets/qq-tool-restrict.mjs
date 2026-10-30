@@ -263,6 +263,22 @@ function writeDiagnostics(lines) {
   } catch {}
 }
 
+// 拒绝诊断：每个会话只记一次，避免模型反复试错刷屏。日志里只出现 sessionId 与工具名
+// （sessionId 形如 qqb-g-<群号>-<hex>，本来就是本机会话文件的名字）。这条日志是「升级后
+// QQ 工具突然全被拒」时唯一能快速定位的东西 —— 否则只能看到模型说「该会话不可用」。
+const loggedBindingDenials = new Set()
+
+function noteBindingDenial(exec, name) {
+  try {
+    const id = String(exec?.agent?.id ?? '') || '(无 agent)'
+    if (loggedBindingDenials.has(id)) return
+    if (loggedBindingDenials.size > 200) loggedBindingDenials.clear()
+    loggedBindingDenials.add(id)
+    console.error(`[qq-tool-restrict] 拒绝 ${name}：会话绑定校验未通过（agent.id=${id}；` +
+      '这通常意味着该会话不是桥接创建的，或 exec 上没有 agent 字段）')
+  } catch {}
+}
+
 export function apply(ctx) {
   // 1) 把已知危险全局工具从 schema 隐藏（restrict 只影响继承的全局层，
   //    不会误删 preset 自己注册的 scoped 工具）。
@@ -335,7 +351,10 @@ export function apply(ctx) {
       // 会话绑定：凡带 key 的 QQ MCP 工具都必须是**当前会话**。未绑定会话（解不出身份）
       // 同样拒绝 —— 放行它等于给出跨会话读取的后门（见 qq-self-key.mjs 的注释）。
       const denial = sessionBindingDenial(exec, exec?.arguments)
-      if (denial) return denial
+      if (denial) {
+        noteBindingDenial(exec, name)
+        return denial
+      }
       return
     }
     return `工具 "${name}" 不在 QQ 桥接白名单内，已拒绝（仅允许 QQ MCP 工具与无害模型侧工具）`
