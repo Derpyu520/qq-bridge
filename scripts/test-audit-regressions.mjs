@@ -98,6 +98,48 @@ await test('R1 无令牌智能体调用：closed-agent 可发送/探测，v2 面
   } finally { await h.close(); }
 });
 
+// ── R17. 令牌闸门：拆成两条发出去的令牌必须同样被拦 ──────────────────────────
+//
+// 背景：闸门以前是整串匹配（`text.includes(token)`）。模型只要把同一个 token 拆成
+// 两条消息，两条各自都不含完整 token，闸门就全部落行 —— 而拆条恰好是这个桥接
+// **鼓励**的行为（SPACE_SPLIT_HINT：想分多条消息时用空格分隔）。QQ 上拼起来就是完整令牌。
+// 这里把「拆分也必须拦住」钉成断言。
+await test('R17 拆成两条发送的会话令牌同样被拦截', async () => {
+  const h = await bridgeHarness();
+  try {
+    h.setMode('reserved2');
+    const st = h.getSocialV2State('group:456');
+    const token = String(st.agentToken);
+    assert.ok(token.length >= 24, `夹具令牌应当够长，实得 ${token.length}`);
+
+    await withServer(h, async (port) => {
+      // 整串：既有行为，必须拦。
+      const whole = await call(port, '/api/socialV2/send-message', {
+        method: 'POST', token, body: { key: 'group:456', messages: [token] }
+      });
+      assert.equal(whole.status, 500, '整串令牌必须被拦');
+
+      // 拆两半：这是本次修复的目标。
+      const half = Math.ceil(token.length / 2);
+      const split = await call(port, '/api/socialV2/send-message', {
+        method: 'POST', token, body: { key: 'group:456', messages: [token.slice(0, half), token.slice(half)] }
+      });
+      assert.equal(split.status, 500, `拆两半的令牌必须同样被拦，实际 ${split.status} ${split.body}`);
+
+      // 三段 + 中间插字符：片段匹配必须仍然命中。
+      const pieces = [token.slice(0, 10), token.slice(10, 20), token.slice(20)];
+      const spaced = await call(port, '/api/socialV2/send-message', {
+        method: 'POST', token, body: { key: 'group:456', messages: pieces }
+      });
+      assert.equal(spaced.status, 500, `分段发送的令牌必须被拦，实际 ${spaced.status} ${spaced.body}`);
+    });
+
+    // 出站侧也确认：没有任何一条真的发到了 QQ。
+    const leaked = h.calls.sent.filter((m) => m.text && token.includes(String(m.text).slice(0, 12)));
+    assert.equal(leaked.length, 0, `不得有任何令牌片段发出：${JSON.stringify(leaked)}`);
+  } finally { await h.close(); }
+});
+
 // ── R2. 分条发送失败：错误必须可读，且预占额度要回滚 ─────────────────────────
 await test('R2 send-burst 失败路径不再抛 ReferenceError，并回滚发送额度', async () => {
   const h = await bridgeHarness({
