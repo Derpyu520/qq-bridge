@@ -10918,6 +10918,11 @@ async function main() {
   async function sendWakePromptV2(key, reason) {
     if (cfg.socialV2?.enabled === false) return;
     if (currentMode !== 'reserved2' || socialV2.paused) return;
+    // 静默兜底：定时器、补发、重试都可能绕过 scheduleWakeV2 直接调用这里。
+    if (isBlockedKey(key) || isMutedKey(key)) {
+      log(`[reserved2] 跳过唤醒 ${key}（${reason}）：会话${isBlockedKey(key) ? '已屏蔽' : '已静默'}`);
+      return;
+    }
     if (!isSessionAllowedInCurrentMode(key)) {
       log(`[reserved2] 跳过唤醒 ${key}（${reason}）：会话已不在当前模式允许范围内`);
       return;
@@ -11137,6 +11142,13 @@ async function main() {
     if (socialV2.paused) return;
     // 完全屏蔽：连唤醒都不排，日志里也不会出现「计划唤醒」。
     if (isBlockedKey(key)) return;
+    // 静默：消息照常入库（取消静默后还能看到），但**不排唤醒**。
+    // 只在发送侧拦截是不够的：唤醒本身会跑完整一轮推理，token 照烧、消息发不出去，
+    // 等于「静默 = 烧钱但不说话」。这里和 sendWakePromptV2 都短路，定时器/补发路径也覆盖到。
+    if (isMutedKey(key)) {
+      log(`[reserved2] 跳过计划唤醒 ${key}（${reason}）：会话已静默`);
+      return;
+    }
     if (!isSessionAllowedInCurrentMode(key)) {
       log(`[reserved2] 跳过计划唤醒 ${key}（${reason}）：会话已不在当前模式允许范围内`);
       return;
@@ -11372,6 +11384,10 @@ async function main() {
     // plainContent 只保留当前消息自己的文字，用于命令/指向性判断，避免被引用原文干扰。
     const textContent = await segmentsToText(event.message ?? [], { resolveAtName, resolveReply });
     const plainContent = await segmentsToText(event.message ?? [], { resolveAtName, includeReply: false });
+    // 静默（muted）：**消息照常入库**（取消静默后还能看到），但不投递、不排唤醒。
+    // 这里只留一行活动记录，方便事后核对"静默期间收过什么"。
+    const mutedNow = isMutedKey(key);
+    if (mutedNow) appendActivity(`${key}（静默）${event.user_id}：${textContent.slice(0, 80)}`);
     const mediaList = extractMediaFromSegments(event.message ?? []);
     const messageRef = String(event.message_id ?? event.msg_id ?? event.message_seq ?? '');
     const seqRef = event.message_seq != null ? String(event.message_seq) : '';
@@ -11542,6 +11558,9 @@ async function main() {
       appendActivity(`${key} [reserved2] 消息已入未读：${textContent.slice(0, 80)}`);
       return;
     }
+
+    // 静默：非 reserved2 的链路是"直接投递"，这里也一并短路（静默不应该在任何模式下唤醒模型）。
+    if (mutedNow) return;
 
     // 黑话学习素材：只从群聊普通消息进入滚动窗口（命令/角色控制语不学；只学当前消息自己的文字，不学引用原文）
     if (kind === 'group') {

@@ -33,6 +33,9 @@ const tests = [
   'test-media-search.mjs',
   // GitHub issue 回归：#22 模式 user 层优先 / #11/#19 回合判忙租约 / #29 机器人身份注入。
   'test-issue-regressions.mjs',
+  // 会话三态（正常/静默/屏蔽）：blocked 不入库；muted 入库但不排唤醒（否则只是
+  // "烧 token 但不说话"）；normal 恢复后能正常排唤醒。三条都在测试里钉住。
+  'test-session-modes.mjs',
   // 二代「会话初始提示词」：只在首次唤醒注入、管理面隔离、损坏文件只读降级、
   // 以及控制台「立即唤醒」不得顶掉首次 bootstrap（否则初始提示词永远发不出去）。
   'test-v2-initial-prompt.mjs',
