@@ -3289,71 +3289,93 @@ async function main() {
       const y = Buffer.from(b, 'utf8');
       return x.length === y.length && crypto.timingSafeEqual(x, y);
     };
-    // ── 跨会话发送（默认关闭）──────────────────────────────────────────────
-    // 这是安全边界变更：开启后，某个群的 agent 被提示注入时，可以用自己的令牌给 owner
-    // 私聊发任意内容，而 owner 会以为是管理员通道。因此：
-    //   · 总开关 allowCrossSessionSend 默认 false，必须显式打开；
-    //   · 两个方向各有独立开关（任何会话→owner / owner→白名单）；
-    //   · 按来源会话每小时限频（crossSessionSendPerHour，默认 20）；
-    //   · 每次跨会话放行都写活动日志，正文前注明来源会话。
-    const crossSendTimes = new Map(); // 来源会话 -> 时间戳数组
-    function crossSessionRateOk(callerKey) {
-      const raw = Number(cfg.socialV2?.crossSessionSendPerHour);
-      const limit = Number.isFinite(raw) && raw >= 0 ? Math.trunc(raw) : 20;
-      if (limit === 0) return false;
-      const now = Date.now();
-      const hist = (crossSendTimes.get(callerKey) ?? []).filter((t) => now - t < 3600000);
-      if (hist.length >= limit) {
-        crossSendTimes.set(callerKey, hist);
-        return false;
-      }
-      hist.push(now);
-      crossSendTimes.set(callerKey, hist);
-      return true;
-    }
-    /** 跨会话发送时的正文前缀；同会话返回空串。 */
-    function crossSessionPrefix(targetKey, token) {
-      if (!token) return '';
-      const caller = agentTokenSessionKey(token);
-      const target = canonicalV2Key(targetKey) ?? String(targetKey ?? '');
-      if (!caller || caller === target) return '';
-      return `【来自 ${caller}】\n`;
-    }
+    // 读取、等待与状态修改仍严格绑定本会话；跨会话权限仅供下列文本发送端点使用。
     const agentTokenOk = (key, token) => {
       const canonical = canonicalV2Key(key);
       const st = socialV2.conversations.get(canonical ?? key);
-      if (st && st.agentToken && tokenEq(token, st.agentToken)) return true;
-      // 跨会话：默认关闭。开启后两个方向分别受开关控制：
-      //   allowAnySessionToOwner —— 任何会话都可以给管理员发私聊；
-      //   allowOwnerToWhitelist  —— 管理员私聊发起的调用可以发给任意白名单目标。
-      // 两者都要求 token 是某个活跃会话的真实 agent 令牌，且目标在白名单内。
-      if (cfg.socialV2?.allowCrossSessionSend === true && token) {
-        const ownerId = String(cfg.ownerQQ ?? '').trim();
-        const callerKey = ownerId ? agentTokenSessionKey(token) : null;
-        const parsed = parseTargetKey(String(canonical ?? key));
-        if (ownerId && callerKey && parsed) {
-          const targetKey = `${parsed.kind}:${parsed.id}`;
-          const ownerKey = `private:${ownerId}`;
-          const toOwner = parsed.kind === 'private'
-            && String(parsed.id) === ownerId
-            && callerKey !== ownerKey
-            && cfg.socialV2?.allowAnySessionToOwner !== false;
-          const fromOwner = callerKey === ownerKey
-            && targetKey !== ownerKey
-            && allowed(parsed.kind, Number(parsed.id), cfg)
-            && cfg.socialV2?.allowOwnerToWhitelist !== false;
-          if (toOwner || fromOwner) {
-            if (!crossSessionRateOk(callerKey)) {
-              log(`[cross-session] 限频拒绝：${callerKey} -> ${targetKey}（crossSessionSendPerHour）`);
-              return false;
-            }
-            appendActivity(`[跨会话发送] ${callerKey} -> ${targetKey}`);
-            log(`[cross-session] 放行 ${callerKey} -> ${targetKey}`);
-            return true;
-          }
-        }
+      return !!st?.agentToken && tokenEq(token, st.agentToken);
+    };
+    const CROSS_SEND_FILE = path.join(STATE_DIR, 'cross-session-send-times.json');
+    let crossSendEvents = [];
+    let crossSendStoreWritable = true;
+    try {
+      const saved = JSON.parse(fs.readFileSync(CROSS_SEND_FILE, 'utf8'));
+      if (!Array.isArray(saved) || saved.length > 10000 || saved.some(e =>
+        !e || !canonicalV2Key(e.caller) || !Number.isFinite(e.at))) throw new Error('invalid rate history');
+      crossSendEvents = saved;
+    } catch (error) {
+      if (error?.code !== 'ENOENT') {
+        crossSendStoreWritable = false;
+        log(`[cross-session] 限频记录不可读，拒绝跨会话发送：${error?.message ?? error}`);
       }
-      return false;
+    }
+    // 持久化发送尝试的预留额度：失败不退款，防止并发/失败重试绕过；重启不清零。
+    function crossSessionRateOk(callerKey, count = 1) {
+      const boundedLimit = (value, fallback, max) => {
+        if (value === undefined) return fallback;
+        const n = Number(value);
+        return Number.isFinite(n) && n >= 0 ? Math.min(max, Math.trunc(n)) : 0;
+      };
+      const perSource = boundedLimit(cfg.socialV2?.crossSessionSendPerHour, 20, 1000);
+      const globalLimit = boundedLimit(cfg.socialV2?.crossSessionSendGlobalPerHour, 100, 10000);
+      const now = Date.now();
+      crossSendEvents = crossSendEvents.filter(e => e.at > now - 3600000);
+      if (!crossSendStoreWritable || crossSendEvents.length + count > globalLimit
+        || crossSendEvents.filter(e => e.caller === callerKey).length + count > perSource) return false;
+      const next = [...crossSendEvents, ...Array.from({ length: count }, () => ({ caller: callerKey, at: now }))];
+      try { atomicWriteJson(CROSS_SEND_FILE, next); }
+      catch (error) {
+        crossSendStoreWritable = false;
+        log(`[cross-session] 限频记录写入失败，拒绝跨会话发送：${error?.message ?? error}`);
+        return false;
+      }
+      crossSendEvents = next;
+      return true;
+    }
+    function crossSessionPrefix(targetKey, token) {
+      const caller = agentTokenSessionKey(token);
+      const target = canonicalV2Key(targetKey);
+      return caller && caller !== target ? `【来自 ${caller}】\n` : '';
+    }
+    const crossSessionAllowed = (key, token) => {
+      if (cfg.socialV2?.allowCrossSessionSend !== true || currentMode !== 'reserved2'
+        || socialV2.paused || cfg.socialV2?.enabled === false) return false;
+      const callerKey = agentTokenSessionKey(token);
+      const targetKey = canonicalV2Key(key);
+      const ownerId = String(cfg.ownerQQ ?? '').trim();
+      if (!callerKey || !targetKey || !ownerId || !isSessionAllowedInCurrentMode(callerKey)
+        || !isSessionAllowedInCurrentMode(targetKey) || shouldBlockSilentReply(callerKey)) return false;
+      const ownerKey = `private:${ownerId}`;
+      // 非 owner 会话→owner 必须再次显式开启；owner 主动代发默认允许（仍需总开关）。
+      const toOwner = targetKey === ownerKey && callerKey !== ownerKey
+        && cfg.socialV2?.allowAnySessionToOwner === true;
+      const fromOwner = callerKey === ownerKey && targetKey !== ownerKey
+        && (cfg.socialV2?.allowOwnerToWhitelist ?? true) === true;
+      return toOwner || fromOwner;
+    };
+    function captureCrossSessionSendGuard(key, token) {
+      const caller = agentTokenSessionKey(token);
+      if (!caller || caller === canonicalV2Key(key)) return null;
+      const sourceGuard = captureSendGuard(caller);
+      return () => {
+        sourceGuard();
+        if (agentTokenSessionKey(token) !== caller || !crossSessionAllowed(key, token)) {
+          throw new Error('跨会话发送已取消：来源令牌、模式、开关或白名单已变化');
+        }
+      };
+    }
+    const sendAgentTokenOk = (key, token, count = 1) => {
+      if (agentTokenOk(key, token)) return true;
+      if (!crossSessionAllowed(key, token)) return false;
+      const callerKey = agentTokenSessionKey(token);
+      const targetKey = canonicalV2Key(key);
+      if (!crossSessionRateOk(callerKey, count)) {
+        log(`[cross-session] 限频或存储拒绝：${callerKey} -> ${targetKey}`);
+        return false;
+      }
+      appendActivity(`[跨会话发送] ${callerKey} -> ${targetKey}（授权尝试 ${count} 条）`);
+      log(`[cross-session] 授权 ${callerKey} -> ${targetKey}（${count} 条）`);
+      return true;
     };
     /**
      * 令牌是否匹配**任意**一个活跃二代会话。
@@ -4791,8 +4813,7 @@ async function main() {
           if (merged.agentPreset !== undefined) merged.agentPreset = String(merged.agentPreset ?? '');
           file.socialV2 = merged;
           atomicWriteJson(configFile, file);
-          // 跨会话发送：管理员私聊可发给任意白名单目标；任何会话都可以给管理员发私聊。
-  cfg.socialV2 = { ...(cfg.socialV2 ?? {}), ...merged };
+          cfg.socialV2 = { ...(cfg.socialV2 ?? {}), ...merged };
           // 仅当“会影响默认唤醒配置”的字段变化时，才同步到仍使用默认配置的现有会话。
           // 避免只改发送/等待/工具开关时，意外重置正在等待的潜水/唤醒计划。
           const WAKE_DEFAULT_KEYS = [
@@ -5362,11 +5383,11 @@ async function main() {
             sendJson({ ok: false, error: '已禁用多条发送，请合并为一条消息' }, 403);
             return;
           }
-          if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          if (req.headers['x-agent-token'] && !sendAgentTokenOk(key, req.headers['x-agent-token'], messages.length)) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
           // 跨会话发送：正文首条前注明来源会话（owner 侧能分辨是哪个群发来的）。
           {
             const crossPrefix = crossSessionPrefix(key, req.headers['x-agent-token']);
-            if (crossPrefix && messages.length) messages[0] = crossPrefix + messages[0];
+            if (crossPrefix) for (let i = 0; i < messages.length; i++) messages[i] = crossPrefix + messages[i];
           }
           if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
           if (req.headers['x-agent-token'] && !v2ToolEnabled('sendBurst')) { sendJson({ ok: false, error: '工具未启用：qq_send_burst' }, 403); return; }
@@ -5422,7 +5443,7 @@ async function main() {
             for (let i = 0; i < messages.length; i++) st.sendTimes.push(now);
             if (st.sendTimes.length > 500) st.sendTimes = st.sendTimes.slice(-500);
             const delays = computeGapsV2(messages, 'auto', undefined, undefined, sendCfg);
-            const sentMessages = await sendMessagesV2(key, messages, delays);
+            const sentMessages = await sendMessagesV2(key, messages, delays, null, null, captureCrossSessionSendGuard(key, req.headers['x-agent-token']));
             recordSentMessagesV2(key, sentMessages);
             st.lastAiReplyAt = now;
             st.lastActionAt = now;
@@ -5496,11 +5517,11 @@ async function main() {
             sendJson({ ok: false, error: '已禁用多条发送，请合并为一条消息' }, 403);
             return;
           }
-          if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          if (req.headers['x-agent-token'] && !sendAgentTokenOk(key, req.headers['x-agent-token'], messages.length)) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
           // 跨会话发送：首条消息前注明来源会话。
           {
             const crossPrefix = crossSessionPrefix(key, req.headers['x-agent-token']);
-            if (crossPrefix && messages.length) messages[0] = crossPrefix + messages[0];
+            if (crossPrefix) for (let i = 0; i < messages.length; i++) messages[i] = crossPrefix + messages[i];
           }
           if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
           if (req.headers['x-agent-token'] && !v2ToolEnabled('sendMessage')) { sendJson({ ok: false, error: '工具未启用：qq_send_message' }, 403); return; }
@@ -5576,7 +5597,7 @@ async function main() {
             actualReplyToMessageId = resolved.messageId;
           }
           try {
-            const sentMessages = await sendMessagesV2(key, messages, delays, actualReplyToMessageId, atUserId);
+            const sentMessages = await sendMessagesV2(key, messages, delays, actualReplyToMessageId, atUserId, captureCrossSessionSendGuard(key, req.headers['x-agent-token']));
             recordSentMessagesV2(key, sentMessages);
             st.lastAiReplyAt = now;
             st.lastActionAt = now;
@@ -7270,7 +7291,7 @@ async function main() {
             return;
           }
           if (currentMode === 'reserved2' && !token) { sendJson({ ok: false, error: 'reserved2 模式发送必须携带 agent token' }, 403); return; }
-          if (token && !agentTokenOk(key, token)) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          if (token && !sendAgentTokenOk(key, token)) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
           const flag = isPrivate ? 'sendPrivate' : (isReply ? 'reply' : 'sendGroup');
           if (token && !v2ToolEnabled(flag)) { sendJson({ ok: false, error: `工具未启用：${flag}` }, 403); return; }
           // 跨会话发送：正文前注明来源会话（owner 侧能分辨是哪个群发来的）。
@@ -7328,7 +7349,7 @@ async function main() {
             }
             st.sendTimes.push(now);
             if (st.sendTimes.length > 500) st.sendTimes = st.sendTimes.slice(-500);
-            const sentMessages = await sendMessagesV2(key, [message], [], actualReplyToMessageId, atUserId);
+            const sentMessages = await sendMessagesV2(key, [message], [], actualReplyToMessageId, atUserId, captureCrossSessionSendGuard(key, token));
             recordSentMessagesV2(key, sentMessages);
             st.lastAiReplyAt = now;
             st.lastActionAt = now;
@@ -8340,7 +8361,7 @@ async function main() {
     return delays;
   }
 
-  function sendMessagesV2(key, messages, delays, replyToMessageId, atUserId = null) {
+  function sendMessagesV2(key, messages, delays, replyToMessageId, atUserId = null, sourceGuard = null) {
     let sendChain = sendChainFor(key);
     const assertSendAllowed = captureSendGuard(key, { ai: true });
     const [kind, id] = key.split(':');
@@ -8353,6 +8374,7 @@ async function main() {
       sendChain = sendChain
         .then(async () => {
           assertSendAllowed();
+          sourceGuard?.();
           await onebotSend(kind, id, msg, useReply, useAt);
           sent.push(msg);
         })

@@ -2723,6 +2723,19 @@ function renderSnowlumaHealth(sl) {
   el.style.display = '';
 }
 
+function renderActivity(text) {
+  const el = document.getElementById('activity');
+  el.replaceChildren();
+  const lines = String(text || '（空）').split('\n');
+  lines.forEach((line, i) => {
+    if (i) el.append(document.createTextNode('\n'));
+    const span = document.createElement('span');
+    span.textContent = line;
+    if (/^\[[^\]]+\] \[跨会话发送\]/.test(line)) span.style.color = 'var(--danger, #ef4444)';
+    el.append(span);
+  });
+}
+
 async function refresh() {
   try {
     const s = await api('/api/status');
@@ -2731,7 +2744,7 @@ async function refresh() {
     document.getElementById('roleModeText').textContent = s.roleMode === 'silent' ? '静默' : '正常';
     const modeLabel = s.mode === 'reserved' ? '一代仿真模式' : s.mode === 'reserved2' ? '二代仿真模式' : s.mode === 'closed-agent' ? '封闭 Agent' : '聊天模式';
     updateOverview(s, modeLabel);
-    document.getElementById('activity').textContent = s.activity || '（空）';
+    renderActivity(s.activity);
     const presetSel = document.getElementById('closedPreset');
     if (presetSel && document.activeElement !== presetSel) presetSel.value = s.closedAgentPreset || '';
   } catch (e) { document.getElementById('statusText').textContent = '连接中断 · 请检查桥接服务'; setConnectionError(e); }
