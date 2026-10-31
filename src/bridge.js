@@ -3320,22 +3320,32 @@ async function main() {
       const globalLimit = boundedLimit(cfg.socialV2?.crossSessionSendGlobalPerHour, 100, 10000);
       const now = Date.now();
       crossSendEvents = crossSendEvents.filter(e => e.at > now - 3600000);
-      if (!crossSendStoreWritable || crossSendEvents.length + count > globalLimit
-        || crossSendEvents.filter(e => e.caller === callerKey).length + count > perSource) return false;
+      const unavailable = () => ({ ok: false, status: 503, code: 'CROSS_SESSION_RATE_STORE_UNAVAILABLE',
+        error: '跨会话限频记录不可用，请联系管理员检查后重启桥接' });
+      if (!crossSendStoreWritable) return unavailable();
+      if (crossSendEvents.length + count > globalLimit
+        || crossSendEvents.filter(e => e.caller === callerKey).length + count > perSource) {
+        return { ok: false, status: 429, code: 'CROSS_SESSION_RATE_LIMIT', error: '跨会话发送额度已用完，请稍后再试' };
+      }
       const next = [...crossSendEvents, ...Array.from({ length: count }, () => ({ caller: callerKey, at: now }))];
       try { atomicWriteJson(CROSS_SEND_FILE, next); }
       catch (error) {
         crossSendStoreWritable = false;
         log(`[cross-session] 限频记录写入失败，拒绝跨会话发送：${error?.message ?? error}`);
-        return false;
+        return unavailable();
       }
       crossSendEvents = next;
-      return true;
+      return { ok: true };
     }
-    function crossSessionPrefix(targetKey, token) {
+    // 只识别调用来源，不判断授权；开关和白名单仍由 crossSessionAllowed 校验。
+    function crossSessionCaller(targetKey, token) {
       const caller = agentTokenSessionKey(token);
       const target = canonicalV2Key(targetKey);
-      return caller && caller !== target ? `【来自 ${caller}】\n` : '';
+      return caller && target && caller !== target ? caller : null;
+    }
+    function crossSessionPrefix(targetKey, token) {
+      const caller = crossSessionCaller(targetKey, token);
+      return caller ? `【来自 ${caller}】\n` : '';
     }
     const crossSessionAllowed = (key, token) => {
       if (cfg.socialV2?.allowCrossSessionSend !== true || currentMode !== 'reserved2'
@@ -3364,19 +3374,22 @@ async function main() {
         }
       };
     }
-    const sendAgentTokenOk = (key, token, count = 1) => {
-      if (agentTokenOk(key, token)) return true;
-      if (!crossSessionAllowed(key, token)) return false;
-      const callerKey = agentTokenSessionKey(token);
+    // 授权校验不扣额度；所有本地校验通过后、首次出站前才预占。
+    const sendAgentTokenOk = (key, token) => agentTokenOk(key, token) || crossSessionAllowed(key, token);
+    function reserveCrossSessionSend(key, token, count = 1) {
+      const callerKey = crossSessionCaller(key, token);
+      if (!callerKey) return { ok: true };
+      if (!crossSessionAllowed(key, token)) return { ok: false, status: 403, error: '跨会话发送权限已变化' };
       const targetKey = canonicalV2Key(key);
-      if (!crossSessionRateOk(callerKey, count)) {
-        log(`[cross-session] 限频或存储拒绝：${callerKey} -> ${targetKey}`);
-        return false;
+      const result = crossSessionRateOk(callerKey, count);
+      if (!result.ok) {
+        log(`[cross-session] ${result.code}：${callerKey} -> ${targetKey}`);
+        return result;
       }
       appendActivity(`[跨会话发送] ${callerKey} -> ${targetKey}（授权尝试 ${count} 条）`);
       log(`[cross-session] 授权 ${callerKey} -> ${targetKey}（${count} 条）`);
-      return true;
-    };
+      return result;
+    }
     /**
      * 令牌是否匹配**任意**一个活跃二代会话。
      *
@@ -5383,8 +5396,8 @@ async function main() {
             sendJson({ ok: false, error: '已禁用多条发送，请合并为一条消息' }, 403);
             return;
           }
-          if (req.headers['x-agent-token'] && !sendAgentTokenOk(key, req.headers['x-agent-token'], messages.length)) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
-          // 跨会话发送：正文首条前注明来源会话（owner 侧能分辨是哪个群发来的）。
+          if (req.headers['x-agent-token'] && !sendAgentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          // 跨会话发送：每条正文前注明来源会话。
           {
             const crossPrefix = crossSessionPrefix(key, req.headers['x-agent-token']);
             if (crossPrefix) for (let i = 0; i < messages.length; i++) messages[i] = crossPrefix + messages[i];
@@ -5437,6 +5450,12 @@ async function main() {
             const recentHour = (st.sendTimes || []).filter((t) => now - t < 3600000).length;
             if ((maxPerMinute > 0 && recentMinute + messages.length > maxPerMinute) || (maxPerHour > 0 && recentHour + messages.length > maxPerHour)) {
               sendJson({ ok: false, error: '发送频率超限，请稍后再试' }, 429);
+              return;
+            }
+            const crossQuota = reserveCrossSessionSend(key, req.headers['x-agent-token'], messages.length);
+            if (!crossQuota.ok) {
+              const { status, ...failure } = crossQuota;
+              sendJson(failure, status);
               return;
             }
             // 先预占发送额度，避免并发绕过限频
@@ -5518,13 +5537,13 @@ async function main() {
             return;
           }
           // 引用解析会返回目标原文；跨会话只授予发送，不能借引用读取目标聊天。
-          if (crossSessionPrefix(key, req.headers['x-agent-token']) && replyToMessageId !== undefined
+          if (crossSessionCaller(key, req.headers['x-agent-token']) && replyToMessageId !== undefined
             && replyToMessageId !== null && String(replyToMessageId).trim() !== '') {
             sendJson({ ok: false, error: '跨会话发送不支持引用目标会话消息，请使用普通文本发送' }, 403);
             return;
           }
-          if (req.headers['x-agent-token'] && !sendAgentTokenOk(key, req.headers['x-agent-token'], messages.length)) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
-          // 跨会话发送：首条消息前注明来源会话。
+          if (req.headers['x-agent-token'] && !sendAgentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          // 跨会话发送：每条正文前注明来源会话。
           {
             const crossPrefix = crossSessionPrefix(key, req.headers['x-agent-token']);
             if (crossPrefix) for (let i = 0; i < messages.length; i++) messages[i] = crossPrefix + messages[i];
@@ -5580,6 +5599,12 @@ async function main() {
           const recentHour = (st.sendTimes || []).filter((t) => now - t < 3600000).length;
           if ((maxPerMinute > 0 && recentMinute + messages.length > maxPerMinute) || (maxPerHour > 0 && recentHour + messages.length > maxPerHour)) {
             sendJson({ ok: false, error: '发送频率超限，请稍后再试' }, 429);
+            return;
+          }
+          const crossQuota = reserveCrossSessionSend(key, req.headers['x-agent-token'], messages.length);
+          if (!crossQuota.ok) {
+            const { status, ...failure } = crossQuota;
+            sendJson(failure, status);
             return;
           }
           // 先预占发送额度，避免并发绕过限频
@@ -7298,7 +7323,7 @@ async function main() {
           }
           if (currentMode === 'reserved2' && !token) { sendJson({ ok: false, error: 'reserved2 模式发送必须携带 agent token' }, 403); return; }
           // 引用解析会返回目标原文；跨会话只授予发送，不能借引用读取目标聊天。
-          if (crossSessionPrefix(key, token) && replyToMessageId !== undefined
+          if (crossSessionCaller(key, token) && replyToMessageId !== undefined
             && replyToMessageId !== null && String(replyToMessageId).trim() !== '') {
             sendJson({ ok: false, error: '跨会话发送不支持引用目标会话消息，请使用普通文本发送' }, 403);
             return;
@@ -7357,6 +7382,12 @@ async function main() {
             const recentHour = (st.sendTimes || []).filter((t) => now - t < 3600000).length;
             if ((maxPerMinute > 0 && recentMinute + 1 > maxPerMinute) || (maxPerHour > 0 && recentHour + 1 > maxPerHour)) {
               sendJson({ ok: false, error: '发送频率超限，请稍后再试' }, 429);
+              return;
+            }
+            const crossQuota = reserveCrossSessionSend(key, token, 1);
+            if (!crossQuota.ok) {
+              const { status, ...failure } = crossQuota;
+              sendJson(failure, status);
               return;
             }
             st.sendTimes.push(now);

@@ -72,7 +72,7 @@ test('显式打开两个开关后：群里可以发给管理员，且正文注�
 });
 
 test('「任何会话 → owner」的独立开关可以单独关掉', async () => {
-  await withHarness({ allowCrossSessionSend: true, allowAnySessionToOwner: true, allowAnySessionToOwner: false }, async ({ h, call, group }) => {
+  await withHarness({ allowCrossSessionSend: true, allowAnySessionToOwner: false }, async ({ h, call, group }) => {
     const r = await sendPrivate(call, group, '123', '跨会话测试');
     assert.equal(r.ok, false, JSON.stringify(r));
     assert.equal(h.calls.http.length, 0);
@@ -94,7 +94,9 @@ test('按来源会话限频：超过 crossSessionSendPerHour 后拒绝', async (
     assert.equal((await sendPrivate(call, group, '123', '第二次')).ok, true);
     const third = await sendPrivate(call, group, '123', '第三次');
     assert.equal(third.ok, false, JSON.stringify(third));
-    assert.equal(third.status, 403);
+    assert.equal(third.status, 429);
+    assert.equal(third.code, 'CROSS_SESSION_RATE_LIMIT');
+    assert.match(third.error, /额度已用完/);
   });
 });
 
@@ -137,7 +139,7 @@ test('撤销来源白名单后，旧群令牌不能继续跨会话发送', async
 test('限频全局上限：换来源令牌不能绕过', async () => {
   await withHarness({ allowCrossSessionSend: true, allowAnySessionToOwner: true, crossSessionSendGlobalPerHour: 1 }, async ({ call, group, owner }) => {
     assert.equal((await sendPrivate(call, group, '123', '第一个来源')).ok, true);
-    assert.equal((await sendPrivate(call, owner, '789', '第二个来源')).status, 403);
+    assert.equal((await sendPrivate(call, owner, '789', '第二个来源')).status, 429);
   });
 });
 
@@ -167,11 +169,11 @@ test('发送端点都保留来源：group、send-message、send-burst 的每条�
 
 test('批量发送按条扣额，同会话发送不消耗跨会话配额', async () => {
   await withHarness({ allowCrossSessionSend: true, allowAnySessionToOwner: true, crossSessionSendPerHour: 1 }, async ({ h, call, group, owner }) => {
-    assert.equal((await call('/api/socialV2/send-message', group, { key: 'private:123', messages: ['一', '二'] })).status, 403);
+    assert.equal((await call('/api/socialV2/send-message', group, { key: 'private:123', messages: ['一', '二'] })).status, 429);
     assert.equal(h.calls.http.length, 0);
     assert.equal((await sendPrivate(call, owner, '123', '同会话')).ok, true);
     assert.equal((await sendPrivate(call, group, '123', '第一条跨会话')).ok, true);
-    assert.equal((await sendPrivate(call, group, '123', '第二条跨会话')).status, 403);
+    assert.equal((await sendPrivate(call, group, '123', '第二条跨会话')).status, 429);
   });
 });
 
@@ -183,7 +185,7 @@ test('重启保留限频记录；一小时前的记录过期', async () => {
     saved = fs.readFileSync(path.join(h.temp, 'state/cross-session-send-times.json'), 'utf8');
   });
   await withHarness(opts, async ({ call, group }) => {
-    assert.equal((await sendPrivate(call, group, '123', '重启后')).status, 403);
+    assert.equal((await sendPrivate(call, group, '123', '重启后')).status, 429);
   }, { 'state/cross-session-send-times.json': saved });
   await withHarness(opts, async ({ call, group }) => {
     assert.equal((await sendPrivate(call, group, '123', '窗口已过期')).ok, true);
@@ -193,17 +195,17 @@ test('重启保留限频记录；一小时前的记录过期', async () => {
 test('限频记录损坏/不可写时拒绝，0 配额禁用跨会话', async () => {
   const opts = { allowCrossSessionSend: true, allowAnySessionToOwner: true };
   await withHarness(opts, async ({ h, call, group }) => {
-    assert.equal((await sendPrivate(call, group, '123', '损坏记录')).status, 403);
+    assert.equal((await sendPrivate(call, group, '123', '损坏记录')).status, 503);
     assert.equal(h.calls.http.length, 0);
   }, { 'state/cross-session-send-times.json': '{bad json' });
   await withHarness(opts, async ({ h, call, group }) => {
     fs.mkdirSync(path.join(h.temp, 'state/cross-session-send-times.json'));
-    assert.equal((await sendPrivate(call, group, '123', '无法落盘')).status, 403);
+    assert.equal((await sendPrivate(call, group, '123', '无法落盘')).status, 503);
     assert.equal(h.calls.http.length, 0);
   });
   for (const key of ['crossSessionSendPerHour', 'crossSessionSendGlobalPerHour']) {
     await withHarness({ ...opts, [key]: 0 }, async ({ call, group }) => {
-      assert.equal((await sendPrivate(call, group, '123', '零配额')).status, 403);
+      assert.equal((await sendPrivate(call, group, '123', '零配额')).status, 429);
     });
   }
 });
@@ -248,4 +250,52 @@ test('跨会话不能借引用解析获取目标聊天原文', async () => {
     }
     assert.equal(h.calls.http.length, 0);
   });
+});
+
+
+test('所有文本入口：工具关闭、目标静默、超长正文和目标限频不消耗跨会话额度', async () => {
+  const routes = [
+    ['/api/send/group', 'sendGroup', owner => ({ groupId: '456', token: owner, message: '测试' })],
+    ['/api/socialV2/send-message', 'sendMessage', () => ({ key: 'group:456', messages: ['测试'] })],
+    ['/api/socialV2/send-burst', 'sendBurst', () => ({ key: 'group:456', messages: ['测试'] })]
+  ];
+  for (const [route, flag, bodyFor] of routes) for (const reason of ['tool', 'silent', 'length', 'target-rate']) {
+    await withHarness({ allowCrossSessionSend: true, crossSessionSendPerHour: 1 }, async ({ h, call, owner }) => {
+      const file = path.join(h.temp, 'state/cross-session-send-times.json');
+      const body = bodyFor(owner);
+      if (reason === 'tool') h.cfg.socialV2.tools = { [flag]: false };
+      if (reason === 'silent') fs.writeFileSync(path.join(h.temp, 'state/current-role.json'), JSON.stringify({ mode: 'silent' }));
+      if (reason === 'length') {
+        if (body.message) body.message = '长'.repeat(501); else body.messages = ['长'.repeat(501)];
+      }
+      if (reason === 'target-rate') {
+        h.cfg.socialV2.send = { maxSendPerHour: 1 };
+        h.getSocialV2State('group:456').sendTimes = [Date.now()];
+      }
+      const rejected = await call(route, owner, body);
+      assert.equal(rejected.ok, false, route + ':' + reason);
+      assert.equal(h.calls.http.length, 0);
+      assert.equal(fs.existsSync(file), false, route + ':' + reason + ' 不应占用额度');
+      h.cfg.socialV2.tools = { [flag]: true };
+      fs.writeFileSync(path.join(h.temp, 'state/current-role.json'), JSON.stringify({ mode: 'active' }));
+      h.getSocialV2State('group:456').sendTimes = [];
+      const accepted = await call(route, owner, bodyFor(owner));
+      assert.equal(accepted.ok, true, JSON.stringify(accepted));
+      assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).length, 1);
+      h.getSocialV2State('group:456').sendTimes = [];
+      const exhausted = await call(route, owner, bodyFor(owner));
+      assert.equal(exhausted.status, 429, JSON.stringify(exhausted));
+      assert.equal(exhausted.code, 'CROSS_SESSION_RATE_LIMIT');
+    });
+  }
+});
+
+test('限频记录不可用与令牌权限拒绝使用不同错误码', async () => {
+  await withHarness({ allowCrossSessionSend: true, allowAnySessionToOwner: true }, async ({ h, call, group }) => {
+    const r = await sendPrivate(call, group, '123', '记录不可用');
+    assert.equal(r.status, 503);
+    assert.equal(r.code, 'CROSS_SESSION_RATE_STORE_UNAVAILABLE');
+    assert.doesNotMatch(r.error, /token/);
+    assert.equal(h.calls.http.length, 0);
+  }, { 'state/cross-session-send-times.json': '{bad json' });
 });
