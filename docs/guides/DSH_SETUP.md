@@ -2,6 +2,24 @@
 
 `qq-bridge` 仓库本身包含桥接、控制台和插件，但 **DSH 端的两个聊天模式（`qq-chat` / `qq-chat-v2`）以及 MCP 挂载** 不在仓库根目录，需要通过本说明安装到目标设备的 DSH 环境中。
 
+## 兼容范围
+
+桌面版端口自动发现默认开启。多实例或固定端点部署可将 `config.json` 的
+`dsh.autoDiscoverPort` 设为 `false`，此时桥接只使用配置的地址，不扫描或重绑其他实例。
+
+协议代际与预设 schema 必须分别匹配，不能只凭斜杠 RPC 判断可用性（[#9](https://github.com/Derpyu520/qq-bridge/issues/9)）。
+
+| DSH 版本 | 处理方式 |
+| --- | --- |
+| 0.1.1-rc.2 及更早 | 历史标签 `v0.1.0`；当前分支不支持旧点号协议 |
+| 0.1.2-alpha.1 | 历史标签 `v0.1.2-alpha.1` 使用 `persona.text`；当前分支不兼容该 schema |
+| 0.1.2 的其他版本～0.1.4 | 当前预设不支持；没有逐版本验证的标签映射，建议升级到已验证版本 |
+| 0.1.5-rc.1 / 0.1.7-rc.2 | 分别使用历史标签 `v0.1.5` / `v0.1.7` |
+| 0.2.0-rc.2 / 0.2.1-rc.2 | 当前版本已有适配与验证记录 |
+
+历史标签不包含后续安全修复。DSH 0.2.1-rc.3 的个别环境反馈仍需对应安装形态复现，
+不能把某个环境成功或失败的结果推广到全部安装。
+
 ## 安装步骤
 
 在目标设备上：
@@ -111,6 +129,9 @@
 - **改了模式却不生效 / 5 秒后被改回去**：**此问题已在 `src/bridge.js` 修复**（桥接需重启后生效）。历史成因：`refreshMode()` 每 5 秒被 `checkDsh` 调用一次，先读 DSH 的 `qq-mode` 命名空间，只要有合法值就**直接 return，完全忽略本地 `state/mode.json`**；而命名空间的默认值始终存在，所以 DSH 侧永远有值 —— 于是控制台写本地文件会在下一次轮询被覆盖回滚。现在 `POST /api/mode` 会**写穿到 DSH 设置**（`api.settings.update({ ns: 'qq-mode', patch: { mode } })`），响应里新增 `dshSynced` 字段；若写穿失败（DSH 未运行等）会记日志并保留本地值。注意 `settings/update` 在 0.2.0 是**多参数** RPC：args 是 `{ ns, patch, expectedRevision }` 平铺，**不是** `{ request: {...} }`（传 request 会被网关拒为 `gateway/arguments-invalid`）。同源问题：`closedAgentPreset` 在 DSH schema 里不存在，原先也因这个提前 return 而失效，现已改为始终以本地 `state/mode.json` 为准。若仍看到回滚，检查桥接日志里是否有「写穿 DSH 设置失败」。
 - **MCP 工具没有出现**：确认 `cordis.patch.yml` 中三个 MCP 条目的路径指向当前仓库，并重启 DSH。
 - **preset 没有出现**：DSH 0.1.7 起 preset **不再**是 `~/.dsh/.agent-presets/<名>/` 目录（该目录完全不被读取）。preset 现在是 profile 里的一条 `@deepseek-ai/dsh-agent-preset` 行，由 `plugins/qq-agent-presets` 这个 bundle 提供。检查 profile 的 `package.json` 的 `dsh.profile.bundles` 是否含 `qq-agent-presets`、`dependencies` 是否有对应的 `link:`，以及 `~/.dsh/profiles/web/node_modules/qq-agent-presets` 链接是否存在；缺了就重跑 `node scripts/setup-dsh.mjs` 再重启 DSH。桥接里可用 `npm run probe:protocol` / `npm run verify:adaptation` 确认 `agentPresets/list` 里能看到 `qq-chat`、`qq-chat-v2`。
+- **安装完成但 RPC 看不到预设或设置**：先对照安装脚本与运行中的 DSH/桥接是否使用相同用户、`DSH_HOME` 和 profile。终端里的 `--dump-config` 只证明该终端所用配置已合成，不证明后台进程使用同一份配置。[#77 的最终讨论](https://github.com/Derpyu520/qq-bridge/issues/77)已将该次故障定位为运行用户不一致。若同一进程的插件注册表能看到预设，而 RPC 仍看不到，需保留安装形态和最小诊断继续定位 DSH 作用域问题（[#97](https://github.com/Derpyu520/qq-bridge/issues/97)）；不能回退到完整工具预设绕过检查。
+- **`Cannot find package 'js-yaml'` 等依赖缺失**：Release 源码包不包含 `node_modules`。在解压后的仓库根目录运行 `npm install`，确认成功后再启动；不要跳过 `postinstall`。`package.json` 和锁文件已声明 `js-yaml`（[#91](https://github.com/Derpyu520/qq-bridge/issues/91)）。
+- **网页、搜索或图片因 fake-ip 被拦截**：Clash/mihomo 的 fake-ip 可能把域名映射到 `198.18.0.0/15`，该段仍属于禁止访问的保留地址。可按 [mihomo DNS 官方文档](https://wiki.metacubex.one/config/dns/)切换 `enhanced-mode: redir-host`，或在 `fake-ip-filter-mode: blacklist` 时让受影响的公网域名命中 `fake-ip-filter`，使其返回真实地址；修改后清理代理及系统 DNS 缓存再试。桥接仍会校验真实解析结果，不提供跳过私有地址检查的开关（[#40](https://github.com/Derpyu520/qq-bridge/issues/40)、[#111](https://github.com/Derpyu520/qq-bridge/issues/111)）。
 - **启动 DSH 报 `failed to parse overlay cordis.patch.yml: YAMLException`**：多为历史版脚本残留的空数组 `[]` 引发。重新运行最新版脚本（会自动剥离）即可，或手动删除该文件里独立成行的 `[]` 后重启 DSH。
 - **启动 DSH 报 `cannot resolve profile bundle "qq-mode-console"`**：profile 的 bundle 依赖尚未安装。运行 `dsh plugin --profile web install`（`web` 换成你的实际 profile 名）后重启 DSH；新版脚本会尝试自动执行这一步。
 - **启动 DSH 报 `failed to apply loader entry persona (@deepseek-ai/dsh-persona): invalid config: $.prefix missing required value`**：preset 的 persona 段缺少 `prefix`。DSH 0.1.5 起 `dsh-persona` 只接受 `prefix` / `suffix` / `complete` / `includeRuntimeContext`，而旧写法用的是 `text` —— schemastery 的 `z.object` 非 strict，未知键会被**静默忽略**，于是真正报出来的是「缺 `prefix`」（**不是**「`text` 这个键被拒绝」）。重新运行 `node scripts/setup-dsh.mjs`（本仓库 preset 已改为 `prefix`），或手动把 preset 里的 `text:` 改成 `prefix:`。可用 `node scripts/verify-persona-config.mjs` 提前自检。

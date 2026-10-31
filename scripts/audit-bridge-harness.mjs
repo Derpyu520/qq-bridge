@@ -24,6 +24,7 @@ import * as voiceLib from '../src/send-voice-lib.js';
 import * as presetPrompt from '../src/preset-prompt.js';
 import * as roleCard from '../src/role-card.js';
 import * as stateAcl from '../src/state-acl.mjs';
+import { persistSnowLumaEndpoint, persistToken } from '../src/snowluma-conn.js';
 import { unwrap, createTurnCollector } from '../src/dsh-client.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -151,6 +152,7 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
   const getStickerEntries = () => stickerEntries;
   return {
     syncInstalledPreset, installedPresetYaml, ensureSession, ensureSlangLearnerSession, runSlangResearch, resolvePresetName, deliverPrompt, drainPromptQueue,
+    applyHealedTokens, reportTurnFailure, recordVoiceSentV2, rediscoverDshBase,
     getSlangEntries: () => slangEntries,
     completeLearnerTurn(sessionId, output) {
       const waiters = learnerWaiters.get(sessionId) ?? [];
@@ -206,7 +208,7 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     // DSH 端点自愈（#63）只在探活失败时调用；夹具里给一个桩，避免测试真的去扫本机端口。
     // 需要验证自愈逻辑的用例可以用 globals 覆盖它。
     discoverDshBaseUrl: async () => null,
-    resolveInstalledPreset, synchronizePreset, renderPatch,
+    resolveInstalledPreset, synchronizePreset, renderPatch, persistSnowLumaEndpoint, persistToken,
     ...markdown, ...sensitive, ...wait, ...safeFetch, ...forward, ...slang, ...sticker,
     ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...presetPrompt, ...roleCard,
     // 桥接的出图出口会调归一化（体积/动图抽帧）：VM 里必须能拿到这几个函数。

@@ -155,6 +155,11 @@ export async function resolveSafeAddresses(hostname) {
   if (!addresses.length) throw new Error('域名没有解析结果');
   for (const { address } of addresses) {
     if (isPrivateIp(address)) {
+      if (/^198\.(?:18|19)\./.test(address)) {
+        throw new Error('域名解析到 198.18.0.0/15 保留地址，已阻止；这可能是 Clash/mihomo 的 fake-ip。'
+          + '请使用返回真实公网 IP 的 DNS（如 redir-host），或按代理的 fake-ip-filter 规则让该域名返回真实地址。'
+          + '私有/保留地址不会被放行');
+      }
       throw new Error('域名解析到内网/本机地址，已阻止');
     }
   }

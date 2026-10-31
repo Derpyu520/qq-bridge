@@ -42,6 +42,7 @@
 | 预设 fail-closed | `resolvePresetName()` + `ensureSession()` | 群聊/仿真会话拿不到受限预设时**拒绝建会话**，绝不回退到含本地工具的 DSH 默认预设；只有 `closed-agent`（管理员私聊）允许回退 |
 | 发送强制白名单 | 所有 `/api/send/*`、`/api/socialV2/send-*` | 目标必须命中 `allow.groups` / `allow.private`（每次都重新校验，不做缓存） |
 | 动态 ACL | `resolveVoicePathForV2()` / `voicePathInsideLibrary()` | 语音只能取语音库目录内的文件；贴纸只能发收藏库内的表情；图片只能读 SnowLuma home 内的本地文件（realpath 复核防符号链接逃逸） |
+| 工具参数 | MCP 注册与执行期会话守卫 | 未知键严格拒绝；支持的别名须显式声明、无冲突并归一化，目标别名同样接受可信会话绑定检查 |
 | **只探测、不部署**（L6 设计不变量） | `mcp-host-server.js` | 该 MCP server **只提供 `snowluma_status`（只读探活 `get_login_info`）**。⚠️ **v0.1.5 起删除了 `start_snowluma` / `stop_snowluma` 与 `snowluma.allowProcessControl`**：SnowLuma EULA §5.4 规定「将其并入第三方安装包或 Docker 镜像、**通过自动化脚本部署**」须事先书面授权，原生组件属**专有组件**。⇒ 本程序不安装、不复制、不打包、不程序化启停 SnowLuma；用户自行安装与启动。详见 `NOTICE.md` 与 `QSH-plan/QSH_PLAN.md` §6.0 |
 
 ### 3. 出站内容（模型能说什么、能发什么）
@@ -53,6 +54,7 @@
 | CQ 注入 | `onebotSend()` | 出站文本一律包成 `{type:'text'}` 段并做 `[CQ:` → `[CQ：` 转义，杜绝 CQ 码注入 |
 | @ 限制 | `onebotSend()` | `atUserId` 只接受正整数，禁止 `@all` |
 | 发送限流 | `socialV2.send.*` / `voice.*` / `sticker.collect.*` | 每分钟/每小时硬上限，超限拒绝并退避 |
+| 回合错误通知 | `reportTurnFailure()` | 二代错误只保留本地诊断；其他模式只发通用提示并节流，不把上游异常正文直接送到 QQ |
 | 排队期间撤权 | `captureSendGuard()` | AI 文本、语音、表情和拍一拍在异步准备前捕获权限，并在实际发送前重查会话、模式、白名单、暂停与静默状态 |
 
 黑话按「内容 + 会话 scope」分别保存；查询、提示词、提交和研究回写都按归属过滤。
@@ -81,7 +83,8 @@
 | --- | --- | --- |
 | 原子写 | `atomicWriteJson/Text()` | 唯一随机临时名 + rename（Windows EPERM 退避重试），不会写坏配置 |
 | Windows ACL 收紧 | `hardenStateDirAcl()` + `scripts/harden-state-acl.mjs` | Windows 上 `mode: 0o600` 是**空操作**，因此启动时切断 `state/` 的继承链，只保留当前用户/SYSTEM/Administrators。改 ACL 需要 WRITE_DAC —— **目录属主通常本来就有，所以一般不弹 UAC**；失败时用 `Start-Process -Verb RunAs` 提权重试一次（`--elevated` 短路自身，杜绝递归），再失败就打印可复制命令并**以 0 退出、绝不阻断启动**。控制台「访问与安全」页显示告警条与「重新检测」按钮 |
-| 令牌不回显 | 日志/活动/工具日志 | 控制台令牌只打前 6 位；活动日志与工具调用参数过 `redactSensitiveText` / `redactSensitive`（递归处理 JSON 字符串叶子） |
+| ACL 防自锁 | `src/state-acl.mjs` | 先为现有条目显式授权，再断继承，最后移除宽松主体；命令失败即停止，每步回读验证，空 DACL 不作为成功 |
+| 令牌不回显 | 日志/活动/工具日志 | 控制台及连接自愈日志只记已配置/已生成，不打印令牌前后缀；活动日志与工具调用参数过 `redactSensitiveText` / `redactSensitive`（递归处理 JSON 字符串叶子） |
 | 令牌只发回环 | `dsh-client.ensureAuth()` | DSH launch token 换 Cookie 时必须放进 URL，因此**默认拒绝非回环 baseUrl**；远程部署需显式 `dsh.allowRemote: true` |
 | 自动探测与重定向 | `dsh-endpoint.js` / `dsh-client.js` | 自动发现只为回环地址铸造本机 Cookie；拒绝 URL 内嵌凭据；探测不跟随重定向并关闭响应体，RPC 拒绝重定向，避免转交聊天主体 |
 | 路径校验（读点） | `roleRawContent()` 等 | 人格名在**读取点**也做 `sanitizeRoleName` + `path.resolve` 包含性校验（`state/current-role.json` 是用户可直接编辑的文件） |
