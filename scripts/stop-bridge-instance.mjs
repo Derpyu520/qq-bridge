@@ -46,11 +46,11 @@ export function isBridgeProcess(proc, root = DEFAULT_ROOT) {
   const name = String(proc.name ?? '').toLowerCase();
   if (name !== 'node.exe' && name !== 'node') return false;
   const script = nodeScript(proc.commandLine);
-  if (!/(^|[\\/])bridge\.js$/i.test(script)) return false;
-  return samePath(path.resolve(root, script), path.join(root, 'src', 'bridge.js'));
+  if (!/(^|[\\/])bridge\.js$/i.test(script) || !path.isAbsolute(script)) return false;
+  return samePath(script, path.join(root, 'src', 'bridge.js'));
 }
 
-/** 守护窗口：cmd.exe 跑着 start.bat；传入 root 时还必须是本项目的启动器。 */
+/** 守护窗口：cmd.exe 跑着 start.bat；传入 root 时还必须是本项目的绝对路径启动器。 */
 export function isGuardProcess(proc, root) {
   if (!proc) return false;
   const name = String(proc.name ?? '').toLowerCase();
@@ -58,8 +58,8 @@ export function isGuardProcess(proc, root) {
   const cmd = String(proc.commandLine ?? '');
   if (/restart\.bat/i.test(cmd)) return false;
   const script = commandTokens(cmd).find((token) => /(^|[\\/])start\.bat$/i.test(token));
-  if (!script) return false;
-  return !root || samePath(path.resolve(root, script), path.join(root, 'start.bat'));
+  if (!script || (root && !path.isAbsolute(script))) return false;
+  return !root || samePath(script, path.join(root, 'start.bat'));
 }
 
 /**

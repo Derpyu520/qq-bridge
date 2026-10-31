@@ -9,5 +9,5 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
-start "" cmd /c start.bat
+start "" cmd /c "%~dp0start.bat"
 echo Guard window started.
