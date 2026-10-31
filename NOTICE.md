@@ -38,6 +38,9 @@
 `v0.2.1-r1` 及更早版本以 MIT 许可发布，该等版本仍适用其发布时的许可。本许可仅适用于
 `v0.2.1-r1` 之后的版本。许可变更前已取得副本或已完成 fork 的，不受本许可约束。
 
+仓库内随附的子包（`plugins/qq-agent-presets`、`plugins/qq-mode-console`）与根目录适用同一
+许可；它们的 `package.json` `license` 字段与根清单保持一致，不构成单独的 MIT 例外。
+
 ### 1.4 托管平台的许可标识
 
 GitHub 的许可识别清单不包含 PolyForm 系列（2026-10-30 核验：`GET /licenses` 共返回 13 项，
@@ -89,7 +92,8 @@ repository**」，而 `packages/sdk`、`packages/mcp` 位于该仓库之内，�
      （另有 3 个 `scripts/` 诊断脚本引用）。OneBot v11 为公开协议规范，可自行实现最小客户端；
      移除依赖与替换客户端须同批完成，否则 `postinstall` 修补将失去作用对象。
    - `@snowluma/mcp` 在本软件运行时不使用（`src/` 内无引用，仅 `scripts/test-mcp-exec.mjs` 引用），
-     计划改为自建能力矩阵。其 `catalog.js` 快照属再分发其内容，不得提交至本仓库。
+     计划改为自建能力矩阵。其 `catalog.js` 快照属再分发其内容，不得提交至本仓库；
+     仓库根目录曾跟踪的 `_snowluma-catalog.json` 已删除并加入 `.gitignore`。
 4. 如需消除上述不确定性，应向 SnowLumaDevs 书面确认 `packages/sdk` 与 `packages/mcp` 所适用的许可。
 
 ---
