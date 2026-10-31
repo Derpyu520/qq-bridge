@@ -48,8 +48,11 @@ import fs from 'node:fs';
   assert.equal(nonAscii, 0, 'start.bat 必须保持纯 ASCII（否则非 UTF-8 控制台会乱码）');
   assert.equal(batText.match(/(?<!\r)\n/g)?.length ?? 0, 0, 'start.bat 必须使用 CRLF');
   assert.ok(batText.includes('harden-state-acl.mjs'), 'start.bat 必须在启动桥接前调用 ACL 助手');
-  // 助手必须排在 node src/bridge.js 之前，否则"启动时收紧"就不成立
-  assert.ok(batText.indexOf('harden-state-acl.mjs') < batText.indexOf('node src/bridge.js'), 'ACL 助手必须先于桥接启动');
+  // 桥接与守护窗口都用绝对路径，重启脚本才能证明它们属于当前仓库。
+  assert.ok(batText.includes('node "%~dp0src\\bridge.js"'), 'start.bat 必须用绝对路径启动 bridge');
+  assert.ok(batText.indexOf('harden-state-acl.mjs') < batText.indexOf('node "%~dp0src\\bridge.js"'), 'ACL 助手必须先于桥接启动');
+  const restartText = fs.readFileSync(path.join(root, 'restart.bat'), 'latin1');
+  assert.ok(restartText.includes('start "" cmd /c "%~dp0start.bat"'), 'restart.bat 必须用绝对路径启动守护窗口');
   console.log('state ACL hardening: helper is non-blocking, recursion-guarded, and wired into start.bat');
 }
 
@@ -85,6 +88,12 @@ import fs from 'node:fs';
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
   assert.equal(pkg.license, 'PolyForm-Noncommercial-1.0.0',
     'package.json 的 license 必须是本仓库实际使用的许可（PolyForm Noncommercial 1.0.0，见 NOTICE.md）');
+  // 随仓库分发的子包也不能各自声明 MIT（曾与根清单冲突，见 NOTICE.md §1.3）。
+  for (const rel of ['plugins/qq-agent-presets/package.json', 'plugins/qq-mode-console/package.json']) {
+    const sub = JSON.parse(fs.readFileSync(path.join(root, rel), 'utf8'));
+    assert.equal(sub.license, 'PolyForm-Noncommercial-1.0.0',
+      `${rel} 的 license 必须与根清单一致（PolyForm Noncommercial 1.0.0）`);
+  }
   console.log('L6 compliance: no SnowLuma process control, no allowProcessControl, license declared');
 }
 
