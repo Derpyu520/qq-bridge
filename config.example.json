@@ -301,6 +301,7 @@
     "qwenApiKey": "",
     "qwenModel": "qwen3-tts-flash",
     "qwenVoice": "Cherry",
-    "qwenInstructions": ""
+    "qwenInstructions": "",
+    "qwenSpeed": 1
   }
 }

@@ -121,6 +121,9 @@ export function createTts({ readCfg, cacheDir, log = () => {} }) {
       qwenModel: String(t.qwenModel || 'qwen3-tts-flash'),
       qwenVoice: String(t.qwenVoice || 'Cherry'),
       qwenInstructions: String(t.qwenInstructions || ''),
+      // 语速倍率（1.0 = 原速，0.88 = 慢 12%）。用 ffmpeg atempo 实现：只改节奏，不改音高。
+      // 接口本身没有 speed 参数，靠 instructions 写「语速放慢」实测不稳定，所以放在本地做确定性变速。
+      qwenSpeed: Number.isFinite(Number(t.qwenSpeed)) && Number(t.qwenSpeed) > 0 ? Number(t.qwenSpeed) : 1,
       // qwen 失败时是否自动回退到 edge（有配 edgeCli 才生效）
       edgeFallback: t.edgeFallback !== false,
       edgeCli: String(t.edgeCli || process.env.EDGE_TTS_PATH || 'edge-tts'),
@@ -195,7 +198,7 @@ export function createTts({ readCfg, cacheDir, log = () => {} }) {
     const backendTag = c.provider === 'edge'
       ? ['edge', c.edgeVoice, c.edgeRate, c.edgePitch, c.edgeVolume]
       : (c.provider === 'qwen'
-        ? ['qwen', c.qwenModel, c.qwenVoice, c.qwenInstructions]
+        ? ['qwen', c.qwenModel, c.qwenVoice, c.qwenInstructions, c.qwenSpeed]
         : ['breeze', c.baseUrl]);
     const digest = sha1(JSON.stringify([FORMAT_VERSION, ...backendTag, clean, instruction ?? c.instruction, cfgScale ?? c.cfgScale, seed ?? c.seed, useRef ?? '', useRefText]));
     fs.mkdirSync(cacheDir, { recursive: true });
@@ -314,11 +317,16 @@ export function createTts({ readCfg, cacheDir, log = () => {} }) {
       }
 
       const ffmpegQwen = c.ffmpegPath || 'ffmpeg';
+      // 变速必须在整形链之前：先拉长时长，再裁静音/补引子/归一响度，
+      // 否则引子会被一起拉长、响度包络也会不均匀。
+      const qwenFilter = c.qwenSpeed !== 1
+        ? `atempo=${c.qwenSpeed.toFixed(4)},${EDGE_AUDIO_FILTER}`
+        : EDGE_AUDIO_FILTER;
       try {
         await runFfmpeg(ffmpegQwen, [
           '-y', '-loglevel', 'error',
           '-i', tmpWav,
-          '-af', EDGE_AUDIO_FILTER,
+          '-af', qwenFilter,
           '-ac', '1', '-ar', '24000', '-c:a', 'pcm_s16le',
           wavPath
         ], { timeoutMs: c.timeoutMs });
