@@ -2789,7 +2789,37 @@ async function main() {
   }
 
   // DSH 侧
-  const api = new NodeApiClient(cfg.dsh.baseUrl, undefined, {
+  //
+  // 桌面版每次启动都会换一个随机 loopback 端口（实测出现过 58557 / 61122 / 52180），
+  // 配置里的 `dsh.baseUrl` 一旦过期，控制台就一直显示「DSH 未连接」。
+  // 这里只枚举 **DeepSeek Harness.exe** 自己监听的端口，再用一次轻量 RPC 验证，
+  // 不会去扫别的本地服务，也不会把凭据发给非本机地址。
+  function dshOwnedListenPorts() {
+    if (process.platform !== 'win32') return [];
+    try {
+      const pids = new Set();
+      const table = execFileSync('tasklist', ['/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true });
+      for (const line of table.split(/\r?\n/)) {
+        if (!/deepseek harness\.exe/i.test(line)) continue;
+        const m = /^"[^"]*","(\d+)"/.exec(line.trim());
+        if (m) pids.add(m[1]);
+      }
+      if (!pids.size) return [];
+      const net = execFileSync('netstat', ['-ano'], { encoding: 'utf8', windowsHide: true });
+      const ports = new Set();
+      for (const line of net.split(/\r?\n/)) {
+        const m = /^\s*TCP\s+127\.0\.0\.1:(\d+)\s+\S+\s+\S+\s+(\d+)\s*$/.exec(line);
+        if (!m) continue;
+        if (!pids.has(m[2])) continue;
+        ports.add(Number(m[1]));
+      }
+      return [...ports];
+    } catch {
+      return [];
+    }
+  }
+
+  const dshAuthOptions = {
     token: cfg.dsh.authToken,
     // true=用户在 config.json 里显式填的；false=从日志猜的。猜来的不优先于离线铸造。
     tokenExplicit: cfg.dsh.authTokenExplicit === true,
@@ -2797,7 +2827,39 @@ async function main() {
     prefix: cfg.dsh.authPrefix,
     // 默认只允许把 launch token 交给回环地址；远程 DSH 需要显式 opt-in（见 dsh-client.ensureAuth）。
     allowRemote: cfg.dsh.allowRemote === true
-  });
+  };
+
+  async function probeDshBase(baseUrl, timeoutMs = 1500) {
+    try {
+      const probe = new NodeApiClient(baseUrl, timeoutMs, dshAuthOptions);
+      const value = unwrap(await probe.callUnary('agentPresets/list', {}), 'agentPresets/list');
+      return !!(value && Array.isArray(value.presets));
+    } catch {
+      return false;
+    }
+  }
+
+  let dshDiscoveryAt = 0;
+  async function resolveDshBaseUrl({ force = false } = {}) {
+    if (!force && await probeDshBase(cfg.dsh.baseUrl)) return cfg.dsh.baseUrl;
+    // 15 秒内不重复扫：checkDsh 每 5 秒一跳，别每跳都 spawn tasklist/netstat。
+    if (!force && Date.now() - dshDiscoveryAt < 15000) return '';
+    dshDiscoveryAt = Date.now();
+    for (const port of dshOwnedListenPorts()) {
+      const base = `http://127.0.0.1:${port}`;
+      if (base === cfg.dsh.baseUrl) continue;
+      if (await probeDshBase(base)) return base;
+    }
+    return '';
+  }
+
+  const configuredDshBase = cfg.dsh.baseUrl;
+  const discoveredDshBase = await resolveDshBaseUrl({ force: true });
+  if (discoveredDshBase && discoveredDshBase !== configuredDshBase) {
+    cfg.dsh.baseUrl = discoveredDshBase;
+    log(`DSH 端口已变化：${configuredDshBase} → ${discoveredDshBase}（自动发现）`);
+  }
+  const api = new NodeApiClient(cfg.dsh.baseUrl, undefined, dshAuthOptions);
   // DSH 的模型目录 RPC：0.1.5 是 `session/modelCatalog`。**不能走基类门面**
   // `api.sessions.modelCatalog` —— 桥接钉住的 `@deepseek-ai/dsh-host-apiproxy@0.1.1-rc.2`
   // 的 sessions 门面里根本没有这个方法（只有 `models` → 已下线的 `session/models`），
@@ -3720,9 +3782,19 @@ async function main() {
       }
       // 启动早期到达的快照在模式未知时只暂存；模式/会话策略确定后再决定是否补发。
       void replayDeferredDeliveries();
-    } else if (dshReady) {
-      dshReady = false;
-      log('⚠️ DSH 不可用（重启中？），QQ 消息将入队等待');
+    } else {
+      if (dshReady) {
+        dshReady = false;
+        log('⚠️ DSH 不可用（重启中？），QQ 消息将入队等待');
+      }
+      // DSH 桌面版重启会换端口：这里顺手重新发现一次（15 秒节流在 resolveDshBaseUrl 里）。
+      const found = await resolveDshBaseUrl();
+      if (found && found !== cfg.dsh.baseUrl) {
+        log(`DSH 端口变化，自动切换：${cfg.dsh.baseUrl} → ${found}`);
+        cfg.dsh.baseUrl = found;
+        api.baseUrl = found;
+        api.invalidateAuth();
+      }
     }
   };
   function startDshWatch() {
