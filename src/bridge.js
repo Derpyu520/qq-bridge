@@ -2570,6 +2570,284 @@ async function main() {
   const sessionPromises = new Map(); // key -> create promise（防并发重复创建）
   const promptQueues = new Map(); // key -> { queue: [], running: false }：每个 QQ 会话串行投递 DSH prompt，保证 turn 顺序
 
+  // ── 断线窗口内完成回合的补发游标 ────────────────────────────────────────────
+  //
+  // 事件流断开时 pumpMux 的 finally 会清空 collectors；重连快照只恢复「有 turn/start、
+  // 没有 turn/end」的回合（rebuildInFlightCollector）。如果一个回合在断线窗口内已经跑完，
+  // 快照里虽然有完整回复，但不会再有一条 live `turn/end` 来触发发送 —— 这条回复会永久
+  // 静默丢失（chat / closed-agent 下表现为「DSH 明明答了，QQ 没收到」）。
+  //
+  // 这里把「最近一次已交付的事件序号」和「已开始但未结束的 turn」持久化到 state/：
+  //   · DSH 的 SessionEvent 自带单调递增的 `seq`，用它当水位比 turn id 可靠 ——
+  //     快照窗口截断后仍能判断「窗口里的回合是不是在游标之后」；
+  //   · live turn/end 在任何发送分支之前推进 deliveredSeq —— 已投递的回合不会被重放；
+  //   · 旧版游标/无 seq 事件退回 turn id 锚点，保证升级与测试夹具仍可用。
+  // 游标按 sessionId 存；会话退役/重置时清理，文件只保留当前仍有映射的会话。
+  const DELIVERY_CURSOR_FILE = path.join(STATE_DIR, 'delivery-cursors.json');
+  const deliveryCursors = new Map(); // sessionId -> { deliveredTurn, deliveredSeq, inflightTurn, inflightSeq }
+  // 启动早期 mux 快照可能先于 refreshMode 到达；此时 currentMode 还是初始值 'chat'，
+  // 不能拿它判断是否补发（实际可能是 reserved2，补发会把内部文本当普通回复发出去）。
+  const pendingDeliveryReplays = new Map(); // sessionId -> records[]
+  const deliveryLocks = new Map(); // sessionId -> Promise：同一会话的快照补发串行，避免并发重复
+
+  const eventSeq = (value) => {
+    if (value === null || value === undefined || value === '') return -1;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : -1;
+  };
+
+  /** 同一会话的补发任务排成一条链：后到的快照等前一个补发结束，读到的是已推进的游标。 */
+  function runWithDeliveryLock(sessionId, task) {
+    const previous = deliveryLocks.get(sessionId) ?? Promise.resolve();
+    const run = previous.catch(() => {}).then(task);
+    let tail;
+    tail = run.catch(() => {}).finally(() => {
+      if (deliveryLocks.get(sessionId) === tail) deliveryLocks.delete(sessionId);
+    });
+    deliveryLocks.set(sessionId, tail);
+    return run;
+  }
+
+  function loadDeliveryCursors() {
+    const raw = readJsonSafe(DELIVERY_CURSOR_FILE, null);
+    const sessions = raw?.sessions;
+    if (!sessions || typeof sessions !== 'object' || Array.isArray(sessions)) return;
+    for (const [sessionId, value] of Object.entries(sessions)) {
+      if (!sessionId || !value || typeof value !== 'object') continue;
+      const deliveredTurn = typeof value.deliveredTurn === 'string' ? value.deliveredTurn : '';
+      const inflightTurn = typeof value.inflightTurn === 'string' ? value.inflightTurn : '';
+      const deliveredSeq = eventSeq(value.deliveredSeq);
+      const inflightSeq = eventSeq(value.inflightSeq);
+      if (deliveredTurn || inflightTurn || deliveredSeq >= 0 || inflightSeq >= 0) {
+        deliveryCursors.set(sessionId, { deliveredTurn, deliveredSeq, inflightTurn, inflightSeq });
+      }
+    }
+  }
+
+  function saveDeliveryCursors() {
+    const sessions = {};
+    for (const [sessionId, value] of deliveryCursors) {
+      if (!reverse.has(sessionId)) continue;
+      if (!value?.deliveredTurn && !value?.inflightTurn && !(value?.deliveredSeq >= 0) && !(value?.inflightSeq >= 0)) continue;
+      sessions[sessionId] = {
+        ...(value.deliveredTurn ? { deliveredTurn: value.deliveredTurn } : {}),
+        ...(value.deliveredSeq >= 0 ? { deliveredSeq: value.deliveredSeq } : {}),
+        ...(value.inflightTurn ? { inflightTurn: value.inflightTurn } : {}),
+        ...(value.inflightSeq >= 0 ? { inflightSeq: value.inflightSeq } : {})
+      };
+    }
+    try {
+      atomicWriteJson(DELIVERY_CURSOR_FILE, { version: 1, sessions });
+    } catch (error) {
+      // 写不进去只影响「极端时可能重复补发一次」，不能影响主链路。
+      log(`交付游标写入失败（重连补发可能重复一次）：${error?.message ?? error}`);
+    }
+  }
+
+  function markTurnStarted(sessionId, turn, seq) {
+    if (!sessionId || !turn) return;
+    const value = String(turn);
+    const seqValue = eventSeq(seq);
+    const current = deliveryCursors.get(sessionId) ?? { deliveredTurn: '', deliveredSeq: -1, inflightTurn: '', inflightSeq: -1 };
+    if (current.inflightTurn === value && current.inflightSeq === seqValue) return;
+    current.inflightTurn = value;
+    if (seqValue >= 0) current.inflightSeq = seqValue;
+    deliveryCursors.set(sessionId, current);
+    saveDeliveryCursors();
+  }
+
+  function markTurnDelivered(sessionId, turn, seq) {
+    if (!sessionId || !turn) return;
+    const value = String(turn);
+    const seqValue = eventSeq(seq);
+    const current = deliveryCursors.get(sessionId) ?? { deliveredTurn: '', deliveredSeq: -1, inflightTurn: '', inflightSeq: -1 };
+    const currentSeq = eventSeq(current.deliveredSeq);
+    const nextSeq = Math.max(currentSeq, seqValue);
+    // 迟到补发（seq 更小）不能把 deliveredTurn 改回更旧的回合；水位只取 max。
+    const advanceTurn = currentSeq < 0 || seqValue >= currentSeq;
+    const changed = (advanceTurn && current.deliveredTurn !== value)
+      || nextSeq !== currentSeq
+      || (current.inflightTurn === value);
+    if (!changed) return;
+    if (advanceTurn) current.deliveredTurn = value;
+    current.deliveredSeq = nextSeq;
+    if (current.inflightTurn === value) current.inflightTurn = '';
+    deliveryCursors.set(sessionId, current);
+    saveDeliveryCursors();
+  }
+
+  function forgetDeliveryCursor(sessionId) {
+    if (!sessionId || !deliveryCursors.delete(sessionId)) return;
+    saveDeliveryCursors();
+  }
+
+  loadDeliveryCursors();
+
+  /**
+   * 从快照 records 重建「已完成回合」：按 turn/start → assistant/message → turn/end 折叠，
+   * 并记录该回合里是否成功调用过 QQ 发送类 MCP 工具（那种回合已由工具发出，不能再补发）。
+   * 只认有 turn/end 的回合；开放回合交给 rebuildInFlightCollector。
+   */
+  function completedTurnsFromRecords(records) {
+    if (!Array.isArray(records) || records.length === 0) return [];
+    const turns = [];
+    const callNames = new Map();
+    let current = null;
+    for (const entry of records) {
+      const event = entry?.type === 'event' ? entry.event : entry;
+      if (!event || typeof event !== 'object') continue;
+      const seq = eventSeq(entry?.seq ?? event.seq);
+      if (event.type === 'turn/start') {
+        const turn = String(event.data?.turn ?? '');
+        current = turn
+          ? { turn, text: '', reasonKind: '', sendToolSucceeded: false, maxSeq: seq, endSeq: -1 }
+          : null;
+        if (current) turns.push(current);
+        callNames.clear();
+        continue;
+      }
+      if (!current) continue;
+      if (seq >= 0) current.maxSeq = Math.max(current.maxSeq, seq);
+      if (event.type === 'assistant/message') {
+        if (String(event.data?.turn ?? '') !== current.turn) continue;
+        for (const block of event.data?.message?.content ?? []) {
+          if (block?.type === 'text' && typeof block.text === 'string') current.text += block.text;
+        }
+      } else if (event.type === 'tool/call') {
+        const callId = event.data?.callId;
+        if (callId != null) callNames.set(String(callId), String(event.data?.name ?? ''));
+      } else if (event.type === 'tool/result') {
+        const callId = event.data?.message?.source?.callId;
+        const toolName = callId != null ? callNames.get(String(callId)) ?? '' : '';
+        const resultBlock = event.data?.message?.content?.[0];
+        const isError = event.data?.message?.isError === true || resultBlock?.isError === true;
+        if (!isError && isSendToolName(toolName)) current.sendToolSucceeded = true;
+        if (callId != null) callNames.delete(String(callId));
+      } else if (event.type === 'turn/end') {
+        if (String(event.data?.turn ?? '') !== current.turn) continue;
+        current.reasonKind = String(event.data?.reason?.kind ?? '');
+        current.endSeq = Math.max(current.maxSeq, seq);
+        current = null;
+        callNames.clear();
+      }
+    }
+    return turns.filter((turn) => turn.reasonKind);
+  }
+
+  /**
+   * 补发重连快照里「断线期间已经完成、但没有走到 live turn/end」的回复。
+   * 只在 chat / closed-agent 启用：reserved2 的文本由 AI 自己用工具发送，
+   * reserved 代仿真有独立的静默/退场语义，不能把内部输出当普通回复补发。
+   */
+  async function replayCompletedTurns(sessionId, records) {
+    if (currentMode !== 'chat' && currentMode !== 'closed-agent') return;
+    const key = reverse.get(sessionId);
+    if (!key || !isCurrentSession(key, sessionId)) return;
+    const completed = completedTurnsFromRecords(records);
+    if (completed.length === 0) return;
+
+    const cursor = deliveryCursors.get(sessionId);
+    const watermark = cursor && cursor.deliveredSeq >= 0 ? cursor.deliveredSeq : null;
+    const hasAllSeqs = completed.every((turn) => turn.endSeq >= 0);
+    let missed = null;
+    if (watermark != null && hasAllSeqs) {
+      // 首选 seq 水位：即使旧游标已经掉出快照窗口，窗口内 endSeq > 水位的回合仍然是新的。
+      missed = completed.filter((turn) => turn.endSeq > watermark);
+    } else {
+      // 旧版游标（或事件没有 seq）：退回 turn id 锚点。
+      if (cursor?.deliveredTurn) {
+        const index = completed.findIndex((turn) => turn.turn === cursor.deliveredTurn);
+        if (index >= 0) missed = completed.slice(index + 1);
+      }
+      // 已交付锚点不在窗口内时，仍可用「已开始但未结束」的回合兜底（首轮崩溃/窗口截断）。
+      if (missed == null && (cursor?.inflightTurn || cursor?.inflightSeq >= 0)) {
+        if (cursor.inflightTurn) {
+          const index = completed.findIndex((turn) => turn.turn === cursor.inflightTurn);
+          if (index >= 0) missed = completed.slice(index);
+        }
+        if (!missed && cursor.inflightSeq >= 0 && hasAllSeqs) {
+          missed = completed.filter((turn) => turn.endSeq >= cursor.inflightSeq);
+        }
+      }
+    }
+    if (missed == null) {
+      // 没有任何锚点 = 升级前就存在、无法证明哪条还没交付的历史。绝不整窗重发；
+      // 把游标推进到窗口里最后一个已完成回合，后续快照就不会反复扫描这段历史。
+      if (!cursor?.deliveredTurn && watermark == null) {
+        const last = completed[completed.length - 1];
+        markTurnDelivered(sessionId, last.turn, last.endSeq);
+        log(`重连快照：初始化 ${key} 的交付游标（跳过窗口内 ${completed.length} 个历史回合）`);
+      }
+      return;
+    }
+
+    for (const turn of missed) {
+      if (turn.reasonKind !== 'completed' || !turn.text.trim()) {
+        markTurnDelivered(sessionId, turn.turn, turn.endSeq);
+        continue;
+      }
+      const plain = mdToPlain(turn.text);
+      if (!plain.trim() || isSilentMarker(plain)) {
+        if (isSilentMarker(plain)) log(`重连补发跳过 ${key} turn ${turn.turn}：模型选择了静默标记`);
+        markTurnDelivered(sessionId, turn.turn, turn.endSeq);
+        continue;
+      }
+      if (turn.sendToolSucceeded) {
+        log(`重连补发跳过 ${key} turn ${turn.turn}：该回合已通过 MCP 发送工具发出`);
+        markTurnDelivered(sessionId, turn.turn, turn.endSeq);
+        continue;
+      }
+      if (shouldBlockSilentReply(key)) {
+        log(`静默模式，重连补发跳过在途回复 (${key})`);
+        markTurnDelivered(sessionId, turn.turn, turn.endSeq);
+        continue;
+      }
+      if (shouldAuditKey(key) && (SENSITIVE_RE.test(plain) || hasKnownTokenFragment(plain))) {
+        log(`⚠️ 断线期间的回复被安全策略拦截 (${key})，未补发`);
+        appendActivity(`${key} 断线期间 agent 回复被拦截（疑似敏感信息/会话令牌）`);
+        markTurnDelivered(sessionId, turn.turn, turn.endSeq);
+        continue;
+      }
+      log(`重连补发断线期间完成的回复 (${key}, turn ${turn.turn}, seq ${turn.endSeq}, ${plain.length} 字)`);
+      await sendToQQ(key, plain, { ai: true });
+      if (!lastSendSucceeded(key)) {
+        log(`重连补发发送失败，保留游标以便下次重连重试 (${key}, turn ${turn.turn})`);
+        return;
+      }
+      appendActivity(`${key} 重连补发 agent 回复：${plain.slice(0, 80)}${plain.length > 80 ? '…' : ''}`);
+      markTurnDelivered(sessionId, turn.turn, turn.endSeq);
+    }
+  }
+
+  async function handleSessionSnapshot(sessionId, snapshot) {
+    recordSessionSnapshot(sessionId, snapshot);
+    const records = snapshot?.records;
+    if (!modeKnown) {
+      // 模式尚未确定：先暂存，等 refreshMode() 给出真实模式后再判断（见 replayDeferredDeliveries）。
+      if (Array.isArray(records) && records.length > 0) pendingDeliveryReplays.set(sessionId, records);
+      return;
+    }
+    try {
+      await runWithDeliveryLock(sessionId, () => replayCompletedTurns(sessionId, records));
+    } catch (error) {
+      // 补发失败不能把 DSH 事件流打断（否则重连风暴会放大成持续掉线）。
+      log(`重连补发快照失败 ${sessionId}: ${error?.message ?? error}`);
+    }
+  }
+
+  async function replayDeferredDeliveries() {
+    if (!modeKnown || pendingDeliveryReplays.size === 0) return;
+    const pending = [...pendingDeliveryReplays.entries()];
+    pendingDeliveryReplays.clear();
+    for (const [sessionId, records] of pending) {
+      try {
+        await runWithDeliveryLock(sessionId, () => replayCompletedTurns(sessionId, records));
+      } catch (error) {
+        log(`暂存快照补发失败 ${sessionId}: ${error?.message ?? error}`);
+      }
+    }
+  }
+
   // ── Token 用量账本（控制台「令牌与花费」） ───────────────────────────────
   // 权威总量取 DSH 的 tokenUsage 投影（整条会话日志累计，含桥接启动前的历史），
   // 逐轮明细由 assistant/message 的 usage 折叠而来；花费在读取时按价目表折算。
@@ -2712,6 +2990,9 @@ async function main() {
   let snowlumaWatchStarted = false; // SnowLuma 上游健康探测只启动一次（见 startSnowlumaWatch）
   let currentMode = 'chat'; // chat | closed-agent | reserved（仿真模式，由 DSH settings / state/mode.json 驱动）
   let lastMode = currentMode;
+  // refreshMode() 是否已经给出过**真实**模式。启动早期 currentMode 只是初始值 'chat'，
+  // 不能拿它做「要不要补发 reserved2 内部文本」这类判断。
+  let modeKnown = false;
   // closed-agent 模式使用的 DSH agent preset：留空表示「用 DSH 自己声明的默认 preset」。
   // 旧版本这里硬编码 'router-standard'，但 DSH 0.1.5 已移除该 preset，硬编码会导致
   // 创建出的会话挂不上 preset，进而被 DSH 套上 standard（含本地工具）。
@@ -2725,6 +3006,15 @@ async function main() {
   const QUEUE_MAX = 50;
   const QUEUE_HINT_COOLDOWN_MS = 30_000;
   const queueRetries = new Map(); // key -> 连续补投失败次数（用于退避/暂停恢复）
+
+  // 「DSH 重启中，消息已排队」提示：按会话冷却，避免恢复前后的多条消息各提示一次。
+  const sendQueueHintOnce = async (key) => {
+    const now = Date.now();
+    if ((queuedHintAt.get(key) ?? 0) + QUEUE_HINT_COOLDOWN_MS < now) {
+      queuedHintAt.set(key, now);
+      await sendToQQ(key, '⏳ 系统服务重启中，消息已排队，恢复后自动处理。');
+    }
+  };
 
   // reset 竞态导致 ensureSession 抛「会话创建期间已重置」时，把消息放回队列稍后重试。
   // 已在队列中的相同文本不重复入队。
@@ -2783,6 +3073,7 @@ async function main() {
         if (typeof localPreset?.closedAgentPreset === 'string') {
           closedAgentPreset = localPreset.closedAgentPreset;
         }
+        modeKnown = true;
         return;
       }
     } catch {}
@@ -2792,6 +3083,7 @@ async function main() {
     if (typeof local?.closedAgentPreset === 'string' && local.closedAgentPreset) {
       closedAgentPreset = local.closedAgentPreset;
     }
+    modeKnown = true;
   }
 
   /** 拉取 DSH 当前可用的 agent preset 清单（供控制台下拉与 closed-agent 兜底使用）。 */
@@ -2916,6 +3208,7 @@ async function main() {
     forgetConversationCaches(key);
     if (!sessionId) return;
     reverse.delete(sessionId);
+    forgetDeliveryCursor(sessionId);
     collectors.delete(sessionId);
     sessionModels.delete(sessionId);
     modelAppliedSessions.delete(sessionId);
@@ -3115,6 +3408,8 @@ async function main() {
         log(`桥接模式已切换为: ${currentMode}`);
         lastMode = currentMode;
       }
+      // 启动早期到达的快照在模式未知时只暂存；模式/会话策略确定后再决定是否补发。
+      void replayDeferredDeliveries();
     } else if (dshReady) {
       dshReady = false;
       log('⚠️ DSH 不可用（重启中？），QQ 消息将入队等待');
@@ -4832,6 +5127,7 @@ async function main() {
               sessionModels.delete(sid);
               modelAppliedSessions.delete(sid);
               reverse.delete(sid);
+              forgetDeliveryCursor(sid);
               collectors.delete(sid);
               v2TurnStartAt.delete(sid);
               turnLeaseNoted.delete(sid);
@@ -7360,6 +7656,7 @@ async function main() {
           // 权限元数据必须与映射一起删除，否则会永久残留在 sessions.json 里。
           delete state.sessionPolicies[key];
           reverse.delete(oldSessionId);
+          forgetDeliveryCursor(oldSessionId);
           collectors.delete(oldSessionId);
           sendToolSucceededSessions.delete(oldSessionId);
           pendingSendToolCalls.delete(oldSessionId);
@@ -9637,7 +9934,8 @@ async function main() {
     } else if (accepted.result.value.command?.text && opts.silent && opts.farewell) {
       social.exitingSessions.delete(sessionId);
     }
-    return { ok: true };
+    // command=true：斜杠命令已直接回结果，调用方不要把它当成普通提问再发 ack。
+    return { ok: true, command: Boolean(accepted.result.value.command) };
   }
 
   // 每个 QQ 会话串行投递 DSH prompt，保证 turn 完成顺序与提交顺序一致，
@@ -11484,6 +11782,7 @@ async function main() {
           modelAppliedSessions.delete(old);
           delete state.sessionPolicies[key];
           reverse.delete(old);
+          forgetDeliveryCursor(old);
           collectors.delete(old);
           sendToolSucceededSessions.delete(old);
           pendingSendToolCalls.delete(old);
@@ -11686,58 +11985,24 @@ async function main() {
       return;
     }
 
-    // DSH 重启容错：DSH 不可用时消息入队（不丢），恢复后自动补投
-    if (!dshReady) {
-      const items = queued.get(key) ?? [];
-      if (items.length >= QUEUE_MAX) {
-        items.shift();
-        log(`队列满（${QUEUE_MAX}），丢弃最旧消息 (${key})`);
-      }
-      items.push({ promptText, media: mediaList });
-      queued.set(key, items);
-      const now = Date.now();
-      if ((queuedHintAt.get(key) ?? 0) + QUEUE_HINT_COOLDOWN_MS < now) {
-        queuedHintAt.set(key, now);
-        await sendToQQ(key, '⏳ 系统服务重启中，消息已排队，恢复后自动处理。');
-      }
+    // 普通聊天（chat / closed-agent）也走**同一个按会话 FIFO**（promptQueues）。
+    //
+    // 旧实现把 ensureSession → resolveMediaList → api.sessions.prompt 全写在这个函数里：
+    // 先发的图片要等下载/压缩，后到的纯文本没有这段 await，于是先提交给 DSH ——
+    // 模型看到的顺序变成「文本 B 在前、图片 A 在后」，QQ 上的回复顺序/上下文也跟着颠倒。
+    // 把「媒体解析 + prompt 提交」一起放进同一条队列项，才能在会话内严格按到达顺序提交。
+    if (!dshReady) await sendQueueHintOnce(key);
+    const result = await deliverPrompt(key, promptText, { media: mediaList });
+    if (result?.queued) {
+      await sendQueueHintOnce(key);
       log(`DSH 不可用，消息入队 (${key})`);
       return;
     }
-
-    let sessionId;
-    try {
-      sessionId = await ensureSession(key);
-    } catch (error) {
-      if (String(error?.message ?? error).includes('会话创建期间已重置')) {
-        enqueueForRetry(key, promptText, { media: mediaList });
-        return;
-      }
-      throw error;
+    if (result?.retried) return;
+    if (result?.ok && !result.command && cfg.ackMessage && currentMode !== 'reserved2') {
+      await sendToQQ(key, cfg.ackMessage);
     }
-    let content = [{ type: 'text', text: withSlangContext(promptText, key) }];
-    if (Array.isArray(mediaList) && mediaList.length > 0) {
-      const imageParts = await resolveMediaList(mediaList);
-      content = [{ type: 'text', text: withSlangContext(promptText, key) }, ...imageParts];
-    }
-    if (!isCurrentSession(key, sessionId)) throw new Error('投递前会话已重置或权限已变化');
-    const accepted = await api.sessions.prompt({
-      sessionId,
-      mode: 'queue',
-      content
-    });
-    if (!accepted.result.ok) {
-      const errText = `${accepted.result.error.code}: ${accepted.result.error.message}`;
-      const safeErrText = shouldAuditKey(key) && SENSITIVE_RE.test(errText) ? '（含敏感信息，已隐藏）' : errText;
-      await sendToQQ(key, `⚠️ 消息未被接受：${safeErrText}`);
-      return;
-    }
-    if (accepted.result.value.command) {
-      // 斜杠命令直接有结果，不走模型
-      if (accepted.result.value.command.text) await auditAndSend(key, mdToPlain(accepted.result.value.command.text));
-      return;
-    }
-    if (cfg.ackMessage && currentMode !== 'reserved2') await sendToQQ(key, cfg.ackMessage);
-    log(`已投递 ${key}: ${promptText.slice(0, 80)}${promptText.length > 80 ? '…' : ''}`);
+    if (result?.ok) log(`已投递 ${key}: ${promptText.slice(0, 80)}${promptText.length > 80 ? '…' : ''}`);
   }
 
   // 取消/拒绝一个挂起的提问或审批，并给 DSH 回执（超时、被新请求覆盖时使用）
@@ -11977,6 +12242,10 @@ async function main() {
    *      collector，否则同样会永久繁忙。
    */
   function trackTurnEvent(sessionId, event) {
+    // 交付游标：live turn/start 记录“已开始”，live turn/end 记录“已交付”。
+    // 必须在 `if (ended)` 的发送分支之前推进：ended 分支有大量 continue（静默、工具已发、
+    // 安全拦截、空回复……），无论哪种都说明这个回合已经被 live 通道消费过，不能再补发。
+    if (event?.type === 'turn/start') markTurnStarted(sessionId, event.data?.turn, event.seq);
     let collector = collectors.get(sessionId);
     if (!collector && event?.type === 'turn/start') {
       collector = createTurnCollector();
@@ -11986,6 +12255,7 @@ async function main() {
     if (ended) {
       // 回合正常收尾：collector 立刻释放。v2TurnStartAt 留给调用方（无行动判定要用它），
       // 调用方在 `if (ended)` 分支里用完再删。
+      markTurnDelivered(sessionId, ended.turn, event?.seq);
       collectors.delete(sessionId);
     } else if (event?.type === 'turn/end' && (!collector || collector.size?.() === 0)) {
       collectors.delete(sessionId);
@@ -12007,10 +12277,11 @@ async function main() {
         for await (const envelope of api.events.mux({})) {
           framesThisStream += 1;
           const frame = envelope.payload;
-          // 会话开场快照：只喂 token 账本。它含**历史** turn/end，绝不能让它们走
-          // session/event 通道 —— 否则桥接会把早已结束的回合当成新回合去发 QQ 回复。
+          // 会话开场快照：喂 token 账本 + 重建未结束回合；其中的**历史** turn/end 绝不能
+          // 走 session/event 通道（那会把早已结束的回合当成新回合去发 QQ 回复）。
+          // 断线窗口内完成的回合由 replayCompletedTurns 按持久化游标补发并去重。
           if (frame.type === 'session/snapshot') {
-            recordSessionSnapshot(frame.sessionId, frame.snapshot);
+            await handleSessionSnapshot(frame.sessionId, frame.snapshot);
             continue;
           }
           if (frame.type === 'session/event') {

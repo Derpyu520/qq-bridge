@@ -21,6 +21,8 @@ const tests = [
   // scripts/test-dsh-session-retire.mjs）。
   'test-dsh-inbox-projection.mjs',
   'test-md-to-plain.mjs', 'test-slang-learn.mjs', 'test-mux-reconnect.mjs',
+  // restart.bat 只能停止经锁/PID 验证的本实例，不能按全机进程名误杀其他项目。
+  'test-restart-instance.mjs',
   'test-token-economy.mjs', 'test-qq-model-view.mjs', 'test-qq-preset-contract.mjs',
   'test-reply-wait.mjs', 'test-preset-prompt.mjs', 'test-installed-preset-sync.mjs', 'test-role-card.mjs',
   // 角色卡注入节奏：首次/换卡/新会话必须全量，其余只给一行提醒（#118）。
@@ -30,6 +32,8 @@ const tests = [
   // wake triggers 白名单、memory-update 边界、wait 租约归一化、md/黑话/表情/账本；
   // 本轮新增：/api/send/* 失败路径的作用域错误（R15）、reserved2 落库丢表情识别字段（R16）。
   'test-audit-regressions.mjs',
+  // 交付链路：普通聊天图片/文本按会话 FIFO；断线期间完成的回复按 seq 游标补发并去重。
+  'test-delivery-regressions.mjs',
   // 图片/表情链路（动图/表情包字段、CDN 优先与 emoji_id 兜底）+ 联网搜索
   // （DSH 同一路 DeepSeek 搜索、Bing RSS 兜底、凭据优先级与端点安全；
   //  本轮新增：空结果 note 必须在写缓存之前生成，否则缓存命中丢掉提示）。
