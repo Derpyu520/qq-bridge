@@ -4228,7 +4228,8 @@ async function main() {
         }
         if (req.method === 'POST' && url.pathname === '/api/session/mute') {
           const body = await readBody();
-          const wanted = ['normal', 'muted', 'blocked'].includes(String(body.mode)) ? String(body.mode) : 'normal';
+          const wanted = String(body.mode ?? '');
+          if (!['normal', 'muted', 'blocked'].includes(wanted)) { sendJson({ ok: false, error: 'mode 应为 normal / muted / blocked' }, 400); return; }
           const canonical = setSessionMode(String(body.key ?? ''), wanted);
           if (!canonical) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
           // 光挡住新消息不够：之前排好的唤醒定时器/排队回合仍会跑一轮（真花 token），
@@ -4241,16 +4242,26 @@ async function main() {
                 cancelPendingEntry(pe).catch(() => {});
               }
               pending.delete(canonical);
+              const st = socialV2.conversations.get(canonical);
+              const cancelledBootstrap = st?.pendingWakeReason === 'bootstrap'
+                || (queued.get(canonical) ?? []).some(item => item.wakeReason === 'bootstrap');
+              if (st && cancelledBootstrap) { st.bootstrapSent = false; saveSocialV2State(); }
               queued.delete(canonical);
               queuedHintAt.delete(canonical);
               drainPromptQueue(canonical, wanted === 'blocked' ? '会话已屏蔽' : '会话已静默');
               cancelSocialTimers(canonical);
               clearSocialV2Timers(canonical);
               pendingWakeKeys.delete(canonical);
+              disarmPendingWakeLease(canonical);
               wakeConfigUpdatedKeys.delete(canonical);
             } catch (error) {
               log(`⚠️ 设置 ${canonical} 为 ${wanted} 时撤销定时任务失败：${error?.message ?? error}`);
             }
+          }
+          if (wanted === 'normal' && currentMode === 'reserved2' && !socialV2.paused) {
+            // 恢复原有限睡眠/主动机会计划；不为每条历史未读补排一轮唤醒。
+            setupSleepTimerV2(canonical);
+            scheduleProactiveCheckV2(canonical);
           }
           log(`控制台：${canonical} 模式 -> ${wanted}`);
           sendJson({ ok: true, key: canonical, mode: wanted, muted: wanted === 'muted' });
@@ -8374,7 +8385,7 @@ async function main() {
           && (socialV2.paused || cfg.socialV2?.enabled === false)))) {
         throw new Error('发送已取消：AI 已暂停、关闭或进入静默模式');
       }
-      if (!isSessionAllowedInCurrentMode(key) || policy !== sessionPolicy(key)
+      if (isMutedKey(key) || isBlockedKey(key) || !isSessionAllowedInCurrentMode(key) || policy !== sessionPolicy(key)
           || (sessionId && state.sessions[key] !== sessionId)) {
         throw new Error('发送已取消：会话、模式或白名单已变化');
       }
@@ -9534,7 +9545,7 @@ async function main() {
       disarmPendingWakeLease(key);
       return { ok: true, skipped: true };
     };
-    if (wakeBlocked()) return skipWake();
+    if (wakeBlocked() || isMutedKey(key) || isBlockedKey(key)) return skipWake();
     if (!dshReady) {
       const items = queued.get(key) ?? [];
       if (items.length >= QUEUE_MAX) {
@@ -9559,7 +9570,7 @@ async function main() {
     let wakeToken;
     let wakeSnapshot;
     if (opts.wakeReason) {
-      if (wakeBlocked()) return skipWake();
+      if (wakeBlocked() || isMutedKey(key) || isBlockedKey(key)) return skipWake();
       // Build only after session creation: retries may rotate the token, and an
       // offline queue may have received more messages since this wake was queued.
       wakeState = getSocialV2State(key);
@@ -9575,6 +9586,7 @@ async function main() {
       const imageParts = await resolveMediaList(opts.media);
       content = [{ type: 'text', text: withSlangContext(promptText) }, ...imageParts];
     }
+    if (isMutedKey(key) || isBlockedKey(key)) return skipWake();
     // 媒体解析成功后再标记退场，避免解析异常时残留退场标记。
     if (!isCurrentSession(key, sessionId)) throw new Error('投递前会话已重置或权限已变化');
     if (opts.farewell) social.exitingSessions.add(sessionId);
@@ -10996,6 +11008,9 @@ async function main() {
       clearTimeout(st.sleepTimer);
       st.sleepTimer = null;
     }
+    const prevWakeAt = st.wakeConfig.lastWakeAt;
+    const prevWakeCount = st.wakeConfig.wakeCount;
+    const prevWakeReason = st.lastWakeReason;
     st.wakeConfig.sleepUntil = null;
     st.wakeConfig.lastWakeAt = now;
     st.wakeConfig.wakeCount = (st.wakeConfig.wakeCount || 0) + 1;
@@ -11006,6 +11021,10 @@ async function main() {
     const rollbackWakeTime = () => {
       const idx = st.wakeTimes.lastIndexOf(wakeTime);
       if (idx >= 0) st.wakeTimes.splice(idx, 1);
+      st.wakeConfig.lastWakeAt = prevWakeAt;
+      st.wakeConfig.wakeCount = prevWakeCount;
+      st.lastWakeReason = prevWakeReason;
+      if (reason === 'bootstrap') st.bootstrapSent = false;
       saveSocialV2State();
     };
     try {
@@ -11020,7 +11039,7 @@ async function main() {
           setupSleepTimerV2(key);
         }
       };
-      if (result && result.ok === false) {
+      if (result && (result.ok === false || result.skipped === true)) {
         pendingWakeKeys.delete(key);
         disarmPendingWakeLease(key);
         rollbackWakeTime();
@@ -11053,6 +11072,7 @@ async function main() {
   }
 
   function scheduleReplyCheckV2(key) {
+    if (isBlockedKey(key) || isMutedKey(key)) return;
     if (cfg.socialV2?.enabled === false) return;
     if (socialV2.paused || currentMode !== 'reserved2') return;
     const st = getSocialV2State(key);
@@ -11234,6 +11254,7 @@ async function main() {
   }
 
   function setupSleepTimerV2(key) {
+    if (isBlockedKey(key) || isMutedKey(key)) return;
     if (cfg.socialV2?.enabled === false) return;
     if (!isSessionAllowedInCurrentMode(key)) return;
     const st = getSocialV2State(key);
@@ -11281,6 +11302,7 @@ async function main() {
   }
 
   function scheduleProactiveCheckV2(key) {
+    if (isBlockedKey(key) || isMutedKey(key)) return;
     if (cfg.socialV2?.proactive?.enabled === false) return;
     if (socialV2.paused || currentMode !== 'reserved2') return;
     if (!isSessionAllowedInCurrentMode(key)) return;
@@ -11413,6 +11435,13 @@ async function main() {
     if (!plainContent && !quoteTargetIsSelf) return;
     const isOwner = String(event.user_id) === String(cfg.ownerQQ ?? '');
     const roleState = readRoleState();
+
+    if (mutedNow) {
+      const sender = kind === 'group' ? (event.sender?.card || event.sender?.nickname || String(event.user_id)) : '私聊';
+      appendSocialV2Message(key, sender, textContent, plainContent, quoteTargetIsSelf, isOwner,
+        event.message_id ?? event.msg_id ?? null, mediaList, event.user_id ?? null, extractForwardIds(event.message ?? []));
+      return;
+    }
 
     // 若该会话有挂起的提问/审批，先当作回答处理（用当前消息自己的文字，不含引用原文）。
     //
@@ -11880,6 +11909,7 @@ async function main() {
       id = String(peer);
       key = convKey('private', id);
     }
+    if (isBlockedKey(key)) return;
     if (!modeAllowed(key, kind, id, cfg, currentMode)) return;
     if (currentMode !== 'reserved2') {
       appendActivity(`${key} 收到拍一拍事件（非 reserved2，仅记录）：${senderId} -> ${targetId}`);
@@ -11904,6 +11934,7 @@ async function main() {
       suffix: event.suffix
     });
     appendActivity(`${key} 拍一拍事件：${msg.text.slice(0, 80)}`);
+    if (isMutedKey(key)) return;
     if (currentMode !== 'reserved2') return;
     if (socialV2.paused) return;
     const st = getSocialV2State(key);
