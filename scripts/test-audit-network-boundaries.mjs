@@ -137,6 +137,7 @@ test('MCP web_fetch applies its web-port allowlist on the shared transport', asy
     .replace('await server.connect(new StdioServerTransport());', 'server.connect(new StdioServerTransport());');
   class McpServer {
     tool(name, description, schema, callback) { tools.set(name, callback); }
+    registerTool(name, config, callback) { tools.set(name, callback); }
     connect() {}
   }
   vm.runInNewContext(source, {

@@ -305,8 +305,7 @@ export class NodeApiClient extends AbstractApiClient {
     this.cookiePromise = null;
     this._authEpoch = 0;
     this._muxSendOpen = null;
-    // 持久化签名密钥的探测缓存：undefined=未探测，null=不可用，Buffer=可用。
-    // 探一次就够（文件在 DSH 生命周期内不变），避免每个请求都读一次磁盘。
+    // 只缓存成功读取的签名密钥；首次启动或原子替换期间的读取失败必须能重试。
     this._secret = undefined;
     // token 是用户显式配置的（true）还是从日志猜的（false）。猜来的不优先于离线铸造。
     this.tokenExplicit = this.auth.tokenExplicit === true;
@@ -363,7 +362,11 @@ export class NodeApiClient extends AbstractApiClient {
 
   /** 持久化签名密钥（惰性探测 + 记忆）。 */
   browserSessionSecret() {
-    if (this._secret === undefined) this._secret = readBrowserSessionSecret();
+    if (this._secret === undefined || this._secret === null) {
+      const secret = readBrowserSessionSecret();
+      if (secret !== null) this._secret = secret;
+      return secret;
+    }
     return this._secret;
   }
 

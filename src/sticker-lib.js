@@ -83,24 +83,30 @@ export function normalizeStickerEntry(raw) {
   };
 }
 
+/** 无法识别的归属隔离成这个前缀；不要退回 'global'（那等于把私有备注广播给所有会话）。 */
+const NOTE_SCOPE_QUARANTINE = 'invalid:';
+const QUARANTINED_NOTE_SCOPE_MAX = NOTE_SCOPE_QUARANTINE.length + 40;
+
 /**
  * 归一化备注的会话归属：`'global'` 或 `'group:<id>'` / `'private:<id>'`。
- * 非法值一律退回 `'global'`（保守：宁可多注入，也不要让备注莫名消失）。
+ * 缺失/空值沿用旧语义视为 `'global'`；**无法识别**的值一律隔离（fail-closed），
+ * 且归一化保持幂等，避免加载时再次写回全局。
  */
 export function normalizeNoteScope(value) {
   const s = String(value ?? '').trim();
   if (!s || s === 'global') return 'global';
+  if (s.startsWith(NOTE_SCOPE_QUARANTINE)) return s.slice(0, QUARANTINED_NOTE_SCOPE_MAX);
   const m = /^(group|private):(\d{1,20})$/.exec(s);
-  if (!m) return 'global';
-  const id = Number(m[2]);
-  if (!Number.isSafeInteger(id) || id <= 0) return 'global';
-  return `${m[1]}:${id}`;
+  const id = m ? Number(m[2]) : 0;
+  if (m && Number.isSafeInteger(id) && id > 0) return `${m[1]}:${id}`;
+  return `${NOTE_SCOPE_QUARANTINE}${s.slice(0, 40)}`;
 }
 
 /** 某条备注是否应当在 `currentKey` 这个会话里可见。 */
 export function noteScopeVisible(noteScope, currentKey) {
   const scope = normalizeNoteScope(noteScope);
   if (scope === 'global') return true;
+  if (scope.startsWith(NOTE_SCOPE_QUARANTINE)) return false;
   if (!currentKey) return false; // 不知道当前会话时，只放全局（保守）
   return scope === normalizeNoteScope(currentKey);
 }

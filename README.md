@@ -19,6 +19,8 @@
 > [`v0.1.0`](https://github.com/Derpyu520/qq-bridge/releases/tag/v0.1.0)；**DSH 0.1.5-rc.1** 用
 > [`v0.1.5`](https://github.com/Derpyu520/qq-bridge/releases/tag/v0.1.5)；**DSH 0.1.7-rc.2** 用
 > [`v0.1.7`](https://github.com/Derpyu520/qq-bridge/releases/tag/v0.1.7)。
+> **DSH 0.1.2～0.1.4 不兼容当前预设**：该区间的 persona 使用 `text`，当前预设使用 `prefix`。
+> 共享斜杠 RPC 不代表预设兼容；建议升级到上述已验证版本，历史标签的范围见 [DSH 安装说明](docs/guides/DSH_SETUP.md#兼容范围)。
 >
 > v0.2.0 修的主要是**会话待处理队列读不出来**：桥接退役/重置 QQ 会话时要先清掉 DSH 侧没跑的队列，
 > 而那段解析认的是一个**从来不存在的字段**（`session/control` baseline 的 `value.queues[<id>]`）——
@@ -118,13 +120,14 @@ npm install        # 安装依赖（postinstall 会自动修补 @snowluma/sdk �
 | 字段 | 说明 |
 | --- | --- |
 | `dsh.baseUrl` | DSH Web 地址，默认 `http://127.0.0.1:3080` |
+| `dsh.autoDiscoverPort` | 默认 `true`；连接失效时发现并验证本机 DSH 的新端口。多实例或固定地址部署可设为 `false`，只连接 `dsh.baseUrl` |
 | `dsh.provider` / `dsh.model` / `dsh.reasoningEffort` | DSH 会话使用的模型/推理强度；若你的 DSH 没有示例中的模型，改成 DSH 设置页里可用的模型即可（选择失败只打日志，不阻塞启动） |
 | `dsh.authToken` | DSH launch token（进程启动凭据）。**通常应留空**：留空时桥接用 `~/.dsh/.credentials.yaml` 里持久化的签名密钥**离线铸造**会话 Cookie，不依赖任何进程期状态（DSH 0.1.7 起启动 token 只存在于内存、日志里那条是上一个进程的陈旧值，换 Cookie 只会 401）。只有显式填了才会优先走 token 交换 |
 | `dsh.authHeader` / `dsh.authPrefix` | 保留字段，当前新版 DSH 链路使用 Cookie 交换，不再直接发送该鉴权头 |
 | `snowluma.wsUrl` | SnowLuma OneBot **WebSocket** 地址（如 `ws://127.0.0.1:3001`） |
 | `snowluma.httpUrl` | OneBot **HTTP API** 地址（如 `http://127.0.0.1:3000`）；不要填 WebSocket 端口，否则会报 HTTP 426 |
 | `snowluma.accessToken` | OneBot accessToken，未配置留空 |
-| `snowluma.followDiscoveredEndpoint` | 默认 `true`。换 QQ 账号后 token 与端口都会变，桥接会自愈：重新发现并**跟随** SnowLuma 的端点（同时写回 `config.json`）。**想跑第二个实例 / 指向另一份 SnowLuma 安装（多账号、测试）时设为 `false`** —— 那时只自愈 token，绝不动 URL，也不写回 URL。详见「已知行为」 |
+| `snowluma.followDiscoveredEndpoint` | 默认 `true`。换 QQ 账号后 token 与端口都会变，桥接会自愈：重新发现并**跟随** SnowLuma 的端点（同时写回 `config.json`）。**想跑第二个实例 / 指向另一份 SnowLuma 安装（多账号、测试）时设为 `false`** —— 那时仅接受分别匹配所配 HTTP/WS 地址的 token，不改写 URL。详见「已知行为」 |
 | `snowluma.silenceWarnMs` | 上游静默告警阈值（毫秒），默认 `600000`（10 分钟）。已连接但这么久没收到任何事件包（含心跳）时打警告；这只是**提示**，不确定性的判断交给 `good` |
 | `snowluma.launcherPath` / `homeDir` | SnowLuma 安装目录（用于 token/端点自发现）。⚠️ 桥接**不会**启动或停止 SnowLuma（见 `NOTICE.md`） |
 | `agentPreset` | QQ 会话使用的 DSH agent preset，默认 `qq-chat`（改性格见下文） |
@@ -137,6 +140,7 @@ npm install        # 安装依赖（postinstall 会自动修补 @snowluma/sdk �
 | `workspaceTitle` | QQ 会话在 DSH 界面中的归组名称，默认「QQ 聊天」 |
 | `allow.private` / `allow.groups` | 白名单（QQ 号/群号数组）；留空且 `allowAllWhenEmpty: true` 时放行全部 |
 | `deny.*` | 黑名单，优先于白名单 |
+| `ignore.sendQQ` | 发送者 QQ 号数组，默认空；兼容 `ignore.senders`。名单中的非管理员消息和拍一拍不进入上下文、学习与唤醒；修改后重启桥接 |
 | `ackMessage` | 消息投递后的立即回复，空字符串关闭 |
 | `sendDelayMs` | QQ 连续发送间隔，防止触发频率限制 |
 | `consolePort` | 本地控制台端口，默认 `3100` |

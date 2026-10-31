@@ -71,10 +71,12 @@ function untrustedData(data) {
 
 const server = new McpServer({ name: 'web-search-safe', version: '0.2.1-r1' });
 
-server.tool(
+server.registerTool(
   'web_search',
-  '只读联网搜索：优先使用与 DSH 相同的 DeepSeek 联网搜索（结果更准、不把群里的词发给搜索引擎广告网络），不可用时自动回退 Bing。返回标题/URL/摘要，不执行任何本地操作。适合查网络用语、梗、事实性问题和热点。',
-  { query: z.string().describe('要搜索确认的网络用语/黑话/梗/事实性问题') },
+  {
+    description: '只读联网搜索：优先使用与 DSH 相同的 DeepSeek 联网搜索（结果更准、不把群里的词发给搜索引擎广告网络），不可用时自动回退 Bing。返回标题/URL/摘要，不执行任何本地操作。适合查网络用语、梗、事实性问题和热点。',
+    inputSchema: z.object({ query: z.string().describe('要搜索确认的网络用语/黑话/梗/事实性问题') }).strict()
+  },
   async ({ query }) => {
     const clean = sanitizeQuery(query);
     if (!clean) {
@@ -92,10 +94,12 @@ server.tool(
   }
 );
 
-server.tool(
+server.registerTool(
   'web_fetch',
-  '只读抓取 HTTP(S) 网页正文，返回纯文本/HTML 前 50000 字符。仅允许 Web 端口 80/443/8080/8443，禁止访问内网/本机地址，不执行任何本地操作。',
-  { url: z.string().describe('要抓取的 http(s) URL') },
+  {
+    description: '只读抓取 HTTP(S) 网页正文，返回纯文本/HTML 前 50000 字符。仅允许 Web 端口 80/443/8080/8443，禁止访问内网/本机地址，不执行任何本地操作。',
+    inputSchema: z.object({ url: z.string().describe('要抓取的 http(s) URL') }).strict()
+  },
   async ({ url }) => {
     try {
       const result = await safeFetch(url, 50000, { allowPorts: [80, 443, 8080, 8443] });
