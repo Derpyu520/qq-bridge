@@ -3289,30 +3289,66 @@ async function main() {
       const y = Buffer.from(b, 'utf8');
       return x.length === y.length && crypto.timingSafeEqual(x, y);
     };
+    // ── 跨会话发送（默认关闭）──────────────────────────────────────────────
+    // 这是安全边界变更：开启后，某个群的 agent 被提示注入时，可以用自己的令牌给 owner
+    // 私聊发任意内容，而 owner 会以为是管理员通道。因此：
+    //   · 总开关 allowCrossSessionSend 默认 false，必须显式打开；
+    //   · 两个方向各有独立开关（任何会话→owner / owner→白名单）；
+    //   · 按来源会话每小时限频（crossSessionSendPerHour，默认 20）；
+    //   · 每次跨会话放行都写活动日志，正文前注明来源会话。
+    const crossSendTimes = new Map(); // 来源会话 -> 时间戳数组
+    function crossSessionRateOk(callerKey) {
+      const raw = Number(cfg.socialV2?.crossSessionSendPerHour);
+      const limit = Number.isFinite(raw) && raw >= 0 ? Math.trunc(raw) : 20;
+      if (limit === 0) return false;
+      const now = Date.now();
+      const hist = (crossSendTimes.get(callerKey) ?? []).filter((t) => now - t < 3600000);
+      if (hist.length >= limit) {
+        crossSendTimes.set(callerKey, hist);
+        return false;
+      }
+      hist.push(now);
+      crossSendTimes.set(callerKey, hist);
+      return true;
+    }
+    /** 跨会话发送时的正文前缀；同会话返回空串。 */
+    function crossSessionPrefix(targetKey, token) {
+      if (!token) return '';
+      const caller = agentTokenSessionKey(token);
+      const target = canonicalV2Key(targetKey) ?? String(targetKey ?? '');
+      if (!caller || caller === target) return '';
+      return `【来自 ${caller}】\n`;
+    }
     const agentTokenOk = (key, token) => {
       const canonical = canonicalV2Key(key);
       const st = socialV2.conversations.get(canonical ?? key);
       if (st && st.agentToken && tokenEq(token, st.agentToken)) return true;
-      // 跨会话（socialV2.allowCrossSessionSend，默认开）：
-      //   1) 任何会话都可以给管理员发私聊 —— 群里不方便说的话可以单独找主人；
-      //   2) 管理员私聊发起的调用可以发给任意白名单目标（例如家人，对方可能从没说过话、
-      //      没有自己的会话令牌，严格比对必然失败）。
-      // 两个条件都要求 token 是某个活跃会话的真实 agent 令牌，且目标在白名单内。
-      if (cfg.socialV2?.allowCrossSessionSend !== false && token) {
+      // 跨会话：默认关闭。开启后两个方向分别受开关控制：
+      //   allowAnySessionToOwner —— 任何会话都可以给管理员发私聊；
+      //   allowOwnerToWhitelist  —— 管理员私聊发起的调用可以发给任意白名单目标。
+      // 两者都要求 token 是某个活跃会话的真实 agent 令牌，且目标在白名单内。
+      if (cfg.socialV2?.allowCrossSessionSend === true && token) {
         const ownerId = String(cfg.ownerQQ ?? '').trim();
-        if (ownerId) {
-          const parsed = parseTargetKey(String(canonical ?? key));
-          if (parsed
-            && parsed.kind === 'private'
+        const callerKey = ownerId ? agentTokenSessionKey(token) : null;
+        const parsed = parseTargetKey(String(canonical ?? key));
+        if (ownerId && callerKey && parsed) {
+          const targetKey = `${parsed.kind}:${parsed.id}`;
+          const ownerKey = `private:${ownerId}`;
+          const toOwner = parsed.kind === 'private'
             && String(parsed.id) === ownerId
-            && isLiveAgentToken(token)) {
-            return true;
-          }
-          const callerKey = agentTokenSessionKey(token);
-          if (callerKey
-            && callerKey === `private:${ownerId}`
-            && parsed
-            && allowed(parsed.kind, Number(parsed.id), cfg)) {
+            && callerKey !== ownerKey
+            && cfg.socialV2?.allowAnySessionToOwner !== false;
+          const fromOwner = callerKey === ownerKey
+            && targetKey !== ownerKey
+            && allowed(parsed.kind, Number(parsed.id), cfg)
+            && cfg.socialV2?.allowOwnerToWhitelist !== false;
+          if (toOwner || fromOwner) {
+            if (!crossSessionRateOk(callerKey)) {
+              log(`[cross-session] 限频拒绝：${callerKey} -> ${targetKey}（crossSessionSendPerHour）`);
+              return false;
+            }
+            appendActivity(`[跨会话发送] ${callerKey} -> ${targetKey}`);
+            log(`[cross-session] 放行 ${callerKey} -> ${targetKey}`);
             return true;
           }
         }
@@ -5327,6 +5363,11 @@ async function main() {
             return;
           }
           if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          // 跨会话发送：正文首条前注明来源会话（owner 侧能分辨是哪个群发来的）。
+          {
+            const crossPrefix = crossSessionPrefix(key, req.headers['x-agent-token']);
+            if (crossPrefix && messages.length) messages[0] = crossPrefix + messages[0];
+          }
           if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
           if (req.headers['x-agent-token'] && !v2ToolEnabled('sendBurst')) { sendJson({ ok: false, error: '工具未启用：qq_send_burst' }, 403); return; }
           if (currentMode !== 'reserved2') {
@@ -5456,6 +5497,11 @@ async function main() {
             return;
           }
           if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          // 跨会话发送：首条消息前注明来源会话。
+          {
+            const crossPrefix = crossSessionPrefix(key, req.headers['x-agent-token']);
+            if (crossPrefix && messages.length) messages[0] = crossPrefix + messages[0];
+          }
           if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
           if (req.headers['x-agent-token'] && !v2ToolEnabled('sendMessage')) { sendJson({ ok: false, error: '工具未启用：qq_send_message' }, 403); return; }
           if (currentMode !== 'reserved2') { sendJson({ ok: false, error: '该接口仅 reserved2 模式可用' }, 403); return; }
@@ -7200,7 +7246,7 @@ async function main() {
           const isPrivate = url.pathname === '/api/send/private';
           const isReply = url.pathname === '/api/send/reply';
           const targetId = isPrivate ? String(body.userId ?? '').trim() : String(body.groupId ?? '').trim();
-          const message = unquoteJsonString(String(body.message ?? '').trim());
+          let message = unquoteJsonString(String(body.message ?? '').trim());
           // 引用 id 与端点无关：/api/send/reply 与另两个端点都允许带（是否真的引用由下游按 id 判断）。
           // 旧写法 `isReply ? body.replyToMessageId : body.replyToMessageId` 两个分支一模一样，
           // 保留 isReply 变量只是为了下面的端点语义判断，别再让人以为这里有过分支逻辑。
@@ -7227,6 +7273,11 @@ async function main() {
           if (token && !agentTokenOk(key, token)) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
           const flag = isPrivate ? 'sendPrivate' : (isReply ? 'reply' : 'sendGroup');
           if (token && !v2ToolEnabled(flag)) { sendJson({ ok: false, error: `工具未启用：${flag}` }, 403); return; }
+          // 跨会话发送：正文前注明来源会话（owner 侧能分辨是哪个群发来的）。
+          if (token) {
+            const crossPrefix = crossSessionPrefix(key, token);
+            if (crossPrefix) message = crossPrefix + message;
+          }
           if (shouldBlockSilentReply(key)) {
             sendJson({ ok: false, error: '静默模式已开启，当前不允许发送' }, 403);
             return;

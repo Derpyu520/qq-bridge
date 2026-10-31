@@ -109,6 +109,10 @@
   },
   "socialV2": {
     "enabled": true,
+    "allowCrossSessionSend": false,
+    "allowAnySessionToOwner": true,
+    "allowOwnerToWhitelist": true,
+    "crossSessionSendPerHour": 20,
     "autoReplyCheckMs": 30000,
     "agentPreset": "qq-chat-v2",
     "provideRecommendations": true,

@@ -33,6 +33,8 @@ const tests = [
   'test-media-search.mjs',
   // GitHub issue 回归：#22 模式 user 层优先 / #11/#19 回合判忙租约 / #29 机器人身份注入。
   'test-issue-regressions.mjs',
+  // 跨会话令牌（默认关闭）：总开关 + 两个方向独立开关 + 按来源会话限频 + 正文注明来源。
+  'test-cross-session-token.mjs',
   // 二代「会话初始提示词」：只在首次唤醒注入、管理面隔离、损坏文件只读降级、
   // 以及控制台「立即唤醒」不得顶掉首次 bootstrap（否则初始提示词永远发不出去）。
   'test-v2-initial-prompt.mjs',
