@@ -10,6 +10,7 @@ const tests = [
   // 网络、DSH 探测、跨会话资料与发送队列的边界回归。
   'test-audit-network-boundaries.mjs', 'test-audit-dsh-endpoints.mjs',
   'test-audit-runtime-boundaries.mjs', 'test-audit-session-boundaries.mjs',
+  'test-code-scanning-boundaries.mjs',
   // 未关闭 GitHub issues 的确认修复与既有修复证明。
   'test-issue-followup-bridge.mjs', 'test-issue-followup-mcp.mjs', 'test-issue-followup-runtime.mjs',
   'test-audit-setup.mjs', 'test-audit-setup-guards.mjs',

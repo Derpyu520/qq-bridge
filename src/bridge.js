@@ -1270,7 +1270,13 @@ function log(...args) {
   try { console.log(line); } catch {}
   appendBridgeLog(`${line}\n`);
 }
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// 配置文件、旧状态和控制台输入都可能带来极大值或非有限数。
+// Node 会把溢出的 setTimeout 延迟改成 1ms；周期检查因此可能退化成忙循环。
+function boundedTimerDelay(value, fallback = 0, min = 0, max = 86400000) {
+  const n = Number(value);
+  return Math.min(max, Math.max(min, Math.round(Number.isFinite(n) ? n : fallback)));
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, boundedTimerDelay(ms)));
 const convKey = (kind, id) => `${kind}:${id}`;
 const SEND_TIMEOUT_MS = 15000;
 // DSH 控制类调用（停任务/归档会话）的超时。这些 await 以前是裸的：DSH 接受了连接但
@@ -1777,16 +1783,23 @@ async function main() {
    * 只**检查**不占额度：额度在真正发出去之后才由 voiceBudgetCommit 记账 ——
    * 这样参数错、被审计拦截、网关失败都不会白白吃掉配额（否则连失败几次就被假 429 卡住）。
    */
+  class VoiceRateLimitError extends Error {
+    constructor(message) {
+      super(message);
+      this.statusCode = 429;
+    }
+  }
+
   function voiceBudgetCheck(scopeKey, cfgV) {
     const now = Date.now();
     const bucket = voiceSendTimes.get(scopeKey) ?? [];
     const inMinute = bucket.filter((t) => now - t < 60000);
     const inHour = bucket.filter((t) => now - t < 3600000);
     if (cfgV.maxPerMinute > 0 && inMinute.length + 1 > cfgV.maxPerMinute) {
-      throw new Error(`语音发送频率超限（每分钟最多 ${cfgV.maxPerMinute} 条），请稍后再试`);
+      throw new VoiceRateLimitError(`语音发送频率超限（每分钟最多 ${cfgV.maxPerMinute} 条），请稍后再试`);
     }
     if (cfgV.maxPerHour > 0 && inHour.length + 1 > cfgV.maxPerHour) {
-      throw new Error(`语音发送频率超限（每小时最多 ${cfgV.maxPerHour} 条），请稍后再试`);
+      throw new VoiceRateLimitError(`语音发送频率超限（每小时最多 ${cfgV.maxPerHour} 条），请稍后再试`);
     }
   }
 
@@ -3372,7 +3385,15 @@ async function main() {
         'X-Content-Type-Options': 'nosniff',
         'Referrer-Policy': 'no-referrer'
       };
-      const sendJson = (obj, status = 200) => {
+      const sendJson = (obj, status = 200, { safeError = false } = {}) => {
+        // 内部异常只写本机日志；上游错误和文件系统错误可能含路径、响应体或堆栈。
+        if (status >= 500 && obj?.ok === false && !safeError) {
+          log(`控制台请求失败 ${req.method} ${url.pathname}:`, obj.error);
+          obj = {
+            ok: false, error: '操作失败，请查看本机 state/bridge.log 排查。',
+            ...(obj.status ? { status: obj.status } : {})
+          };
+        }
         res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...SECURITY_HEADERS });
         res.end(JSON.stringify(obj, null, 2));
       };
@@ -3597,7 +3618,7 @@ async function main() {
               || url.pathname === '/api/socialV2/collect-sticker')) ? '表情库'
               : '';
           if (readonlyStore) {
-            sendJson({ ok: false, error: `${readonlyStore}处于只读降级状态（启动时加载失败，未覆盖原文件），本次修改不会落盘；请修复 state/ 下的对应文件后重启桥接` }, 503);
+            sendJson({ ok: false, error: `${readonlyStore}处于只读降级状态（启动时加载失败，未覆盖原文件），本次修改不会落盘；请修复 state/ 下的对应文件后重启桥接` }, 503, { safeError: true });
             return;
           }
         }
@@ -4544,7 +4565,7 @@ async function main() {
             return;
           }
           if (!dshReady) {
-            sendJson({ ok: false, error: 'DSH 当前不可用，请稍后再试' }, 503);
+            sendJson({ ok: false, error: 'DSH 当前不可用，请稍后再试' }, 503, { safeError: true });
             return;
           }
           const isV2 = currentMode === 'reserved2';
@@ -4617,10 +4638,19 @@ async function main() {
           const current = fileV2 ?? ((cfg.socialV2 && typeof cfg.socialV2 === 'object') ? cfg.socialV2 : {});
           const merged = { ...current, ...body };
           // 子对象必须是非 null 对象；null/数组/基本类型会覆盖默认值导致工具开关被绕过，这里直接保留当前值。
-          for (const sub of ['tools', 'wake', 'send', 'wait', 'proactive', 'sticker', 'feedback', 'context']) {
+          for (const sub of ['tools', 'wake', 'send', 'wait', 'proactive', 'sticker', 'feedback', 'context', 'voice']) {
             if (body[sub] !== undefined && (body[sub] === null || typeof body[sub] !== 'object' || Array.isArray(body[sub]))) {
               merged[sub] = current[sub] ?? {};
             }
+          }
+          // 可执行文件位置只接受本机配置/环境变量，HTTP 配置接口不能更换运行的程序。
+          if (body.voice && typeof body.voice === 'object' && !Array.isArray(body.voice)) {
+            if (Object.prototype.hasOwnProperty.call(body.voice, 'ffmpegPath')) {
+              sendJson({ ok: false, error: 'ffmpegPath 只能在本机 config.json 或 FFMPEG_PATH 中配置' }, 400);
+              return;
+            }
+            const currentVoice = cfg.socialV2?.voice ?? {};
+            merged.voice = { ...currentVoice, ...body.voice, ffmpegPath: currentVoice.ffmpegPath ?? '' };
           }
           if (merged.autoReplyCheckMs !== undefined) {
             const n = Number(merged.autoReplyCheckMs);
@@ -5876,6 +5906,10 @@ async function main() {
               loudness: sent.loudness
             });
           } catch (error) {
+            if (error instanceof VoiceRateLimitError) {
+              sendJson({ ok: false, error: error.message }, 429);
+              return;
+            }
             sendJson({ ok: false, error: error?.message ?? String(error) }, 500);
           }
           return;
@@ -5942,6 +5976,10 @@ async function main() {
             });
           } catch (error) {
             // 额度只在真正发出后才记账（voiceBudgetCommit），所以失败路径无需回滚。
+            if (error instanceof VoiceRateLimitError) {
+              sendJson({ ok: false, error: error.message }, 429);
+              return;
+            }
             sendJson({ ok: false, error: error?.message ?? String(error) }, 500);
           }
           return;
@@ -6751,7 +6789,7 @@ async function main() {
                 nestedPreviews.push({ id: fid, ...nfmt });
               } catch (error) {
                 log(`嵌套转发预览失败 ${key} ${fid}:`, error?.message ?? error);
-                nestedPreviews.push({ id: fid, error: error?.message ?? '嵌套转发读取失败' });
+                nestedPreviews.push({ id: fid, error: '嵌套转发读取失败' });
               }
             }
             // 把本层出现的媒体登记为「本会话确实见过」，供 qq_get_forward_media 取图。
@@ -9640,7 +9678,9 @@ async function main() {
   }
 
   function scheduleSocialReply(key, promptText, minDelay, maxDelay, label, farewell = false, media = null) {
-    const delay = randInt(minDelay, maxDelay);
+    const delay = boundedTimerDelay(randInt(
+      boundedTimerDelay(minDelay, 2000), boundedTimerDelay(maxDelay, 8000)
+    ), 2000);
     log(`社交模式：${label} ${key}，延迟 ${Math.round(delay / 1000)}s 后投递`);
     const timer = setTimeout(() => {
       const timers = social.pendingTimers.get(key);
@@ -11051,12 +11091,13 @@ async function main() {
     const st = getSocialV2State(key);
     // 已有真实唤醒/有限睡眠/回复检查在排队时不再重复安排，避免 AI 被连环唤醒。
     if (st.pendingWakeTimer || st.sleepTimer || st.replyCheckTimer) return;
-    let delay = Math.max(1000, Number(cfg.socialV2?.autoReplyCheckMs) || 30000);
+    let delay = boundedTimerDelay(Number(cfg.socialV2?.autoReplyCheckMs) || 30000, 30000, 1000);
     const recent = Array.isArray(st.recentMessages) ? st.recentMessages : [];
     const recentSelf = recent.filter((m) => m && m.isSelf && Date.now() - Number(m.time || 0) < 15000);
     const askedQuestion = recentSelf.some((m) => /[?？吗呢怎么有没有能不能]/.test(String(m.text || m.plain || '')));
     if (askedQuestion) delay = Math.round(delay * 1.5);
     if (recentSelf.length >= 3) delay = Math.round(delay * 1.3);
+    delay = boundedTimerDelay(delay, 30000, 1000);
     st.replyCheckTimer = setTimeout(() => {
       st.replyCheckTimer = null;
       void sendWakePromptV2(key, 'replyCheck').catch((error) => log(`[reserved2] replyCheck 唤醒异常 ${key}:`, error?.message ?? error));
@@ -11168,7 +11209,7 @@ async function main() {
       st.sleepTimer = null;
     }
     st.pendingWakeReason = reason;
-    const batchMs = Math.max(1000, Number(st.wakeConfig?.batchWindowMs) || 8000);
+    const batchMs = boundedTimerDelay(Number(st.wakeConfig?.batchWindowMs) || 8000, 8000, 1000, 3600000);
     st.pendingWakeTimer = setTimeout(() => {
       st.pendingWakeTimer = null;
       const finalReason = st.pendingWakeReason || reason;
@@ -11277,9 +11318,9 @@ async function main() {
     const st = getSocialV2State(key);
     if (st.proactiveTimer) return;
     const p = cfg.socialV2?.proactive ?? {};
-    const min = Math.max(60 * 1000, Number(p.checkIntervalMinMs) || 30 * 60 * 1000);
-    const max = Math.max(min, Number(p.checkIntervalMaxMs) || 90 * 60 * 1000);
-    const delay = Math.floor(min + Math.random() * (max - min));
+    const min = boundedTimerDelay(Number(p.checkIntervalMinMs) || 1800000, 1800000, 60000);
+    const max = boundedTimerDelay(Number(p.checkIntervalMaxMs) || 5400000, 5400000, min);
+    const delay = boundedTimerDelay(Math.floor(min + Math.random() * (max - min)), min, 60000);
     st.proactiveTimer = setTimeout(() => {
       st.proactiveTimer = null;
       ensureWakeableV2(st, { key });

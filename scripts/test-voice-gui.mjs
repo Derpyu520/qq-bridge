@@ -102,7 +102,7 @@ if (!hasVoiceTool()) {
   ok(/x-voice-token/.test(html), '前端带令牌请求头');
   ok(/sessionStorage/.test(html), '令牌存 sessionStorage（刷新不丢、关页即清）');
   ok(!/https?:\/\/(?!127\.0\.0\.1)/.test(html.replace(/127\.0\.0\.1:\d+/g, '')), '前端无外部网络依赖');
-  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/gi)].map((m) => m[1]);
   try { new Function(scripts[0]); ok(true, '前端 JS 可解析'); }
   catch (e) { ok(false, '前端 JS 可解析', e.message); }
 }
@@ -215,7 +215,7 @@ if (process.env.QQ_BRIDGE_TEST_LIVE === '1') {
     ok(token.length > 10, '拿到一次性令牌');
 
     const noAuth = await fetch(`http://127.0.0.1:${port}/api/library`).then((r) => r.status).catch(() => 0);
-    ok(noAuth === 401, '无令牌访问接口 → 401', `HTTP ${noAuth}`);
+    ok(noAuth === 401, '无令牌访问接口 → 401');
 
     const boot = await fetch(`http://127.0.0.1:${port}/api/bootstrap`, { headers: { 'x-voice-token': token } })
       .then((r) => r.json()).catch((e) => ({ error: e.message }));
