@@ -1,5 +1,5 @@
-// restart.bat 的本实例识别回归：只允许停止「锁 PID 已验证为 node + bridge.js」的进程；
-// 绝不按全机进程名兜底。纯函数测试，不启动/结束任何真实进程。
+// restart.bat 的本实例识别回归：锁 PID 必须是入口属于本仓库的 node + src/bridge.js；
+// 其他仓库的同名脚本与守护窗口不得结束。纯函数测试，不启动/结束任何真实进程。
 import assert from 'node:assert/strict';
 import {
   isBridgeCommandLine,
@@ -68,6 +68,40 @@ test('锁 PID 验证通过但父进程不是守护窗口 → 只停止 node 本�
   assert.equal(plan.action, 'stop');
   assert.equal(plan.guardPid, null);
   assert.equal(plan.killPid, 100);
+});
+
+test('父进程是其他仓库的 start.bat → 不把该守护窗口算入进程树', () => {
+  const plan = planStop({
+    root: 'C:\\repo',
+    port: 3100, lockPid: 100, listenerPid: 100,
+    processes: [
+      proc(50, 'cmd.exe', 'cmd /c C:\\other\\start.bat'),
+      proc(100, 'node.exe', 'node C:\\repo\\src\\bridge.js', 50)
+    ]
+  });
+  assert.equal(plan.action, 'stop');
+  assert.equal(plan.guardPid, null);
+  assert.equal(plan.killPid, 100);
+});
+
+test('锁 PID 与端口属于其他仓库的 bridge.js → 拒绝结束进程树', () => {
+  const plan = planStop({
+    root: 'C:\\repo',
+    port: 3100, lockPid: 100, listenerPid: 100,
+    processes: [
+      proc(50, 'cmd.exe', 'cmd /c C:\\other\\start.bat'),
+      proc(100, 'node.exe', 'node C:\\other\\bridge.js', 50)
+    ]
+  });
+  assert.equal(plan.action, 'abort');
+  assert.equal(plan.bridgePid, undefined);
+});
+
+test('bridge 入口必须解析到当前仓库，其他仓库的同名脚本不算本实例', () => {
+  assert.equal(isBridgeProcess(proc(10, 'node.exe', 'node src/bridge.js'), 'C:\\repo'), true);
+  assert.equal(isBridgeProcess(proc(10, 'node.exe', 'node C:\\repo\\src\\bridge.js'), 'C:\\repo'), true);
+  assert.equal(isBridgeProcess(proc(10, 'node.exe', 'node C:\\other\\bridge.js'), 'C:\\repo'), false);
+  assert.equal(isBridgeProcess(proc(10, 'node.exe', 'node C:\\repo-other\\src\\bridge.js'), 'C:\\repo'), false);
 });
 
 test('锁 PID 是别的程序（PID 被回收）→ 只清理锁，不杀进程', () => {

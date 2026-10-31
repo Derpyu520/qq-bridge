@@ -8698,7 +8698,7 @@ async function main() {
     return roleState.mode === 'silent' && key !== `private:${String(cfg.ownerQQ ?? '')}`;
   }
 
-  async function reportTurnFailure(key, kind, error) {
+  async function reportTurnFailure(key, kind, error, notify = true) {
     if (kind === 'error') {
       const detail = redactSensitiveText(redactKnownTokensOnly(String(error?.message ?? error ?? '未知错误'))).slice(0, 500);
       log(`⚠️ agent 处理出错 (${key})：${detail}`);
@@ -8707,7 +8707,7 @@ async function main() {
       log(`⏹️ 回合被中止 (${key})`);
     }
     // 二代内部回合不自动转发；其他模式只发固定提示，原始 provider 错误留在管理端。
-    if (currentMode === 'reserved2' || shouldBlockSilentReply(key)) return false;
+    if (!notify || currentMode === 'reserved2' || shouldBlockSilentReply(key)) return false;
     const now = Date.now();
     if (now - (turnNoticeTimes.get(key) ?? 0) < 5 * 60 * 1000) return false;
     turnNoticeTimes.set(key, now);
@@ -9918,7 +9918,7 @@ async function main() {
       if (opts.farewell) social.exitingSessions.delete(sessionId);
       const errText = `${accepted.result.error.code}: ${accepted.result.error.message}`;
       const safeErrText = shouldAuditKey(key) && SENSITIVE_RE.test(errText) ? '（含敏感信息，已隐藏）' : errText;
-      if (!opts.silent) await sendToQQ(key, `⚠️ 消息未被接受：${safeErrText}`);
+      await reportTurnFailure(key, 'error', { message: errText }, !opts.silent);
       return { ok: false, error: safeErrText };
     }
     if (wakeSnapshot && isCurrentSession(key, sessionId)

@@ -6,7 +6,7 @@
 // PID 也没有验证是不是本项目的 node 进程。
 //
 // 本脚本的所有权证据只有两种：
-//   ① `state/bridge.lock` 里的 PID —— 该进程必须确实是 node + bridge.js；
+//   ① `state/bridge.lock` 里的 PID —— 该进程必须是 node，且入口解析到本仓库 src/bridge.js；
 //   ② 控制台端口（config.json 的 consolePort）的监听者 —— 必须与 ① 是同一个 PID。
 // 任何一条对不上就**拒绝结束**并返回非零，而不是“猜一个最像的进程杀掉”。
 //
@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 
 const DEFAULT_CONSOLE_PORT = 3100;
 const THIS_FILE = fileURLToPath(import.meta.url);
+const DEFAULT_ROOT = path.dirname(path.dirname(THIS_FILE));
 
 /** 粗粒度拆分 Windows 命令行（只用于判断 node 的脚本入口，不追求完整 CRT 语义）。 */
 function commandTokens(commandLine) {
@@ -25,27 +26,40 @@ function commandTokens(commandLine) {
     .map((token) => token.replace(/^"|"$/g, ''));
 }
 
-/** 命令行里是否真的以 bridge.js 作为 node 的脚本入口（排除把 bridge.js 当参数/数据的情况）。 */
-export function isBridgeCommandLine(commandLine) {
+function nodeScript(commandLine) {
   const tokens = commandTokens(commandLine);
   // tokens[0] 是 node 可执行文件；选项（--inspect 等）之后第一个非选项参数才是脚本。
-  const script = tokens.slice(1).find((token) => !token.startsWith('-'));
-  return !!script && /(^|[\\/])bridge\.js$/i.test(script);
+  return tokens.slice(1).find((token) => !token.startsWith('-')) ?? '';
 }
 
-export function isBridgeProcess(proc) {
+function samePath(left, right) {
+  return path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
+}
+
+/** 命令行里是否真的以 bridge.js 作为 node 的脚本入口（排除把 bridge.js 当参数/数据的情况）。 */
+export function isBridgeCommandLine(commandLine) {
+  return /(^|[\\/])bridge\.js$/i.test(nodeScript(commandLine));
+}
+
+export function isBridgeProcess(proc, root = DEFAULT_ROOT) {
   if (!proc) return false;
   const name = String(proc.name ?? '').toLowerCase();
-  return (name === 'node.exe' || name === 'node') && isBridgeCommandLine(proc.commandLine);
+  if (name !== 'node.exe' && name !== 'node') return false;
+  const script = nodeScript(proc.commandLine);
+  if (!/(^|[\\/])bridge\.js$/i.test(script)) return false;
+  return samePath(path.resolve(root, script), path.join(root, 'src', 'bridge.js'));
 }
 
-/** 守护窗口：cmd.exe 跑着本项目的 start.bat（restart.bat 自己不算）。 */
-export function isGuardProcess(proc) {
+/** 守护窗口：cmd.exe 跑着 start.bat；传入 root 时还必须是本项目的启动器。 */
+export function isGuardProcess(proc, root) {
   if (!proc) return false;
   const name = String(proc.name ?? '').toLowerCase();
   if (name !== 'cmd.exe' && name !== 'cmd') return false;
   const cmd = String(proc.commandLine ?? '');
-  return /(^|[\s"'\\/])start\.bat(?=$|[\s"'])/i.test(cmd) && !/restart\.bat/i.test(cmd);
+  if (/restart\.bat/i.test(cmd)) return false;
+  const script = commandTokens(cmd).find((token) => /(^|[\\/])start\.bat$/i.test(token));
+  if (!script) return false;
+  return !root || samePath(path.resolve(root, script), path.join(root, 'start.bat'));
 }
 
 /**
@@ -53,14 +67,15 @@ export function isGuardProcess(proc) {
  *
  * @param {object} input
  * @param {number} input.port 控制台端口
+ * @param {string} input.root 当前仓库根目录
  * @param {number|null} input.lockPid state/bridge.lock 里的 PID（空/非法为 null）
  * @param {Array<{pid:number,parentPid:number,name:string,commandLine:string}>} input.processes
  * @param {number|null} input.listenerPid 控制台端口的 LISTENING PID
  * @returns {{action:'none'|'cleanup'|'stop'|'abort', reason:string, ...}}
  */
-export function planStop({ port, lockPid = null, processes = [], listenerPid = null }) {
+export function planStop({ port, root = DEFAULT_ROOT, lockPid = null, processes = [], listenerPid = null }) {
   const lockProcess = lockPid == null ? null : processes.find((p) => p && p.pid === lockPid) ?? null;
-  const verified = isBridgeProcess(lockProcess);
+  const verified = isBridgeProcess(lockProcess, root);
 
   // 端口是最强的“这里确实有一个实例”的证据。只要它不是锁里那个已验证的 PID，
   // 就说明要么是本项目实例但锁已丢失（无法证明归属），要么端口被别的程序占了 —— 两种都不该杀。
@@ -74,7 +89,7 @@ export function planStop({ port, lockPid = null, processes = [], listenerPid = n
 
   if (verified) {
     const parent = processes.find((p) => p && p.pid === lockProcess.parentPid) ?? null;
-    const guard = isGuardProcess(parent) ? parent : null;
+    const guard = isGuardProcess(parent, root) ? parent : null;
     return {
       action: 'stop',
       reason: guard
@@ -253,7 +268,7 @@ async function main() {
     return 1;
   }
 
-  const plan = planStop({ port, lockPid, processes, listenerPid });
+  const plan = planStop({ port, root, lockPid, processes, listenerPid });
   printPlan(plan);
 
   if (dryRun) {

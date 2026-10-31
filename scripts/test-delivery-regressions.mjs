@@ -1,8 +1,9 @@
 // 交付链路回归（真实 bridge 源码在内存 VM 里跑，不发真实 QQ/DSH）：
 //   1) 普通聊天的「图片 + 文本」必须按到达顺序提交 —— 图片解析慢时不能被纯文本超车；
-//   2) 断线期间完成的回复要从重连快照补发，并且按 turn 去重（重复快照/重连不重发）；
-//   3) 已由 MCP 发送工具发出的回合、静默/空回复/中止回合不得补发；
-//   4) reserved2 不参与补发（其文本由 AI 自己用工具发送）。
+//   2) prompt 拒绝不外发原始错误，reserved2 不自动通知，其他模式固定提示并节流；
+//   3) 断线期间完成的回复要从重连快照补发，并且按 turn 去重（重复快照/重连不重发）；
+//   4) 已由 MCP 发送工具发出的回合、静默/空回复/中止回合不得补发；
+//   5) reserved2 不参与补发（其文本由 AI 自己用工具发送）。
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -104,6 +105,28 @@ await test('普通聊天改走 promptQueues 后仍按原语义发送 ack', async
     }, h.cfg);
     assert.equal(h.calls.prompts.length, 1, '消息应照常提交');
     assert.deepEqual(h.calls.sent.map((m) => m.text), ['已收到'], 'ack 仍应在提交成功后发送');
+  } finally { await h.close(); }
+});
+
+await test('#104 prompt 拒绝不外发原始错误：reserved2 保持私密，其他模式固定提示并节流', async () => {
+  const h = await bridgeHarness({ config: { sendDelayMs: 0 } });
+  try {
+    attachSession(h);
+    const raw = '503 {"gateway_hint":"private-account-pool-detail"}';
+    h.api.sessions.prompt = async () => ({
+      result: { ok: false, error: { code: 'UPSTREAM_ERROR', message: raw } }
+    });
+
+    h.setMode('reserved2');
+    const rejected = await h.deliverPrompt(KEY, 'fixture');
+    assert.equal(rejected.ok, false);
+    assert.equal(h.calls.sent.length, 0, 'reserved2 不得自动外发 prompt 拒绝详情');
+
+    h.setMode('chat');
+    await h.deliverPrompt(KEY, 'fixture');
+    await h.deliverPrompt(KEY, 'fixture');
+    assert.deepEqual(h.calls.sent.map((m) => m.text), ['⚠️ 暂时无法处理消息，请稍后再试。']);
+    assert.ok(!h.calls.sent.some((m) => m.text.includes('private-account-pool-detail')));
   } finally { await h.close(); }
 });
 
