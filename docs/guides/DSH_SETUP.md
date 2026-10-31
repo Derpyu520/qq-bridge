@@ -54,7 +54,7 @@
 
    - `snowluma.wsUrl` / `httpUrl`（例如 `ws://127.0.0.1:3001` / `http://127.0.0.1:3000`，分别对应 OneBot WebSocket 与 HTTP API 端口）
    - `snowluma.accessToken`
-   - `dsh.authToken`（新版 DSH 的 launch token，用于换取 Cookie；默认留空，桥接会自动从 DSH guard 日志发现，DSH 重启后也会自动重新发现）
+   - `dsh.authToken`（通常留空：桥接使用本机 DSH 持久化签名密钥生成会话 Cookie；不再从 guard 日志发现 launch token）
    - `ownerQQ`
    - `allow.private` / `allow.groups`
 
