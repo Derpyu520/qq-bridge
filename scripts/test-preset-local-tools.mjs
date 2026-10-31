@@ -103,6 +103,10 @@ const OPTIONAL_BUNDLE_TOOLS = new Set(['subagent_codex', 'subagent_claude_code']
  * 现在只保留一条实现，两边不可能再漂移。
  */
 function collectDshToolNames() {
+  if (process.env.QQ_BRIDGE_TEST_LIVE === '0') {
+    console.log('  ⏭  离线套件不枚举实机 DSH 工具包；升级后请单独运行 npm run scan:tool-names');
+    return null;
+  }
   let shared;
   try {
     shared = collectDshToolNamesShared();
@@ -249,8 +253,13 @@ test('守卫仍放行 QQ MCP 命名空间与无害模型侧工具', async () => 
     mod.apply({ tools: fakeTools });
 
     for (const prefix of EXPECTED_SAFE_PREFIXES) {
+      const execution = { name: `${prefix}some_tool` };
+      if (prefix === 'mcp__snowluma__') {
+        execution.agent = { id: 'qqb-g-1' };
+        execution.arguments = { key: 'group:1' };
+      }
       assert.equal(
-        fakeTools._guard({ name: `${prefix}some_tool` }), undefined,
+        fakeTools._guard(execution), undefined,
         `${id}: MCP 前缀 ${prefix} 应放行`,
       );
     }

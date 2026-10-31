@@ -1,5 +1,9 @@
 # QQ ↔ DeepSeek Harness Bridge (qq-bridge)
 
+> **DSH 0.1.2–0.1.4 cannot use the current presets**: their persona schema requires `text`, while current presets use `prefix`. Upgrade to a verified version listed below; sharing the slash RPC protocol does not imply preset compatibility. See the [installation guide](docs/guides/DSH_SETUP.md#兼容范围) for historical versions.
+
+`dsh.autoDiscoverPort` defaults to `true`; set it to `false` to keep a fixed DSH endpoint. `ignore.sendQQ` (alias `ignore.senders`) accepts sender IDs to exclude from chat context, slang learning and wakeups; it never excludes the configured owner. Restart the bridge after changing these settings.
+
 > Connect QQ messages to DeepSeek Harness (DSH) agents: QQ friends/groups become DSH conversations, and agent replies (including questions and tool approvals) are sent back to QQ.
 
 > ⚠️ **Current release `v0.2.1-r1`, targets DSH 0.2.1-rc.2** (also compatible with 0.2.0-rc.2; verified item by item on both — run `npm run verify:adaptation`). It uses the persistent local signing key to **mint the session Cookie offline**, slash RPC endpoints and the `/api/remote.mux` event stream — a protocol generation introduced in DSH `0.1.2-alpha.1`, incompatible with the older dot-endpoint protocol. Reading the launch token out of the old guard logs has not worked since DSH 0.1.7 (the token is generated per process and never written to disk). Agent presets are `@deepseek-ai/dsh-agent-preset` Cordis rows since DSH 0.1.7 (the `~/.dsh/.agent-presets/` directory mechanism is gone). On **DSH `0.1.1-rc.2` or earlier**, use tag [`v0.1.0`](https://github.com/Derpyu520/qq-bridge/releases/tag/v0.1.0); for **DSH 0.1.5-rc.1** use [`v0.1.5`](https://github.com/Derpyu520/qq-bridge/releases/tag/v0.1.5); for **DSH 0.1.7-rc.2** use [`v0.1.7`](https://github.com/Derpyu520/qq-bridge/releases/tag/v0.1.7).
@@ -8,7 +12,8 @@
 >
 > **v0.2.1-r1 highlights**: DSH 0.2.1-rc.2 adaptation. Fixes a **P0** — the `{{cwd}}` prompt variable used by both QQ presets was removed in DSH 0.2.1, so *every* turn failed during system-prompt assembly before the model ran (QQ showed it as "no reply at all"). Also adds the newly global `working_directory` tool plus the terminal / session-query / plugin-market families to the safety guard. Details: [docs/guides/DSH_021_ADAPTATION.md](docs/guides/DSH_021_ADAPTATION.md).
 >
-> The default branch `main` **is** this version — a plain `git clone` gets it, no branch switching needed.
+> The default branch `main` is the **official release** — a plain `git clone` gets it, no branch switching needed.
+> `dev` is the **testing line**: continuously updated and normally **ahead of** `main`; switch to it if you want the latest changes (stability not guaranteed).
 
 For the detailed Chinese guide, see **docs/guides/PROJECT_GUIDE.md** (local-only, not published in this repository).
 The documentation index (one line per doc, with "still current?" notes) is **[docs/README.md](docs/README.md)**;

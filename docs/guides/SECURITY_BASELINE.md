@@ -42,6 +42,7 @@
 | 预设 fail-closed | `resolvePresetName()` + `ensureSession()` | 群聊/仿真会话拿不到受限预设时**拒绝建会话**，绝不回退到含本地工具的 DSH 默认预设；只有 `closed-agent`（管理员私聊）允许回退 |
 | 发送强制白名单 | 所有 `/api/send/*`、`/api/socialV2/send-*` | 目标必须命中 `allow.groups` / `allow.private`（每次都重新校验，不做缓存） |
 | 动态 ACL | `resolveVoicePathForV2()` / `voicePathInsideLibrary()` | 语音只能取语音库目录内的文件；贴纸只能发收藏库内的表情；图片只能读 SnowLuma home 内的本地文件（realpath 复核防符号链接逃逸） |
+| 工具参数 | MCP 注册与执行期会话守卫 | 未知键严格拒绝；支持的别名须显式声明、无冲突并归一化，目标别名同样接受可信会话绑定检查 |
 | **只探测、不部署**（L6 设计不变量） | `mcp-host-server.js` | 该 MCP server **只提供 `snowluma_status`（只读探活 `get_login_info`）**。⚠️ **v0.1.5 起删除了 `start_snowluma` / `stop_snowluma` 与 `snowluma.allowProcessControl`**：SnowLuma EULA §5.4 规定「将其并入第三方安装包或 Docker 镜像、**通过自动化脚本部署**」须事先书面授权，原生组件属**专有组件**。⇒ 本程序不安装、不复制、不打包、不程序化启停 SnowLuma；用户自行安装与启动。详见 `NOTICE.md` 与 `QSH-plan/QSH_PLAN.md` §6.0 |
 
 ### 3. 出站内容（模型能说什么、能发什么）
@@ -54,6 +55,14 @@
 | @ 限制 | `onebotSend()` | `atUserId` 只接受正整数，禁止 `@all` |
 | 发送限流 | `socialV2.send.*` / `voice.*` / `sticker.collect.*` | 每分钟/每小时硬上限，超限拒绝并退避 |
 | TTS 合成调用 | `tts-core.js` / `socialV2.tts.*` | 默认关闭，工具独立开关；跨入口共享外部请求额度与有界串行队列，失败仍占额。发送额度在合成前检查、发送前复核；进程重启会清零，收费服务仍需服务侧费用上限 |
+| 回合错误通知 | `reportTurnFailure()` | 二代错误只保留本地诊断；其他模式只发通用提示并节流，不把上游异常正文直接送到 QQ |
+| 排队期间撤权 | `captureSendGuard()` | AI 文本、语音、表情和拍一拍在异步准备前捕获权限，并在实际发送前重查会话、模式、白名单、暂停与静默状态 |
+
+黑话按「内容 + 会话 scope」分别保存；查询、提示词、提交和研究回写都按归属过滤。
+无法识别/写错的归属一律隔离（`invalid:` 前缀，任何会话都不可见），不退回 `global`；只有缺失归属的旧条目按 `global` 兼容。
+研究按 scope 分批，切换 scope 时退役旧学习会话，避免模型上下文混入其他群的资料。
+贴纸本身和 QQ 收藏描述仍属于账号共享资料；AI 备注、标签、用途在返回 API 结果和搜索前按 scope 净化，
+切换备注归属时清空未被本次覆盖的旧私有字段。旧版本已经丢失归属的数据见下表 R12。
 
 ### 4. 控制台（本机最高权限入口）
 
@@ -76,9 +85,11 @@
 | --- | --- | --- |
 | 原子写 | `atomicWriteJson/Text()` | 唯一随机临时名 + rename（Windows EPERM 退避重试），不会写坏配置 |
 | Windows ACL 收紧 | `hardenStateDirAcl()` + `scripts/harden-state-acl.mjs` | Windows 上 `mode: 0o600` 是**空操作**，因此启动时切断 `state/` 的继承链，只保留当前用户/SYSTEM/Administrators。改 ACL 需要 WRITE_DAC —— **目录属主通常本来就有，所以一般不弹 UAC**；失败时用 `Start-Process -Verb RunAs` 提权重试一次（`--elevated` 短路自身，杜绝递归），再失败就打印可复制命令并**以 0 退出、绝不阻断启动**。控制台「访问与安全」页显示告警条与「重新检测」按钮 |
-| 令牌不回显 | 日志/活动/工具日志 | 控制台令牌只打前 6 位；活动日志与工具调用参数过 `redactSensitiveText` / `redactSensitive`（递归处理 JSON 字符串叶子） |
+| ACL 防自锁 | `src/state-acl.mjs` | 先为现有条目显式授权，再断继承，最后移除宽松主体；命令失败即停止，每步回读验证，空 DACL 不作为成功 |
+| 令牌不回显 | 日志/活动/工具日志 | 控制台及连接自愈日志只记已配置/已生成，不打印令牌前后缀；活动日志与工具调用参数过 `redactSensitiveText` / `redactSensitive`（递归处理 JSON 字符串叶子） |
 | TTS 服务凭据 | `socialV2.tts.apiKeyEnv` | 配置只存环境变量名，运行时读取 Bearer 密钥，不写盘；拒绝含凭据的服务 URL，不跟随重定向，服务错误正文不回传模型。持久化与服务侧权限由部署者管理 |
 | 令牌只发回环 | `dsh-client.ensureAuth()` | DSH launch token 换 Cookie 时必须放进 URL，因此**默认拒绝非回环 baseUrl**；远程部署需显式 `dsh.allowRemote: true` |
+| 自动探测与重定向 | `dsh-endpoint.js` / `dsh-client.js` | 自动发现只为回环地址铸造本机 Cookie；拒绝 URL 内嵌凭据；探测不跟随重定向并关闭响应体，RPC 拒绝重定向，避免转交聊天主体 |
 | 路径校验（读点） | `roleRawContent()` 等 | 人格名在**读取点**也做 `sanitizeRoleName` + `path.resolve` 包含性校验（`state/current-role.json` 是用户可直接编辑的文件） |
 | 原型污染 | 记忆写入/加载 | `__proto__` / `constructor` / `prototype` 键在写入与加载两侧都被拒绝；配置合并用对象展开（不触发 setter） |
 
@@ -126,6 +137,10 @@ DSH 的 Windows 文件沙箱按**能力 SID** 授权：SID 由 `sha256(规范化
 - 每一跳重定向都重新校验，最多 5 跳，重定向响应体立即销毁
 - 响应体大小与图片像素上限；图片按 magic number 校验
 - 不读取任何代理环境变量（不存在 `HTTP_PROXY` 绕过）
+- 拒绝 Azure WireServer 等特殊云平台地址；`web_fetch` 与媒体抓取统一只允许 80/443/8080/8443 端口
+
+联网搜索不把上游 HTTP 错误主体传给模型；成功结果中的已知 API key 在字段截断前精确脱敏，
+避免兼容端点回显凭据。此措施不改变响应协议字段，也不取代凭据和目标地址校验。
 
 ---
 
@@ -135,7 +150,7 @@ DSH 的 Windows 文件沙箱按**能力 SID** 授权：SID 由 `sha256(规范化
 | --- | --- | --- | --- |
 | R1 | **敏感信息审计是启发式的** | 能抓"带赋值关系的凭据"和本机路径；抓不到任意形态的秘密 | 通用秘密检测无法在没有密钥的情况下做对；硬边界在白名单与工具面，审计是兜底 |
 | R2 | **`state/` 里的令牌是明文** | Windows 已用 ACL 收紧；Linux 用 `0700` | 引入凭据库/DPAPI 会显著提高部署门槛，列为 QSH 里程碑 M2 的候选（口令派生已规划） |
-| R3 | **贴纸备注跨会话共享** | 只有注入路径做了加固，未做会话隔离 | 单一账号的贴纸库本就是全局的；多群互害场景很少 |
+| R3 | **贴纸账号库仍共享，AI 备注仅保留一个归属版本** | 私有认知已在 API、搜索和注入路径按 scope 隔离；其他会话更新认知会替换旧归属并清空旧私有字段 | QQ 收藏本来是全局资源；每会话多版本备注属于后续存储设计 |
 | R4 | **远程停止不是原子的** | `session/control` + `updateQueue` + `cancel` 是尽力而为，已执行的工具副作用无法回滚 | DSH 协议没有事务语义 |
 | R5 | **离线队列不保证送达** | 每会话最多 50 条，进程退出即丢 | 一致性代价过高；README 已写明 |
 | R6 | **预设不变量检查是子串存在性** | 防误删，不防恶意 | 能改这个文件的人本来就是管理员，真正的硬边界在工具守卫与白名单 |
@@ -144,13 +159,15 @@ DSH 的 Windows 文件沙箱按**能力 SID** 授权：SID 由 `sha256(规范化
 | R9 | **`state/` 的 ACL 收紧可能失败**（未提权且目录属主权限被策略收走时） | `scripts/harden-state-acl.mjs` 会自动提权重试一次；仍失败则明确告警 + 给出可复制命令 + 控制台告警条 | 改 ACL 属于需要特权的操作；**降级为"明确告警"而不是"阻断启动"**是刻意的取舍（否则用户会为了能启动而关掉整条安全链路）。QSH M2 会用口令派生 + HttpOnly Cookie 把最敏感的控制台凭据从明文落盘里拿掉 |
 | R10 | **收紧 `state/` 后，DSH 沙箱会话写不进 `state/`**（见 §2.6） | 有意取舍，非缺陷；诊断见 `npm run diagnose:acl` | 两者不可兼得：能力 SID 只能靠继承下发，而切断继承正是防"本机其他用户读令牌"的唯一手段。**代价已被接受并写进文档**，项目自己的测试夹具/探针据此改用系统临时目录 |
 | R11 | **`plugins/**` 内容被意外切断继承，沙箱里改不动 L7 守卫** | 来源不明（本仓库无此脚本）；`npm run diagnose:acl` 会列出并打印恢复命令 | 该处不含凭据，恢复继承无泄密风险；但若不恢复，被沙箱约束的 DSH agent 就无法维护工具守卫 —— 需要人工在无沙箱终端改 |
+| R12 | **旧版本 AI 黑话可能已错误标成 `global`，或混入多群证据** | 新写入与所有读取路径已按 scope 隔离，但现有 `global` 条目继续按全局语义可见；升级后需管理员复核、删除或重新指定归属 | 错误保存时已丢失可靠归属，无法自动区分有意共享与历史污染，也不能可靠拆分混合解释 |
 
 ---
 
 ## 四、发布前必须跑的检查（回归清单）
 
 ```bash
-npm run test:audit          # 30 个离线回归脚本（含安全专项），必须全绿
+npm run test:audit          # 离线回归脚本（含安全专项），必须全绿
+npm audit --omit=dev --audit-level=high # CI 阻止已知高危和严重依赖漏洞
 npm run verify:adaptation   # DSH 适配一致性（preset/工具守卫/MCP 挂载/活 DSH 实测）
 npm run verify:persona      # 人格配置一致性
 npm run diagnose:acl        # ACL 收紧路径盘点（只读；需在**无沙箱**终端跑，见 §2.6）

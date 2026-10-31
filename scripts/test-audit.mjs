@@ -7,6 +7,11 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const tests = [
   'test-audit-bridge.mjs', 'test-audit-protocol.mjs', 'test-audit-protocol-helpers.mjs',
   'test-audit-security.mjs', 'test-audit-security-mcp.mjs',
+  // 网络、DSH 探测、跨会话资料与发送队列的边界回归。
+  'test-audit-network-boundaries.mjs', 'test-audit-dsh-endpoints.mjs',
+  'test-audit-runtime-boundaries.mjs', 'test-audit-session-boundaries.mjs',
+  // 未关闭 GitHub issues 的确认修复与既有修复证明。
+  'test-issue-followup-bridge.mjs', 'test-issue-followup-mcp.mjs', 'test-issue-followup-runtime.mjs',
   'test-audit-setup.mjs', 'test-audit-setup-guards.mjs',
   // DSH 会话队列（inbox 投影）解析：0.2.0 把队列从 control baseline 的
   // `value.queues[<id>]` 挪进了 `value.projections[<id>].values.inbox`。
@@ -70,6 +75,11 @@ const tests = [
   //   · 静默检测不得冒充 hook 检测（心跳是 SnowLuma 本地定时器无条件发的）；
   //   · 客户端库版本不得低于 bot_status 出现的版本。
   'test-snowluma-upstream-health.mjs',
+  // 已有离线安全/协议测试也纳入持续回归，避免仅在手工运行时发现退化。
+  'test-agent-preset-patches.mjs', 'test-tool-restrict-guard.mjs', 'test-tool-surface.mjs',
+  'test-media-normalize.mjs', 'test-stickers.mjs', 'test-forward.mjs',
+  'test-v2-wait.mjs', 'test-time-awareness.mjs', 'test-wait-backlog.mjs',
+  '../src/core/session-router.test.mjs',
 ];
 let failed = 0;
 for (const test of tests) {

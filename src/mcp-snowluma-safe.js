@@ -384,8 +384,58 @@ const TOOL_CONFIG_FLAGS = {
   qq_set_sticker_remark: 'setStickerRemark',
 };
 const disabledTools = [];
+// 别名必须同时出现在 schema 与规范化入口中，否则 Zod 会先把它丢弃。
+// 只兼容已有的等价参数，不把消息里的空格解释成分条。
+const TOOL_ARGUMENT_ALIASES = {
+  qq_send_message: { key: ['target'], messages: ['message', 'text', 'content'] },
+  qq_get_message_detail: { key: ['target'] }
+};
+
+function foldArgumentAliases(args, aliases, required = new Set()) {
+  const next = { ...args };
+  for (const [canonical, alternatives] of Object.entries(aliases)) {
+    const supplied = [canonical, ...alternatives].filter((field) => args[field] !== undefined);
+    if (!supplied.length) {
+      if (required.has(canonical)) throw new Error(`缺少参数 ${canonical}（也可使用 ${alternatives.join('/')}）`);
+      continue;
+    }
+    const comparable = (value) => canonical === 'key' ? (canonicalKey(value) || String(value)) : JSON.stringify(value);
+    if (supplied.some((field) => comparable(args[field]) !== comparable(args[supplied[0]]))) {
+      throw new Error(`参数 ${canonical} 与其别名 ${alternatives.join('/')} 冲突，请只传一种写法`);
+    }
+    next[canonical] = canonical === 'key' ? (canonicalKey(args[supplied[0]]) || args[supplied[0]]) : args[supplied[0]];
+    for (const field of alternatives) delete next[field];
+  }
+  return next;
+}
+
+function normalizeWakeArguments(config) {
+  const next = { ...config };
+  if (next.mode !== undefined) {
+    const mode = String(next.mode).trim().toLowerCase();
+    if (['diving', 'silent', 'quiet', 'sleep', 'normal', '潜水', '安静', '正常'].includes(mode)) next.mode = 'diving';
+    else if (['active', 'chat', 'talking', '活跃'].includes(mode)) next.mode = 'active';
+    else throw new Error('mode 无效：请使用 diving（潜水/安静）或 active（活跃）');
+  }
+  if (next.triggers) {
+    const triggers = { ...next.triggers };
+    for (const field of ['keywords', 'keyword']) {
+      if (triggers[field] === undefined) continue;
+      if (typeof triggers[field] === 'boolean') {
+        throw new Error('keyword/keywords 需要关键词字符串或数组；不能用布尔值开启，保留原关键词时请省略该字段');
+      }
+      triggers[field] = (Array.isArray(triggers[field]) ? triggers[field] : triggers[field].split(/[,，、\s]+/))
+        .map((value) => String(value).trim()).filter(Boolean);
+    }
+    next.triggers = foldArgumentAliases(triggers, {
+      atMention: ['at'], nameMention: ['name'], keywords: ['keyword'], probability: ['prob']
+    });
+  }
+  return next;
+}
+
 {
-  const registerTool = server.tool.bind(server);
+  const registerTool = server.registerTool.bind(server);
   server.tool = (name, ...rest) => {
     const flag = TOOL_CONFIG_FLAGS[name];
     if (flag && cfg.socialV2?.tools?.[flag] === false) {
@@ -402,18 +452,28 @@ const disabledTools = [];
     // 「该不该校验」等于让攻击者自己选考卷。
     const schema = rest.length >= 2 ? rest[rest.length - 2] : undefined;
     const handler = rest[rest.length - 1];
-    if (schema && typeof schema === 'object' && Object.prototype.hasOwnProperty.call(schema, 'key')
-        && typeof handler === 'function') {
-      const guarded = async (args, ...tail) => {
-        const denial = selfKeyGuard(args?.key);
+    const shape = { ...schema };
+    const aliases = TOOL_ARGUMENT_ALIASES[name] || {};
+    const required = new Set();
+    for (const [canonical, alternatives] of Object.entries(aliases)) {
+      if (!schema[canonical].isOptional()) required.add(canonical);
+      shape[canonical] = schema[canonical].optional();
+      for (const alias of alternatives) shape[alias] = schema[canonical].optional().describe(`${canonical} 的别名；请只使用一种写法`);
+    }
+    const guarded = async (args, ...tail) => {
+      let canonicalArgs;
+      try { canonicalArgs = foldArgumentAliases(args, aliases, required); }
+      catch (error) { return { content: [{ type: 'text', text: `参数错误：${error.message}` }], isError: true }; }
+      if (Object.prototype.hasOwnProperty.call(schema, 'key')) {
+        const denial = selfKeyGuard(canonicalArgs?.key);
         if (denial) {
           return { content: [{ type: 'text', text: denial }], isError: true };
         }
-        return handler(args, ...tail);
-      };
-      rest[rest.length - 1] = guarded;
-    }
-    return registerTool(name, ...rest);
+      }
+      return handler(canonicalArgs, ...tail);
+    };
+    // 旧 tool(rawShape) 的默认策略是 strip；改用公开注册接口保留 strict，未知键明确失败。
+    return registerTool(name, { description: rest[0], inputSchema: z.object(shape).strict() }, guarded);
   };
 }
 
@@ -716,7 +776,7 @@ server.tool(
     token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
     throughSeq: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional().describe('可同时确认已读：使用已查看结果中的 readThroughSeq，省去额外 qq_mark_read；不传则只设置唤醒配置。若 markRead 工具被关闭，该水位会被忽略，本工具只设置唤醒配置'),
     config: z.object({
-      mode: z.enum(['diving', 'active']).optional().describe('diving=潜水，active=活跃（anyMessage 开启）'),
+      mode: z.string().optional().describe('diving=潜水，active=活跃；兼容 silent/quiet/sleep/normal/潜水/安静/正常 表示 diving'),
       infinite: z.boolean().optional().describe('true=无限期，只有条件命中才唤醒；false=有限时间'),
       sleepMs: z.number().optional().describe('有限潜水毫秒数（从当前时间起算）'),
       sleepUntil: z.string().optional().describe('有限潜水截止时间 ISO 字符串，优先级高于 sleepMs'),
@@ -724,18 +784,23 @@ server.tool(
         atMention: z.boolean().optional().describe('被 @ 或引用自己时唤醒'),
         nameMention: z.boolean().optional().describe('被叫名字/昵称时唤醒'),
         speakerIds: z.array(z.union([z.number(), z.string()])).max(20).optional().describe('指定群友 QQ 号数组：这些群友中任意一位发言时唤醒（可选，最多 20 个，不设置则不启用；私聊不适用，设置会被桥接清除；可从 qq_get_active_members / qq_get_group_members / qq_get_message_detail 的 userId/user_id 获取）'),
-        keywords: z.array(z.string()).optional().describe('出现任意关键词时唤醒'),
+        keywords: z.union([z.array(z.union([z.string(), z.number()])), z.string()]).optional().describe('出现任意关键词时唤醒；可传数组或逗号/顿号/空白分隔的字符串'),
         question: z.boolean().optional().describe('被直接提问/点名挑战时唤醒'),
         poke: z.boolean().optional().describe('有人拍一拍时唤醒（群聊包括拍你和拍别人，私聊为对方拍你）'),
         anyMessage: z.boolean().optional().describe('任意新消息都唤醒（活跃模式）'),
-        probability: z.number().optional().describe('普通消息按该概率随机唤醒（0~1）')
-      }).optional(),
+        probability: z.number().optional().describe('普通消息按该概率随机唤醒（0~1）'),
+        at: z.boolean().optional().describe('atMention 的别名'),
+        name: z.boolean().optional().describe('nameMention 的别名'),
+        keyword: z.union([z.array(z.union([z.string(), z.number()])), z.string(), z.boolean()]).optional().describe('keywords 的别名，需要具体关键词；布尔值会明确拒绝'),
+        prob: z.number().optional().describe('probability 的别名')
+      }).strict().optional(),
       batchWindowMs: z.number().optional().describe('多条消息合并唤醒窗口（毫秒，>=1000）')
-    }).describe('要设置的唤醒配置，缺省字段保留原值')
+    }).strict().describe('要设置的唤醒配置，缺省字段保留原值；未知字段会明确报错')
   },
   async ({ key, token, config, throughSeq }) => {
     try {
-      const data = await agentApi('/api/socialV2/wake-config', { method: 'POST', body: JSON.stringify({ key, config, throughSeq }), headers: { 'x-agent-token': token } });
+      const canonicalConfig = normalizeWakeArguments(config);
+      const data = await agentApi('/api/socialV2/wake-config', { method: 'POST', body: JSON.stringify({ key, config: canonicalConfig, throughSeq }), headers: { 'x-agent-token': token } });
       return { content: [{ type: 'text', text: serializeModelData(data) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `设置唤醒配置失败：${error?.message ?? error}` }], isError: true };

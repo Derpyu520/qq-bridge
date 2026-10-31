@@ -2,7 +2,8 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # main = 正式发布线，dev = 测试/开发线（日常提交落在这里，必须同样跑 CI）
+    branches: [main, dev]
   pull_request:
   workflow_dispatch:
 
@@ -77,6 +78,20 @@ jobs:
             console.log("许可证声明一致");
           '
 
+  privacy:
+    name: 隐私扫描（工作树）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      # 只扫将要提交的内容，不扫历史（历史检查需要完整 clone，见 PRIVACY.md）。
+      - name: privacy-scan --tracked-only
+        run: node scripts/privacy-scan.mjs --tracked-only
+
   audit:
     name: 离线回归（test:audit）
     runs-on: windows-latest
@@ -92,6 +107,9 @@ jobs:
       # 跳过它 test-snowluma-upstream-health.mjs 必然失败（上游包的 ESM 打包问题）。
       - name: npm ci
         run: npm ci
+
+      - name: 依赖漏洞检查（阻止高危和严重漏洞）
+        run: npm audit --omit=dev --audit-level=high
 
       - name: npm run test:audit
         run: npm run test:audit

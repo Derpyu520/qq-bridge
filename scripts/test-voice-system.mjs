@@ -134,7 +134,9 @@ console.log('## qq-bridge 语音系统：路由与开关');
   const nextAgentRoute = opTail.search(/if \(req.method === 'POST' && url.pathname === '\/api\/socialV2\//);
   const opSection = opTail.slice(0, nextAgentRoute < 0 ? undefined : nextAgentRoute);
   ok(!/if \(!voice\.enabled\)/.test(opSection), '操作者通道不被 voice.enabled 挡住（默认关闭时仍可手动试发）');
-  const agentSection = bridge.slice(bridge.indexOf("url.pathname === '/api/socialV2/send-voice'"), bridge.indexOf("'/api/socialV2/send-sticker'"));
+  const agentStart = bridge.indexOf("url.pathname === '/api/socialV2/send-voice'");
+  // 搜索后续路由，避免更早出现的媒体路径白名单让切片变成空字符串。
+  const agentSection = bridge.slice(agentStart, bridge.indexOf("url.pathname === '/api/socialV2/send-sticker'", agentStart));
   ok(/if \(!voice\.enabled\)/.test(agentSection), 'AI 通道受 voice.enabled 挡住');
 }
 

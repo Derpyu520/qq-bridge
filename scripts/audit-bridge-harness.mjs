@@ -25,6 +25,7 @@ import * as tts from '../src/tts-core.js';
 import * as presetPrompt from '../src/preset-prompt.js';
 import * as roleCard from '../src/role-card.js';
 import * as stateAcl from '../src/state-acl.mjs';
+import { persistSnowLumaEndpoint, persistToken } from '../src/snowluma-conn.js';
 import { unwrap, createTurnCollector } from '../src/dsh-client.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -44,7 +45,7 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, typeof content === 'string' ? content : JSON.stringify(content));
   }
-  const calls = { created: [], archived: [], sent: [], prompts: [], follows: [], cancelled: [], images: [], faces: [], http: [], responded: [] };
+  const calls = { created: [], archived: [], sent: [], prompts: [], follows: [], forgotten: [], cancelled: [], images: [], faces: [], http: [], responded: [] };
   // 语音发送在桥接里是**直接 fetch 网关**（与文本/表情共用 sendChain，但要自己带 record 段），
   // 所以这里给 VM 注入一个记录型 fetch：既不让测试真的发 QQ 消息，又能断言发出的段内容。
   const fakeFetch = async (url, init = {}) => {
@@ -82,7 +83,7 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
   };
   const success = (value) => ({ result: { ok: true, value } });
   const api = {
-    events: { follow: (id) => calls.follows.push(id) },
+    events: { follow: (id) => calls.follows.push(id), forget: (id) => calls.forgotten.push(id) },
     // settings.describe 的默认桩：没有 qq-mode 命名空间 ⇒ refreshMode() 回退到本地 mode.json。
     // 测试可覆盖它来验证「DSH 设置里的空 ownerQQ 不得覆盖 config.json」等契约。
     settings: {
@@ -151,7 +152,18 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
   const setStickerEntries = (next) => { stickerEntries = Array.isArray(next) ? next : []; };
   const getStickerEntries = () => stickerEntries;
   return {
-    syncInstalledPreset, installedPresetYaml, ensureSession, ensureSlangLearnerSession, resolvePresetName, deliverPrompt, drainPromptQueue,
+    syncInstalledPreset, installedPresetYaml, ensureSession, ensureSlangLearnerSession, runSlangResearch, resolvePresetName, deliverPrompt, drainPromptQueue,
+    applyHealedTokens, reportTurnFailure, recordVoiceSentV2, rediscoverDshBase,
+    getSlangEntries: () => slangEntries,
+    completeLearnerTurn(sessionId, output) {
+      const waiters = learnerWaiters.get(sessionId) ?? [];
+      const waiter = waiters.shift();
+      if (!waiter) return false;
+      if (!waiters.length) learnerWaiters.delete(sessionId);
+      clearTimeout(waiter.timer);
+      waiter.resolve(output);
+      return true;
+    },
     sendToQQ, sendBurstToQQ, sendMessagesV2, sendStickerV2, handleIncoming, handleRecallNotice, handlePokeNotice, handlePendingAnswer, pending, startConsoleServer, cfg, state, api, promptQueues, forwardMediaRefs, rememberForwardMedia, forwardMediaKey, setStickerEntries, getStickerEntries,
     getSocialV2State, appendSocialV2Message, recordSentMessagesV2,
     buildWakePromptV2, buildWakeSnapshotV2, sendWakePromptV2, socialV2,
@@ -197,7 +209,7 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     // DSH 端点自愈（#63）只在探活失败时调用；夹具里给一个桩，避免测试真的去扫本机端口。
     // 需要验证自愈逻辑的用例可以用 globals 覆盖它。
     discoverDshBaseUrl: async () => null,
-    resolveInstalledPreset, synchronizePreset, renderPatch,
+    resolveInstalledPreset, synchronizePreset, renderPatch, persistSnowLumaEndpoint, persistToken,
     ...markdown, ...sensitive, ...wait, ...safeFetch, ...forward, ...slang, ...sticker,
     ...modelPrices, ...tokenLedger, ...voiceLib, ...tts, ...stateAcl, ...presetPrompt, ...roleCard,
     // 桥接的出图出口会调归一化（体积/动图抽帧）：VM 里必须能拿到这几个函数。
