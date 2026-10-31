@@ -83,6 +83,8 @@ const tests = [
   'test-media-normalize.mjs', 'test-stickers.mjs', 'test-forward.mjs',
   'test-v2-wait.mjs', 'test-time-awareness.mjs', 'test-wait-backlog.mjs',
   '../src/core/session-router.test.mjs',
+  // QQ 空间工具：读默认开 / 写默认关，写面四道串联闸门（注册期、运行期、令牌↔会话、正文上限）。
+  'test-qzone-tools.mjs',
 ];
 let failed = 0;
 for (const test of tests) {

@@ -43,6 +43,7 @@
 | 发送强制白名单 | 所有 `/api/send/*`、`/api/socialV2/send-*` | 目标必须命中 `allow.groups` / `allow.private`（每次都重新校验，不做缓存） |
 | 动态 ACL | `resolveVoicePathForV2()` / `voicePathInsideLibrary()` | 语音只能取语音库目录内的文件；贴纸只能发收藏库内的表情；图片只能读 SnowLuma home 内的本地文件（realpath 复核防符号链接逃逸） |
 | 工具参数 | MCP 注册与执行期会话守卫 | 未知键严格拒绝；支持的别名须显式声明、无冲突并归一化，目标别名同样接受可信会话绑定检查 |
+| **QQ 空间写面**（提示注入的高危面） | `mcp-snowluma-safe.js` 的 `qzoneWriteOff()` / `qzoneWriteDenied()` / `qzoneTextDenied()` + `bridge.js` 的 `GET /api/qzone/write-allowed` | 空间动作不属于任何会话上下文，因此**没有** #89 那道令牌↔会话绑定；写面靠四道串联闸门补上：① 注册期 `socialV2.tools.qzoneWrite === true` 才注册四个写工具（默认 false）；② 执行期每次调用重读配置，关掉即拒；③ 调用方必须带二代会话令牌，桥接校验令牌命中活跃会话且 `key === private:<ownerQQ>`（判定在桥接侧，因为 `ownerQQ` 对 agent 流量是隐藏字段；拒绝原因**不含** ownerQQ）；④ 正文按码点计长 ≤1000 且拒绝空白。任何一处异常都按拒绝处理（fail closed） |
 | **只探测、不部署**（L6 设计不变量） | `mcp-host-server.js` | 该 MCP server **只提供 `snowluma_status`（只读探活 `get_login_info`）**。⚠️ **v0.1.5 起删除了 `start_snowluma` / `stop_snowluma` 与 `snowluma.allowProcessControl`**：SnowLuma EULA §5.4 规定「将其并入第三方安装包或 Docker 镜像、**通过自动化脚本部署**」须事先书面授权，原生组件属**专有组件**。⇒ 本程序不安装、不复制、不打包、不程序化启停 SnowLuma；用户自行安装与启动。详见 `NOTICE.md` 与 `QSH-plan/QSH_PLAN.md` §6.0 |
 
 ### 3. 出站内容（模型能说什么、能发什么）
@@ -192,6 +193,7 @@ node --check src/bridge.js  # 语法门禁（大文件改动后必跑）
 - [x] SSRF：scheme、URL 凭据、私有 IP、重定向、超时、大小限制（11 项）
 - [x] 桥接 `200 + {ok:false}` 会被 MCP 当作失败上报（不产生静默假成功）
 - [x] 旧只读工具在非 `closed-agent` 模式下 fail-closed
+- [x] QQ 空间写面：默认不注册、运行期关掉即拒、非管理员会话/无令牌/令牌不被认可一律拒绝且不触 OneBot、正文码点上限与空白拒绝（`scripts/test-qzone-tools.mjs` 14 项）
 - [x] `state/` ACL 助手：非阻断、防递归、`start.bat` 纯 ASCII+CRLF 且先于桥接调用（**结构级断言**）
 - [ ] **`state/` ACL 的真实 icacls/UAC 行为**：需在普通终端手动复跑 `node scripts/harden-state-acl.mjs` 确认（沙箱/CI 里改 ACL 会被拒，无法自动化）
 
