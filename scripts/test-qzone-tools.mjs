@@ -35,8 +35,17 @@ function loadQzoneTools({ config, allowed = false, tokenAccepted = true }) {
     .replace(/^import .*;\r?\n/gm, '')
     .replace('const __dirname = path.dirname(fileURLToPath(import.meta.url));', "const __dirname = '/fixture/src';")
     .replace('await server.connect(new StdioServerTransport());', 'server.connect(new StdioServerTransport());');
+  // dev 基线把统一点改成了 registerTool(name, {description, inputSchema}, handler)：
+  // 注册在 server.tool 上包了一层（配置开关 + 参数别名 + SELF_KEY 会话绑定）。
+  // 假 server 必须同时提供两者，否则那层包装在 `server.registerTool.bind` 处就炸。
   class McpServer {
-    constructor() { this.tool = (name, description, schema, callback) => tools.set(name, { schema, callback }); }
+    constructor() {
+      this.registerTool = (name, options, callback) => {
+        tools.set(name, { schema: options?.inputSchema ?? options, callback });
+        return { name };
+      };
+      this.tool = this.registerTool;
+    }
     connect() {}
   }
   const fixtureFs = {
@@ -87,7 +96,9 @@ function loadQzoneTools({ config, allowed = false, tokenAccepted = true }) {
     call: async (name, args = {}) => {
       const tool = tools.get(name);
       assert.ok(tool, `tool ${name} should be registered`);
-      return tool.callback(z.object(tool.schema).parse(args));
+      const schema = tool.schema;
+      const parsed = schema && schema._zod ? schema.parse(args) : z.object(schema ?? {}).parse(args);
+      return tool.callback(parsed);
     },
   };
 }
