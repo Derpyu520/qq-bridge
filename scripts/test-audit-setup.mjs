@@ -48,6 +48,47 @@ function test(name, fn) {
 }
 
 try {
+  test('explicitly skipped dependency installation is not reported as fully installed', () => {
+    const f = fixture('install-skipped');
+    const result = f.run();
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Configuration prepared\. Dependency installation skipped/);
+    assert.match(result.stdout, /dsh plugin --profile "web" install/);
+    assert.doesNotMatch(result.stdout, /Done\. Restart DSH/);
+  });
+
+  if (process.platform === 'win32') {
+    test('failed dependency install preserves configuration and prints a recovery command', () => {
+      const f = fixture('install-failed');
+      const bin = path.join(f.repo, 'bin');
+      fs.mkdirSync(bin);
+      fs.writeFileSync(path.join(bin, 'dsh.cmd'), '@echo off\r\nexit /b 17\r\n');
+      const result = f.run('web', {
+        PATH: [bin, path.dirname(process.execPath)].join(path.delimiter),
+        QQ_BRIDGE_SKIP_DSH_INSTALL: '0',
+      });
+      assert.equal(result.status, 0, 'optional dependency installation remains non-blocking');
+      assert.match(result.stdout, /Configuration prepared\. Dependency installation incomplete/);
+      assert.match(result.stdout, /exit code 17/);
+      assert.match(result.stdout, /dsh plugin --profile "web" install/);
+      assert.doesNotMatch(result.stdout, /Done\. Restart DSH/);
+      assert.match(fs.readFileSync(f.patchFile, 'utf8'), /mcp-snowluma/);
+    });
+
+    test('failure to launch the CLI produces an incomplete summary', () => {
+      const f = fixture('install-launch-error');
+      const result = f.run('web', {
+        QQ_BRIDGE_SKIP_DSH_INSTALL: '0',
+        [Object.keys(process.env).find((key) => key.toLowerCase() === 'comspec') || 'ComSpec']: path.join(f.repo, 'missing-shell.exe'),
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /Configuration prepared\. Dependency installation incomplete/);
+      assert.match(result.stdout, /ENOENT/);
+      assert.match(result.stdout, /dsh plugin --profile "web" install/);
+      assert.doesNotMatch(result.stdout, /Done\. Restart DSH/);
+    });
+  }
+
   test('shared inserts, quoted IDs, flow YAML and unrelated nested arrays survive repeat setup', () => {
     const source = `# user patch\n- insert:\n    - id: mcp-snowluma\n      name: old\n    - id: custom\n      name: custom-plugin\n      config:\n        empty:\n          []\n        nested:\n          - id: mcp-snowluma-host\n            value: keep\n- insert:\n    - id: 'mcp-snowluma-host' # previous setup\n      name: old\n- {insert: [{id: mcp-web-search-safe, name: old}]}\n`;
     const f = fixture('structured', source);
@@ -123,6 +164,8 @@ try {
     assert.equal(result.status, 0, result.stderr);
     assert.ok(fs.existsSync(capture), `CLI was not invoked: ${result.stdout}`);
     assert.deepEqual(JSON.parse(fs.readFileSync(capture)), { args: ['plugin', '--profile', profile, 'install'], home: f.home });
+    assert.match(result.stdout, /Done\. Restart DSH/);
+    assert.doesNotMatch(result.stdout, /Dependency installation (skipped|incomplete)/);
   });
 } finally {
   // Resolve the exact fixture root before removing this test's temporary files.

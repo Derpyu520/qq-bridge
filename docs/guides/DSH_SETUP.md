@@ -74,6 +74,7 @@
    > 也可用环境变量指定 DSH 根目录：`DSH_HOME=/path/to/.dsh node scripts/setup-dsh.mjs <profile>`。
    > `<profile>` 必须是单个目录名，不能包含路径分隔符或 `..` 路径跳转。离线准备配置时，可设置 `QQ_BRIDGE_SKIP_DSH_INSTALL=1` 跳过自动安装 bundle，随后手动运行 `dsh plugin --profile <profile> install`。
    > Windows 下脚本通过隐藏的 `cmd.exe` 调用 npm 的 `dsh.cmd` 启动器；`DSH_HOME` 和 profile 参数会传给该进程。
+   > 最终提示区分配置准备与依赖安装：只有依赖命令成功时才提示 `Done. Restart DSH`；主动跳过时显示 `Dependency installation skipped`，启动失败、超时或非零退出时显示 `Dependency installation incomplete`，并给出手动安装命令。后两者仍保留已准备的配置，且不会因此以非零退出；请完成依赖安装后再重启或重新加载 DSH。
 
 5. **重启 DSH**：
 
