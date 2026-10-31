@@ -85,6 +85,12 @@ import fs from 'node:fs';
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
   assert.equal(pkg.license, 'PolyForm-Noncommercial-1.0.0',
     'package.json 的 license 必须是本仓库实际使用的许可（PolyForm Noncommercial 1.0.0，见 NOTICE.md）');
+  // 随仓库分发的子包也不能各自声明 MIT（曾与根清单冲突，见 NOTICE.md §1.3）。
+  for (const rel of ['plugins/qq-agent-presets/package.json', 'plugins/qq-mode-console/package.json']) {
+    const sub = JSON.parse(fs.readFileSync(path.join(root, rel), 'utf8'));
+    assert.equal(sub.license, 'PolyForm-Noncommercial-1.0.0',
+      `${rel} 的 license 必须与根清单一致（PolyForm Noncommercial 1.0.0）`);
+  }
   console.log('L6 compliance: no SnowLuma process control, no allowProcessControl, license declared');
 }
 

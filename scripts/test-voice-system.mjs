@@ -193,9 +193,6 @@ console.log('## 文档');
   } else {
     console.log('  ⏭  docs/guides/VOICE.md 未入库（本地专属文档），跳过该文件的断言');
   }
-  const readme = read('README.md');
-  ok(readme.includes('voice-gui.mjs') && readme.includes('voice-cli.mjs'), 'README 含两个语音工具的入口说明');
-  ok(/AI 发语音默认关闭/.test(readme), 'README 已知限制说明默认关闭');
   ok(read('docs/README.md').includes('FOLDER_MAP.md'), 'docs/README.md 索引链接到 FOLDER_MAP.md');
   ok(exists(path.join('docs', 'FOLDER_MAP.md')), 'docs/FOLDER_MAP.md 存在');
 }

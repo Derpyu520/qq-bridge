@@ -654,7 +654,8 @@ await test('R2 send-burst 失败路径不再抛 ReferenceError，并回滚发送
         method: 'POST', token: st.agentToken, body: { key: 'group:456', messages: ['a', 'b'] }
       });
       assert.equal(res.status, 500, '发送失败应回 500');
-      assert.match(String(res.json?.error ?? ''), /gateway down|OneBot/i, `错误信息应可读，实际：${res.body}`);
+      assert.equal(res.json?.error, '操作失败，请查看本机 state/bridge.log 排查。');
+      assert.match(fs.readFileSync(path.join(h.temp, 'state/bridge.log'), 'utf8'), /gateway down|OneBot/i, '网关详情应仅保留在本机日志');
       assert.ok(!/st is not defined/.test(String(res.json?.error ?? '')), '不得泄露作用域错误');
     });
     assert.equal(st.sendTimes.length, before, '失败后预占的发送额度必须回滚（否则接下来一分钟被假 429）');
@@ -933,7 +934,8 @@ await test('R15 /api/send/* 失败路径不抛作用域错误，并回滚发送�
       });
       assert.equal(res.status, 500, `发送失败应回 500，实际 ${res.status} ${res.body}`);
       const err = String(res.json?.error ?? '');
-      assert.match(err, /gateway down|OneBot/i, `错误信息应是网关原因，实际：${res.body}`);
+      assert.equal(err, '操作失败，请查看本机 state/bridge.log 排查。');
+      assert.match(fs.readFileSync(path.join(h.temp, 'state/bridge.log'), 'utf8'), /gateway down|OneBot/i, '网关详情应仅保留在本机日志');
       assert.ok(!/is not defined/.test(err), '不得把作用域错误当成给模型的错误信息');
     });
     assert.equal(st.sendTimes.length, before, '失败后预占的发送额度必须回滚（否则接下来一分钟被假 429）');

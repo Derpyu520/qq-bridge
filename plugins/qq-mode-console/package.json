@@ -4,7 +4,7 @@
   "description": "QQ bridge mode console for DeepSeek Harness settings UI (chat / closed-agent / reserved / reserved2)",
   "type": "module",
   "main": "./lib/index.js",
-  "license": "MIT",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

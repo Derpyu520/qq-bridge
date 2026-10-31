@@ -64,6 +64,11 @@
 贴纸本身和 QQ 收藏描述仍属于账号共享资料；AI 备注、标签、用途在返回 API 结果和搜索前按 scope 净化，
 切换备注归属时清空未被本次覆盖的旧私有字段。旧版本已经丢失归属的数据见下表 R12。
 
+`socialV2.privacy.exposeUserId` 是**局部开关**，不是全局脱敏：设为 `false` 时只隐藏
+`/api/socialV2/active-members` 返回给 agent 的 `userId` / `isOwner`；`group-members`
+（按设计需要 `userId` 才能用 `atUserId` 点名）、`message-detail` 以及普通消息/工具返回
+仍会带 `userId`。如果目标是「模型完全看不到 QQ 号」，需要另行改造这些出口，不能只依赖该开关。
+
 ### 4. 控制台（本机最高权限入口）
 
 | 机制 | 位置 | 行为 |
