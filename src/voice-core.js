@@ -133,15 +133,31 @@ export function safeJoinLibrary(voiceDir, relPath) {
   const abs = path.resolve(root, rel);
   const within = abs === root || abs.startsWith(root + path.sep);
   if (!within) return null;
-  // 符号链接可能指向库外：用 realpath 再校验一次（文件不存在时按父目录判）
-  try {
-    const real = fs.realpathSync(abs);
-    const realRoot = fs.realpathSync(root);
-    if (real !== realRoot && !real.startsWith(realRoot + path.sep)) return null;
-    return real;
-  } catch {
-    return abs;
-  }
+  // 新文件也必须校验已有的父目录。realpath(abs) 的 ENOENT 不能作为放行依据：
+  // 库内 junction 指向库外时，尚不存在的输出文件同样会 ENOENT。
+  const resolveExistingParent = (file) => {
+    const missing = [];
+    let current = file;
+    for (;;) {
+      try { return path.join(fs.realpathSync(current), ...missing.reverse()); } catch (error) {
+        if (error?.code !== 'ENOENT') return null;
+        // dangling symlink 自身存在但目标不存在，不能当成普通的新文件路径。
+        try { fs.lstatSync(current); return null; } catch (statError) {
+          if (statError?.code !== 'ENOENT') return null;
+        }
+        const parent = path.dirname(current);
+        if (parent === current) return null;
+        missing.push(path.basename(current));
+        current = parent;
+      }
+    }
+  };
+  const realRoot = resolveExistingParent(root);
+  const real = resolveExistingParent(abs);
+  if (realRoot === null || real === null) return null;
+  const relative = path.relative(realRoot, real);
+  if (path.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${path.sep}`)) return null;
+  return real;
 }
 
 /**

@@ -83,24 +83,30 @@ export function normalizeStickerEntry(raw) {
   };
 }
 
+/** 无法识别的归属隔离成这个前缀；不要退回 'global'（那等于把私有备注广播给所有会话）。 */
+const NOTE_SCOPE_QUARANTINE = 'invalid:';
+const QUARANTINED_NOTE_SCOPE_MAX = NOTE_SCOPE_QUARANTINE.length + 40;
+
 /**
  * 归一化备注的会话归属：`'global'` 或 `'group:<id>'` / `'private:<id>'`。
- * 非法值一律退回 `'global'`（保守：宁可多注入，也不要让备注莫名消失）。
+ * 缺失/空值沿用旧语义视为 `'global'`；**无法识别**的值一律隔离（fail-closed），
+ * 且归一化保持幂等，避免加载时再次写回全局。
  */
 export function normalizeNoteScope(value) {
   const s = String(value ?? '').trim();
   if (!s || s === 'global') return 'global';
+  if (s.startsWith(NOTE_SCOPE_QUARANTINE)) return s.slice(0, QUARANTINED_NOTE_SCOPE_MAX);
   const m = /^(group|private):(\d{1,20})$/.exec(s);
-  if (!m) return 'global';
-  const id = Number(m[2]);
-  if (!Number.isSafeInteger(id) || id <= 0) return 'global';
-  return `${m[1]}:${id}`;
+  const id = m ? Number(m[2]) : 0;
+  if (m && Number.isSafeInteger(id) && id > 0) return `${m[1]}:${id}`;
+  return `${NOTE_SCOPE_QUARANTINE}${s.slice(0, 40)}`;
 }
 
 /** 某条备注是否应当在 `currentKey` 这个会话里可见。 */
 export function noteScopeVisible(noteScope, currentKey) {
   const scope = normalizeNoteScope(noteScope);
   if (scope === 'global') return true;
+  if (scope.startsWith(NOTE_SCOPE_QUARANTINE)) return false;
   if (!currentKey) return false; // 不知道当前会话时，只放全局（保守）
   return scope === normalizeNoteScope(currentKey);
 }
@@ -226,9 +232,19 @@ export function findSticker(entries, ref) {
   return (urlNormalized && list.find((e) => e && stickerUrlKey(e.url) === urlNormalized)) || null;
 }
 
-// 格式化给 AI 看的表情列表；query 会匹配 desc/localNote/tags/usage/id/md5。
-export function formatStickerList(entries, query = '', limit = 48) {
-  const list = (Array.isArray(entries) ? entries : []).map(normalizeStickerEntry).filter(Boolean);
+/** QQ 收藏元数据共享；某个会话写下的认知只能在该会话读取。 */
+export function stickerForScope(entry, currentKey = '') {
+  const sticker = normalizeStickerEntry(entry);
+  if (!sticker || !currentKey) return sticker;
+  // 使用语境没有独立 scope 元数据，不能因为备注恰好可见就公开最近一次使用的群聊内容。
+  if (noteScopeVisible(sticker.noteScope, currentKey)) return { ...sticker, lastContext: '' };
+  return { ...sticker, localNote: '', tags: [], usage: '', lastContext: '', noteScope: 'global' };
+}
+
+// 先净化再搜索，防止通过 query 的命中数探测其他会话的私有备注。
+// 不指定 currentKey 的管理端保留查看完整库的能力。
+export function formatStickerList(entries, query = '', limit = 48, currentKey = '') {
+  const list = (Array.isArray(entries) ? entries : []).map((e) => stickerForScope(e, currentKey)).filter(Boolean);
   const q = String(query ?? '').trim().toLowerCase();
   const filtered = q
     ? list.filter((e) => {
@@ -318,13 +334,18 @@ export function applyStickerNote(entries, id, patch = {}) {
   const target = findSticker(list, id);
   if (!target) return { entries: list, entry: null };
   const idx = list.findIndex((e) => e.id === target.id);
+  const noteScope = patch.noteScope !== undefined ? normalizeNoteScope(patch.noteScope) : target.noteScope;
+  // 切换备注归属时不能把旧会话未被这次更新覆盖的字段一起搬过去。
+  // 例如 B 只更新 tags，不应因此得到 A 之前写下的 localNote 和 usage。
+  const sameScope = noteScope === target.noteScope;
   const next = normalizeStickerEntry({
     ...target,
-    localNote: patch.note !== undefined ? String(patch.note ?? '').trim() : target.localNote,
-    tags: Array.isArray(patch.tags) ? patch.tags.map(String).map((s) => s.trim()).filter(Boolean).slice(0, 20) : target.tags,
-    usage: patch.usage !== undefined ? String(patch.usage ?? '').trim() : target.usage,
+    localNote: patch.note !== undefined ? String(patch.note ?? '').trim() : (sameScope ? target.localNote : ''),
+    tags: Array.isArray(patch.tags) ? patch.tags.map(String).map((s) => s.trim()).filter(Boolean).slice(0, 20) : (sameScope ? target.tags : []),
+    usage: patch.usage !== undefined ? String(patch.usage ?? '').trim() : (sameScope ? target.usage : ''),
     source: patch.source || target.source || 'ai',
-    noteScope: patch.noteScope !== undefined ? patch.noteScope : target.noteScope,
+    noteScope,
+    lastContext: sameScope ? target.lastContext : '',
     updatedAt: nowIso()
   });
   if (!next) return { entries: list, entry: null };

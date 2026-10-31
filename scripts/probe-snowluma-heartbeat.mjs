@@ -25,7 +25,7 @@ if (!disc.ok) {
   console.log(`❌ 无法发现可用的 SnowLuma 连接：${disc.error}`);
   process.exit(2);
 }
-console.log(`已发现端点 ${disc.wsUrl}（token ${String(disc.wsToken || disc.token).slice(0, 4)}…，来源 ${disc.source}）`);
+console.log(`已发现端点 ${disc.wsUrl}（令牌${disc.wsToken || disc.token ? '已配置' : '未配置'}，来源 ${disc.source}）`);
 
 const bot = new SnowLumaWebSocketClient({
   url: disc.wsUrl,

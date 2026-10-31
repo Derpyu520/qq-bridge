@@ -698,9 +698,9 @@ await test('R4 timeout/replyCheck 类暂存唤醒按定时器语义补发', asyn
     const text = h.calls.prompts[0].content.map((c) => String(c?.text ?? '')).join('\n');
     assert.match(text, /有限潜水时间已到|睡眠时间已到/);
 
-    // 第二条 @ 与未读无关但对应消息已被处理 → 仍然按消息语义跳过
+    // 第二条 @ 已标读，但标读不是回复确认，仍需补发点名。
     const second = h.replayPendingWakeReasonsV2('group:456');
-    assert.equal(second?.action, 'skipped', '已被当前回合处理的消息类唤醒仍然跳过');
+    assert.equal(second?.action, 'replayed', '已读不代表已回复，积压的点名唤醒必须补发');
   } finally { await h.close(); }
 });
 
@@ -770,7 +770,7 @@ await test('R7 未知 preset 名直接被拒（含路径穿越形态）', async 
 });
 
 // ── R8. wake-config 只接受已知 triggers 字段 ────────────────────────────────
-await test('R8 wake-config 丢弃未知 triggers 键（不落盘、不回传模型）', async () => {
+await test('R8 wake-config 拒绝未知 triggers 键（不落盘、不回传模型）', async () => {
   const h = await bridgeHarness();
   try {
     h.setMode('reserved2');
@@ -784,11 +784,14 @@ await test('R8 wake-config 丢弃未知 triggers 键（不落盘、不回传模�
           config: { mode: 'diving', infinite: true, triggers: { atMention: true, junkKey: 'x'.repeat(100), another: { nested: true } } }
         }
       });
-      assert.equal(res.status, 200, res.body);
-      assert.equal('junkKey' in res.json.wakeConfig.triggers, false, '响应里不得回传垃圾键');
-      assert.equal('another' in res.json.wakeConfig.triggers, false);
+      assert.equal(res.status, 400, res.body);
+      assert.match(res.json.error, /junkKey/);
       assert.equal(st.wakeConfig.triggers.junkKey, undefined, '内存态不得被污染');
-      assert.equal(st.wakeConfig.triggers.atMention, true, '已知字段仍需生效');
+      const valid = await call(port, '/api/socialV2/wake-config', {
+        method: 'POST', token: st.agentToken, body: { key: 'group:456', config: { mode: 'active', triggers: { atMention: true } } }
+      });
+      assert.equal(valid.status, 200, valid.body);
+      assert.equal(st.wakeConfig.triggers.atMention, true, '合法请求中的已知字段仍需生效');
       const file = JSON.parse(fs.readFileSync(path.join(h.temp, 'state', 'social-v2.json'), 'utf8'));
       assert.equal(file.conversations['group:456'].wakeConfig.triggers.junkKey, undefined, '落盘文件不得含垃圾键');
     });

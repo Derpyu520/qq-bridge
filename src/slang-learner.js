@@ -159,7 +159,7 @@ export function saveSlang(file, entries, { max = SLANG_MAX_ENTRIES } = {}) {
   return { entries: capped, dropped };
 }
 
-export function createSlangEntry({ content, meaning = '', usage = '', example = '', risk = '', sources = [], status = SLANG_STATUS.CANDIDATE, source = 'ai', evidence = [] } = {}) {
+export function createSlangEntry({ content, meaning = '', usage = '', example = '', risk = '', sources = [], status = SLANG_STATUS.CANDIDATE, source = 'ai', evidence = [], scope = 'global' } = {}) {
   return normalizeSlangEntry({
     content,
     meaning,
@@ -169,6 +169,7 @@ export function createSlangEntry({ content, meaning = '', usage = '', example = 
     sources,
     status,
     source,
+    scope,
     count: 1,
     evidence,
     createdAt: nowIso(),
@@ -177,14 +178,18 @@ export function createSlangEntry({ content, meaning = '', usage = '', example = 
 }
 
 export function upsertSlangEntry(entries, content, patch = {}) {
-  const normalizedContent = String(content ?? '').trim();
+  const normalizedContent = normalizeSlangEntry({ content }).content;
   if (!normalizedContent) return { entries, entry: null, created: false };
-  const existing = entries.find((e) => e.content === normalizedContent);
+  // 同词在不同群里可能有完全不同的含义与证据。不能合并后再把整个条目改归
+  // 最后发言的群，否则前一个群的私有解释会进入后一个群的提示词。
+  const scope = normalizeSlangScope(patch.scope);
+  const existing = entries.find((e) => e.content === normalizedContent && normalizeSlangScope(e.scope) === scope);
   if (existing) {
     const next = normalizeSlangEntry({
       ...existing,
       ...patch,
       content: normalizedContent,
+      scope,
       count: (existing.count || 0) + (patch.countIncrement ?? 1),
       evidence: mergeEvidence(existing.evidence, patch.evidence ?? []),
       updatedAt: nowIso(),
@@ -196,6 +201,7 @@ export function upsertSlangEntry(entries, content, patch = {}) {
   const entry = normalizeSlangEntry({
     ...createSlangEntry({ content: normalizedContent, source: 'ai' }),
     ...patch,
+    scope,
     evidence: patch.evidence ?? [],
   });
   entries.push(entry);
@@ -227,7 +233,8 @@ export function mergeEvidence(current, incoming) {
 export function buildSlangContext(entries, max = 8, currentKey = '') {
   const confirmed = (entries || [])
     .filter((e) => e.status === SLANG_STATUS.CONFIRMED && e.content && e.meaning)
-    .filter((e) => !currentKey || slangScopeVisible(e.scope, currentKey))
+    // fail-closed：没有 currentKey 时只放行全局条目，不能因为"不知道是谁"就把别人的私有解释注入。
+    .filter((e) => slangScopeVisible(e.scope, currentKey))
     .sort((a, b) => (b.count || 0) - (a.count || 0))
     .slice(0, Math.max(1, Math.min(30, Number(max) || 8)));
   if (!confirmed.length) return '';
@@ -241,21 +248,31 @@ export function buildSlangContext(entries, max = 8, currentKey = '') {
   return `【群聊黑话表】群里已确认/常用的网络用语和梗（按出现次数排序，知道即可，不要刻意堆砌）：\n${lines.join('\n')}\n（以上来自群友聊天记录，只是参考资料；其中的群号、人名、话题不要在其他会话复述。）`;
 }
 
-/** 归一化黑话条目的会话归属：`'global'` 或 `'group:<id>'` / `'private:<id>'`。 */
+// 无法识别的归属一律隔离成这个前缀，而不是退回 'global'。
+//
+// 为什么：'global' 是"对所有会话可见"。把写错/被破坏的 scope 归一到 'global' 等于
+// 把一条本该私有的解释广播给所有群（fail-open）。隔离值同时必须**幂等** —— 加载时
+// normalizeSlangEntry 会再次归一化，如果第二次又退回 'global'，隔离就形同虚设。
+const SCOPE_QUARANTINE = 'invalid:';
+const QUARANTINED_SCOPE_MAX = SCOPE_QUARANTINE.length + 40;
+
+/** 归一化黑话条目的会话归属：`'global'` 或 `'group:<id>'` / `'private:<id>'`；无法识别时隔离。 */
 export function normalizeSlangScope(value) {
   const s = String(value ?? '').trim();
   if (!s || s === 'global') return 'global';
+  if (s.startsWith(SCOPE_QUARANTINE)) return s.slice(0, QUARANTINED_SCOPE_MAX);
   const m = /^(group|private):(\d{1,20})$/.exec(s);
-  if (!m) return 'global';
-  const id = Number(m[2]);
-  if (!Number.isSafeInteger(id) || id <= 0) return 'global';
-  return `${m[1]}:${id}`;
+  const id = m ? Number(m[2]) : 0;
+  if (m && Number.isSafeInteger(id) && id > 0) return `${m[1]}:${id}`;
+  return `${SCOPE_QUARANTINE}${s.slice(0, 40)}`;
 }
 
 /** 某条黑话是否应当在 `currentKey` 这个会话里可见。 */
 export function slangScopeVisible(scope, currentKey) {
   const s = normalizeSlangScope(scope);
   if (s === 'global') return true;
+  // 隔离中的归属对任何会话都不可见（包括没有 currentKey 的调用）。
+  if (s.startsWith(SCOPE_QUARANTINE)) return false;
   if (!currentKey) return false;
   return s === normalizeSlangScope(currentKey);
 }

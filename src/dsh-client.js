@@ -134,6 +134,8 @@ export function mintBrowserSessionCookie(baseUrl, secret, { lifetimeMs = MINTED_
  * @returns Cookie 串；密钥不可用时返回 ''（调用方回退到启动 token 交换）。
  */
 export function discoverDshSessionCookie(baseUrl, options) {
+  // 自动发现只能使用本机凭据；远程部署必须走显式配置的 launch token。
+  if (!isLoopbackBase(baseUrl)) return '';
   const secret = readBrowserSessionSecret();
   if (!secret) return '';
   try {
@@ -303,8 +305,7 @@ export class NodeApiClient extends AbstractApiClient {
     this.cookiePromise = null;
     this._authEpoch = 0;
     this._muxSendOpen = null;
-    // 持久化签名密钥的探测缓存：undefined=未探测，null=不可用，Buffer=可用。
-    // 探一次就够（文件在 DSH 生命周期内不变），避免每个请求都读一次磁盘。
+    // 只缓存成功读取的签名密钥；首次启动或原子替换期间的读取失败必须能重试。
     this._secret = undefined;
     // token 是用户显式配置的（true）还是从日志猜的（false）。猜来的不优先于离线铸造。
     this.tokenExplicit = this.auth.tokenExplicit === true;
@@ -361,7 +362,11 @@ export class NodeApiClient extends AbstractApiClient {
 
   /** 持久化签名密钥（惰性探测 + 记忆）。 */
   browserSessionSecret() {
-    if (this._secret === undefined) this._secret = readBrowserSessionSecret();
+    if (this._secret === undefined || this._secret === null) {
+      const secret = readBrowserSessionSecret();
+      if (secret !== null) this._secret = secret;
+      return secret;
+    }
     return this._secret;
   }
 
@@ -591,7 +596,8 @@ export class NodeApiClient extends AbstractApiClient {
       }
     }
     init?.signal?.throwIfAborted();
-    const response = await fetch(input, { ...init, headers });
+    // RPC 主体包含聊天内容，不能随服务端重定向转交给另一端点。
+    const response = await fetch(input, { ...init, headers, redirect: 'error' });
     if (!isRetry && response.status === 401 && this.hasAuth()) {
       await response.body?.cancel();
       // 策略切换只在**真的收到 401** 时决定（不能放在 invalidateAuth 里：那里也会被

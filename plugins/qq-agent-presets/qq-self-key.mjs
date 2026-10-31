@@ -81,11 +81,20 @@ export function canonicalKeyOf(value) {
   return `${m[1]}:${id}`;
 }
 
+// 只有这些既有只读工具无需 key。发送工具必须从真实目标参数派生身份；
+// 新 QQ 工具默认要求可信会话，不能因模型省略 key 而跳过守卫。
+const QQ_TOOLS_WITHOUT_SESSION_KEY = new Set(['qq_status', 'qq_list_groups', 'qq_get_group_history']);
+const QQ_LEGACY_SEND_TARGETS = {
+  qq_send_group_message: ['group', 'groupId'], qq_reply: ['group', 'groupId'],
+  qq_send_private_message: ['private', 'userId'], qq_send_burst: ['group', 'groupId']
+};
+const QQ_TARGET_ALIAS_TOOLS = new Set(['qq_send_message', 'qq_get_message_detail']);
+
 /**
  * 执行期会话绑定判定：这次工具调用是否指向**当前会话**。
  *
- * 只对「参数表里声明了 key」的调用生效 —— 判据由调用方按工具声明给出（见
- * qq-tool-restrict 的注释：用运行时 arguments 判断「该不该校验」等于让攻击者自己选考卷）。
+ * 按 QQ 工具声明判定是否必须携带 key，不能因为运行时 arguments 缺 key 就跳过。
+ * qq_send_message / qq_get_message_detail 的 target 是 key 的显式别名，同样受限。
  * 返回空串表示放行；否则返回统一文案。
  *
  * **未绑定的会话一律拒绝**：如果这里放行，攻击者只要让调用落在一个解不出身份的会话里
@@ -97,9 +106,25 @@ export function canonicalKeyOf(value) {
  * @returns {string} 拒绝理由；空串表示放行。
  */
 export function sessionBindingDenial(exec, args) {
-  if (!args || typeof args !== 'object' || !Object.prototype.hasOwnProperty.call(args, 'key')) return '';
+  const name = /^mcp__snowluma__(.+)$/.exec(String(exec?.name ?? ''))?.[1] ?? '';
+  const requiresKey = name !== '' && !QQ_TOOLS_WITHOUT_SESSION_KEY.has(name);
+  const input = args && typeof args === 'object' ? args : {};
+  const hasKey = Object.prototype.hasOwnProperty.call(input, 'key');
+  const hasTarget = QQ_TARGET_ALIAS_TOOLS.has(name) && Object.prototype.hasOwnProperty.call(input, 'target');
+  const legacyTarget = Object.prototype.hasOwnProperty.call(QQ_LEGACY_SEND_TARGETS, name) ? QQ_LEGACY_SEND_TARGETS[name] : null;
+  if (legacyTarget) {
+    const [kind, field] = legacyTarget;
+    const canonical = canonicalKeyOf(`${kind}:${String(input[field] ?? '').trim()}`);
+    const self = trustedSelfKeyOf(exec);
+    if (!self || !canonical || canonical !== self) return SESSION_UNAVAILABLE;
+    if (hasKey && canonicalKeyOf(input.key) !== canonical) return SESSION_UNAVAILABLE;
+    if (Object.prototype.hasOwnProperty.call(input, 'target') && canonicalKeyOf(input.target) !== canonical) return SESSION_UNAVAILABLE;
+    return '';
+  }
+  if (!hasKey && !hasTarget) return requiresKey ? SESSION_UNAVAILABLE : '';
   const self = trustedSelfKeyOf(exec);
-  const canonical = canonicalKeyOf(args.key);
+  const canonical = canonicalKeyOf(hasKey ? input.key : input.target);
+  if (hasKey && hasTarget && canonical !== canonicalKeyOf(input.target)) return SESSION_UNAVAILABLE;
   if (!self || !canonical || canonical !== self) return SESSION_UNAVAILABLE;
   return '';
 }

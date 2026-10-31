@@ -108,5 +108,8 @@ jobs:
       - name: npm ci
         run: npm ci
 
+      - name: 依赖漏洞检查（阻止高危和严重漏洞）
+        run: npm audit --omit=dev --audit-level=high
+
       - name: npm run test:audit
         run: npm run test:audit

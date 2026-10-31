@@ -20,6 +20,7 @@ function loadWebTools({ safeFetch, webSearch }) {
     .replace('await server.connect(new StdioServerTransport());', 'server.connect(new StdioServerTransport());');
   class McpServer {
     tool(name, description, schema, callback) { tools.set(name, { schema, callback }); }
+    registerTool(name, config, callback) { tools.set(name, { schema: config.inputSchema, callback }); }
     connect() {}
   }
   vm.runInNewContext(source, {
@@ -34,7 +35,7 @@ function loadWebTools({ safeFetch, webSearch }) {
   });
   return async (name, arguments_) => {
     const tool = tools.get(name);
-    return tool.callback(z.object(tool.schema).parse(arguments_));
+    return tool.callback(tool.schema.parse(arguments_));
   };
 }
 
@@ -123,6 +124,7 @@ function loadSnowlumaTools(fetchImpl, fixtureConfig = null, httpImpl = null, fix
     .replace('await server.connect(new StdioServerTransport());', 'server.connect(new StdioServerTransport());');
   class McpServer {
     constructor() { this.tool = (name, description, schema, callback) => tools.set(name, { schema, callback }); }
+    registerTool(name, config, callback) { tools.set(name, { schema: config.inputSchema, callback }); }
     connect() {}
   }
   const fixtureFs = fixtureConfig === null ? fs : {
@@ -166,7 +168,7 @@ function loadSnowlumaTools(fetchImpl, fixtureConfig = null, httpImpl = null, fix
   const callTool = async (name, arguments_ = {}) => {
     const tool = tools.get(name);
     assert.ok(tool, `tool ${name} should be registered`);
-    return tool.callback(z.object(tool.schema).parse(arguments_));
+    return tool.callback(tool.schema.parse(arguments_));
   };
   /** 该模式下某工具是否真的注册进了 schema（注册期收敛的断言入口）。 */
   callTool.has = (name) => tools.has(name);
