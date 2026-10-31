@@ -3009,7 +3009,7 @@ async function refreshSessions() {
         + '</select>';
       html += `<tr><td>${esc(x.key)}${ownerTag}${modeTag}</td><td><code>${esc(x.sessionId)}</code></td><td>${type}</td><td>${modeSel}</td><td><button class="small" data-reset-key="${esc(x.key)}">清除上下文</button></td></tr>`;
     }
-    box.innerHTML = html + '</table>';
+    box.innerHTML = '<p>会话设为静默或屏蔽后（包括管理员私聊），QQ 内的管理命令和审批回答也会停止处理；请在此控制台恢复为“正常”。</p>' + html + '</table>';
     box.querySelectorAll('[data-mode-key]').forEach(sel => sel.addEventListener('change', async () => {
       const r = await api('/api/session/mute', 'POST', { key: sel.dataset.modeKey, mode: sel.value });
       if (!r.ok) alert('❌ ' + (r.error || '失败'));
