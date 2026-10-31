@@ -43,6 +43,8 @@ import {
   parseResearchJson,
   createSlangEntry,
   mergeEvidence,
+  normalizeSlangScope,
+  slangScopeVisible,
   SLANG_STATUS,
   SLANG_MAX_ENTRIES
 } from './slang-learner.js';
@@ -51,6 +53,7 @@ import {
   saveStickerStore,
   mergeStickerLibrary,
   findSticker,
+  stickerForScope,
   formatStickerList,
   buildStickerContext,
   buildStickerStrategyHint,
@@ -1794,6 +1797,7 @@ async function main() {
    * 所以音量必须在本地用 ffmpeg 调好再发（临时文件发完即删）。
    */
   async function sendVoiceV2(key, filePath, { guard = false, audit = true, audio = null } = {}) {
+    const assertSendAllowed = guard ? captureSendGuard(key, { ai: true }) : null;
     const vc = voiceCfg();
     // 注意：这里**不检查** vc.enabled —— 那是「AI 能不能发语音」的开关，判定放在
     // AI 路由（/api/socialV2/send-voice）与 sendVoiceForV2 里。底层只管发，
@@ -1821,7 +1825,6 @@ async function main() {
     }
     const sendPath = processed.path;
 
-    const assertSendAllowed = guard ? captureSendGuard(key) : null;
     const [kind, id] = key.split(':');
     const recordSegment = { type: 'record', data: { file: sendPath } };
     let resolveSend;
@@ -1988,7 +1991,7 @@ async function main() {
 
   // 发送一个收藏表情（按 emoji_id/url/md5 解析，发图片段）。
   async function sendStickerV2(key, stickerRef, options = {}) {
-    const assertSendAllowed = captureSendGuard(key);
+    const assertSendAllowed = captureSendGuard(key, { ai: true });
     // 发送前强制同步一次，确保“刚新增的表情能立即用、刚删除的表情不会继续发”。
     const synced = await syncStickerLibrary(true);
     const entry = findSticker(synced?.entries ?? stickerEntries, stickerRef);
@@ -2060,7 +2063,7 @@ async function main() {
     const updated = markStickerUsed(stickerEntries, entry.id, 'sticker');
     stickerEntries = updated.entries;
     saveStickerStoreSafe();
-    return { entry: updated.entry, messageId: data?.message_id ?? null };
+    return { entry: stickerForScope(updated.entry, key), messageId: data?.message_id ?? null };
   }
 
   // 更新本地 AI 认知（含义/标签/用法）。
@@ -2102,7 +2105,7 @@ async function main() {
 
   // 收藏聊天里的一张表情（add_custom_face），并按 AI 看到的含义写简短备注（modify_custom_face）。
   async function collectStickerV2(key, messageRef, remark) {
-    const assertSendAllowed = captureSendGuard(key);
+    const assertSendAllowed = captureSendGuard(key, { ai: true });
     const st = getSocialV2State(key);
     const found = (st.recentMessages || []).find((m) => m && (String(m.seq) === String(messageRef) || (m.messageId && String(m.messageId) === String(messageRef))));
     if (!found) throw new Error('找不到这条消息，请确认 messageId/seq 有效且属于当前会话');
@@ -2144,7 +2147,7 @@ async function main() {
     // 强制刷新本地库，让刚收藏的表情立即可用。
     const synced = await syncStickerLibrary(true);
     const entry = findSticker(synced?.entries ?? stickerEntries, emojiId);
-    return { emojiId, entry: entry || null, remark: cleanRemark };
+    return { emojiId, entry: stickerForScope(entry, key), remark: cleanRemark };
   }
 
   function saveSlangStore() {
@@ -2166,18 +2169,26 @@ async function main() {
     return slangTaskChain;
   }
 
-  async function ensureSlangLearnerSession() {
+  async function ensureSlangLearnerSession(scope = 'global') {
+    const learnerScope = normalizeSlangScope(scope);
     const preset = resolvePresetName(cfg.slang?.learnerPreset || cfg.agentPreset, { strict: true });
     if (!preset) throw new Error('黑话学习缺少已验证的安全 preset，拒绝创建或复用会话');
     const saved = readJsonSafe(SLANG_SESSION_FILE, null);
     // 旧记录没有 preset 元数据，无法证明其权限，必须重新创建。
-    if (saved?.preset !== preset) invalidateSlangLearnerSession();
+    if (saved?.preset !== preset || saved?.scope !== learnerScope) {
+      const oldId = slangLearnerSessionId || saved?.sessionId;
+      invalidateSlangLearnerSession();
+      if (oldId) {
+        if (!learnerWaiters.has(oldId) && !learnerCollectors.has(oldId)) api.events.forget?.(String(oldId));
+        stopRetiredSessionWork(String(oldId), 'slang');
+      }
+    }
     if (slangLearnerSessionId) {
       learnerSessions.add(slangLearnerSessionId);
       api.events.follow(slangLearnerSessionId);
       return slangLearnerSessionId;
     }
-    if (saved?.sessionId && saved.preset === preset) {
+    if (saved?.sessionId && saved.preset === preset && saved.scope === learnerScope) {
       slangLearnerSessionId = String(saved.sessionId);
       learnerSessions.add(slangLearnerSessionId);
       api.events.follow(slangLearnerSessionId);
@@ -2199,7 +2210,7 @@ async function main() {
     api.events.follow(slangLearnerSessionId);
     await ensureChatModel(slangLearnerSessionId);
     fs.mkdirSync(STATE_DIR, { recursive: true });
-    atomicWriteJson(SLANG_SESSION_FILE, { sessionId: slangLearnerSessionId, preset });
+    atomicWriteJson(SLANG_SESSION_FILE, { sessionId: slangLearnerSessionId, preset, scope: learnerScope });
     log(`黑话学习会话已创建：${slangLearnerSessionId}`);
     return slangLearnerSessionId;
   }
@@ -2211,6 +2222,8 @@ async function main() {
     slangLearnerSessionId = null;
     if (oldId && !learnerWaiters.has(oldId) && !learnerCollectors.has(oldId)) {
       learnerSessions.delete(oldId);
+      api.events.forget?.(oldId);
+      modelAppliedSessions.delete(oldId);
     }
     try { fs.unlinkSync(SLANG_SESSION_FILE); } catch {}
   }
@@ -2240,7 +2253,7 @@ async function main() {
 
     let sessionId;
     try {
-      sessionId = await ensureSlangLearnerSession();
+      sessionId = await ensureSlangLearnerSession(key);
     } catch (error) {
       log(`黑话学习会话创建失败 (${key}):`, error?.message ?? error);
       return;
@@ -2297,13 +2310,26 @@ async function main() {
     if (!candidates || !candidates.length) return;
     if (cfg.slang?.enabled === false) return;
     if (!dshReady) return;
+    // Keep evidence and model history inside one conversation boundary, even when
+    // the console requests research for candidates from several conversations.
+    const batches = new Map();
+    for (const entry of candidates) {
+      if (!entry) continue;
+      const scope = normalizeSlangScope(entry.scope);
+      if (!batches.has(scope)) batches.set(scope, []);
+      batches.get(scope).push(entry);
+    }
+    if (batches.size > 1) {
+      for (const batch of batches.values()) await runSlangResearch(batch);
+      return;
+    }
     // 过滤掉已经在研究队列里的候选，避免同一批被重复排队研究。
     const targets = candidates.filter((e) => e && !slangResearchingIds.has(e.id));
     if (!targets.length) return;
     for (const e of targets) slangResearchingIds.add(e.id);
     let sessionId;
     try {
-      sessionId = await ensureSlangLearnerSession();
+      sessionId = await ensureSlangLearnerSession(targets[0].scope);
     } catch (error) {
       for (const e of targets) slangResearchingIds.delete(e.id);
       log('黑话研究会话创建失败:', error?.message ?? error);
@@ -2319,7 +2345,9 @@ async function main() {
       const output = await waitLearnerTurn(sessionId);
       const results = parseResearchJson(output);
       for (const r of results) {
-        const entry = slangEntries.find((e) => e.content === r.content);
+        const target = targets.find((e) => e.content === r.content);
+        const entry = target && slangEntries.find((e) => e.id === target.id
+          && normalizeSlangScope(e.scope) === normalizeSlangScope(target.scope));
         if (!entry) continue;
         // 只有明确确认（confirmed: true）的结果才写入解释字段；
         // 不确定/未确认的结果保留原状，允许后续再次研究。
@@ -2410,10 +2438,10 @@ async function main() {
   }
 
   // 已确认黑话的公开列表（按出现次数排序，最多 injectMax 条）。
-  function confirmedSlangListV2() {
+  function confirmedSlangListV2(currentKey) {
     const max = Math.max(1, Math.min(30, Number(cfg.slang?.injectMax) || 8));
     return slangEntries
-      .filter((e) => e.status === SLANG_STATUS.CONFIRMED && e.content && e.meaning)
+      .filter((e) => e.status === SLANG_STATUS.CONFIRMED && e.content && e.meaning && slangScopeVisible(e.scope, currentKey))
       .sort((a, b) => (Number(b.count) || 0) - (Number(a.count) || 0))
       .slice(0, max)
       .map(publicSlangEntry);
@@ -3904,7 +3932,7 @@ async function main() {
           const body = await readBody();
           const content = String(body.content ?? '').trim();
           if (!content) { sendJson({ ok: false, error: '黑话内容不能为空' }, 400); return; }
-          if (slangEntries.some((e) => e.content === content)) { sendJson({ ok: false, error: `黑话「${content}」已存在` }, 400); return; }
+          if (slangEntries.some((e) => e.content === content && normalizeSlangScope(e.scope) === 'global')) { sendJson({ ok: false, error: `黑话「${content}」已存在` }, 400); return; }
           const entry = createSlangEntry({
             content,
             meaning: String(body.meaning ?? '').trim(),
@@ -4023,7 +4051,8 @@ async function main() {
           const body = await readBody();
           const entry = { ...slangEntries[idx] };
           if (body.content !== undefined) entry.content = String(body.content ?? '').trim();
-          if (body.content !== undefined && slangEntries.some((e) => e.id !== id && e.content === entry.content)) {
+          if (body.content !== undefined && slangEntries.some((e) => e.id !== id && e.content === entry.content
+              && normalizeSlangScope(e.scope) === normalizeSlangScope(entry.scope))) {
             sendJson({ ok: false, error: `黑话「${entry.content}」已存在` }, 400);
             return;
           }
@@ -4867,7 +4896,7 @@ async function main() {
             participation: formatParticipationV2(st),
             slang: {
               enabled: cfg.slang?.enabled !== false,
-              entries: confirmedSlangListV2(),
+              entries: confirmedSlangListV2(key),
               block: buildSlangContext(slangEntries, cfg.slang?.injectMax ?? 8, key)
             },
             stickers: {
@@ -5523,6 +5552,7 @@ async function main() {
             sendJson({ ok: false, error: 'targetUserId 必须是正整数 QQ 号' }, 400);
             return;
           }
+          const sendGuard = captureSendGuard(key, { ai: true });
           // 群聊必须确认目标确实是本群成员（私聊天然只有双方，无需校验）。
           if (kind === 'group') {
             const memberError = await assertGroupMember(id, targetUserId);
@@ -5543,7 +5573,6 @@ async function main() {
           if (st.sendTimes.length > 500) st.sendTimes = st.sendTimes.slice(-500);
           // 成员校验是异步的（要问 OneBot）；期间操作者可能切模式/改白名单/开静默。
           // 拍一拍此前完全没有发送守卫，这里补上：真正发之前再确认一次。
-          const sendGuard = captureSendGuard(key);
           try {
             sendGuard();
             if (shouldBlockSilentReply(key)) {
@@ -5609,7 +5638,7 @@ async function main() {
           if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
           if (req.headers['x-agent-token'] && !v2ToolEnabled('getStickerImage')) { sendJson({ ok: false, error: '工具未启用：qq_get_sticker_image' }, 403); return; }
           try {
-            const entry = await getStickerImageData(stickerId);
+            const entry = stickerForScope(await getStickerImageData(stickerId), key);
             const fetched = await safeFetchBuffer(entry.url, MAX_MEDIA_BYTES, { allowPorts: MEDIA_FETCH_ALLOW_PORTS });
             const dims = getImageDimensions(fetched.buffer);
             if (dims && dims.width * dims.height > MAX_MEDIA_PIXELS) {
@@ -5673,7 +5702,7 @@ async function main() {
           const entry = applyStickerNoteV2(stickerId, note, tags, usage, key);
           if (!entry) { sendJson({ ok: false, error: `找不到表情 ${stickerId}` }, 404); return; }
           log(`[sticker] 更新表情本地认知 ${key}: ${entry.id}`);
-          sendJson({ ok: true, key, sticker: entry });
+          sendJson({ ok: true, key, sticker: stickerForScope(entry, key) });
           return;
         }
         if (req.method === 'POST' && url.pathname === '/api/socialV2/sticker-remark') {
@@ -5688,7 +5717,7 @@ async function main() {
           try {
             const entry = await setStickerRemarkV2(stickerId, String(body.remark ?? ''));
             log(`[sticker] 修改 QQ 收藏表情备注 ${key}: ${entry.id} -> ${entry.desc}`);
-            sendJson({ ok: true, key, sticker: entry });
+            sendJson({ ok: true, key, sticker: stickerForScope(entry, key) });
           } catch (error) {
             sendJson({ ok: false, error: `修改备注失败：${error?.message ?? error}` }, 500);
           }
@@ -6091,7 +6120,7 @@ async function main() {
           if (req.headers['x-agent-token'] && !v2ToolEnabled('listStickers')) { sendJson({ ok: false, error: '工具未启用：qq_list_stickers' }, 403); return; }
           try {
             const synced = await syncStickerLibrary(force);
-            const list = formatStickerList(synced?.entries ?? stickerEntries, query, count);
+            const list = formatStickerList(synced?.entries ?? stickerEntries, query, count, key);
             sendJson({ ok: true, key, ...list, syncedAt: synced?.syncedAt ?? stickerSyncedAt, fromCache: synced?.fromCache ?? false });
           } catch (error) {
             sendJson({ ok: false, error: `获取表情列表失败：${error?.message ?? error}` }, 500);
@@ -6118,7 +6147,7 @@ async function main() {
           }
           try {
             const synced = await syncStickerLibrary(force);
-            const list = formatStickerList(synced?.entries ?? stickerEntries, query, count);
+            const list = formatStickerList(synced?.entries ?? stickerEntries, query, count, key);
             sendJson({ ok: true, key, ...list, syncedAt: synced?.syncedAt ?? stickerSyncedAt, fromCache: synced?.fromCache ?? false });
           } catch (error) {
             sendJson({ ok: false, error: `获取表情列表失败：${error?.message ?? error}` }, 500);
@@ -6979,7 +7008,7 @@ async function main() {
           if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
           if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
           if (req.headers['x-agent-token'] && !v2ToolEnabled('slangQuery')) { sendJson({ ok: false, error: '工具未启用：qq_slang_query' }, 403); return; }
-          const list = confirmedSlangListV2().filter((e) => {
+          const list = confirmedSlangListV2(key).filter((e) => {
             if (!q) return true;
             return e.content.toLowerCase().includes(q)
               || e.meaning.toLowerCase().includes(q)
@@ -7009,7 +7038,9 @@ async function main() {
           if (!content) { sendJson({ ok: false, error: 'content 不能为空' }, 400); return; }
           if (content.length > 50) { sendJson({ ok: false, error: '黑话词条过长（最多 50 字）' }, 400); return; }
           if (!allowSlangSubmit(key)) { sendJson({ ok: false, error: '黑话提交过于频繁，请稍后再试' }, 429); return; }
-          const existing = slangEntries.find((e) => e.content === content);
+          const scope = canonicalV2Key(key);
+          if (!scope) { sendJson({ ok: false, error: 'key 格式无效' }, 400); return; }
+          const existing = slangEntries.find((e) => e.content === content && normalizeSlangScope(e.scope) === scope);
           if (existing) {
             if (existing.status === SLANG_STATUS.CONFIRMED) {
               sendJson({ ok: true, duplicate: true, status: 'confirmed', entry: publicSlangEntry(existing) });
@@ -7041,7 +7072,7 @@ async function main() {
             source: 'ai',
             status: SLANG_STATUS.CANDIDATE,
             // 归属到提交它的那个会话：黑话的含义/语境来自该群聊天记录，不该注入别的会话。
-            scope: canonicalV2Key(key) || 'global',
+            scope,
             evidence: context ? [{ key, sender: 'AI提交', text: context.slice(0, 200), time: Date.now() }] : []
           });
           slangEntries.push(entry);
@@ -7443,9 +7474,9 @@ async function main() {
   // 更新 lastAiReplyAt / 活跃调度，实际群里什么都没收到，而且只有一行滚动日志能看出问题。
   const lastSendFailed = new Map(); // key -> true（下一次成功即清除）
 
-  function sendToQQ(key, msg) {
+  function sendToQQ(key, msg, { ai = false } = {}) {
     let sendChain = sendChainFor(key);
-    const assertSendAllowed = captureSendGuard(key);
+    const assertSendAllowed = captureSendGuard(key, { ai });
     const safeMsg = redactKnownTokensOnly(msg);
     const [kind, id] = key.split(':');
     const parts = splitForQQ(safeMsg);
@@ -7625,7 +7656,7 @@ async function main() {
   // 有概率使用长间隔（错落感）；最后一条后不再 sleep。
   function sendBurstToQQ(key, messages, socialCfgOrMin, maybeMax) {
     let sendChain = sendChainFor(key);
-    const assertSendAllowed = captureSendGuard(key);
+    const assertSendAllowed = captureSendGuard(key, { ai: true });
     const [kind, id] = key.split(':');
     let min, max, longProb = 0, longMin = 0, longMax = 0;
     if (typeof socialCfgOrMin === 'object' && socialCfgOrMin !== null) {
@@ -8223,7 +8254,7 @@ async function main() {
 
   function sendMessagesV2(key, messages, delays, replyToMessageId, atUserId = null) {
     let sendChain = sendChainFor(key);
-    const assertSendAllowed = captureSendGuard(key);
+    const assertSendAllowed = captureSendGuard(key, { ai: true });
     const [kind, id] = key.split(':');
     const sent = [];
     const failed = [];
@@ -8265,10 +8296,14 @@ async function main() {
   }
 
   // 入队校验无法约束排队等待期间的权限变化，每条消息临近实际发送时再次校验。
-  function captureSendGuard(key) {
+  function captureSendGuard(key, { ai = false } = {}) {
     const policy = sessionPolicy(key);
     const sessionId = state.sessions[key];
     return () => {
+      if (ai && (shouldBlockSilentReply(key) || (currentMode === 'reserved2'
+          && (socialV2.paused || cfg.socialV2?.enabled === false)))) {
+        throw new Error('发送已取消：AI 已暂停、关闭或进入静默模式');
+      }
       if (!isSessionAllowedInCurrentMode(key) || policy !== sessionPolicy(key)
           || (sessionId && state.sessions[key] !== sessionId)) {
         throw new Error('发送已取消：会话、模式或白名单已变化');
@@ -8293,7 +8328,7 @@ async function main() {
       }
       return false;
     }
-    await sendToQQ(key, text);
+    await sendToQQ(key, text, { ai: true });
     return true;
   }
 
@@ -11888,7 +11923,11 @@ async function main() {
                     }
                   }
                   // 旧学习会话 turn 结束后从集合移除，避免残留
-                  if (frame.sessionId !== slangLearnerSessionId) learnerSessions.delete(frame.sessionId);
+                  if (frame.sessionId !== slangLearnerSessionId) {
+                    learnerSessions.delete(frame.sessionId);
+                    api.events.forget?.(frame.sessionId);
+                    modelAppliedSessions.delete(frame.sessionId);
+                  }
                 }
               }
               continue;
@@ -12130,7 +12169,7 @@ async function main() {
                   if (messages.length > 1) {
                     await sendBurstToQQ(key, messages, cfg.social);
                   } else {
-                    await sendToQQ(key, messages[0]);
+                    await sendToQQ(key, messages[0], { ai: true });
                   }
                   // 发言后刷新活跃时间，并调度可能的二次补刀
                   const st = socialState(key);
@@ -12166,7 +12205,7 @@ async function main() {
                   }
                   log(`agent 回复 (${key}) ${plain.length} 字`);
                   appendActivity(`${key} agent 回复：${plain.slice(0, 80)}${plain.length > 80 ? '…' : ''}`);
-                  await sendToQQ(key, plain);
+                  await sendToQQ(key, plain, { ai: true });
                 }
               } else if (ended.reason.kind === 'error') {
                 const msg = ended.reason.error?.message ?? '未知错误';

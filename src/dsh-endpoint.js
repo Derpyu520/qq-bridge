@@ -17,7 +17,7 @@ import { readFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
-import { discoverDshSessionCookie } from './dsh-client.js';
+import { discoverDshSessionCookie, isLoopbackBase } from './dsh-client.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -34,6 +34,7 @@ export function normalizeDshBaseUrl(value) {
   try {
     const url = new URL(raw);
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return '';
+    if (url.username || url.password) return '';
     url.search = '';
     url.hash = '';
     url.pathname = url.pathname.replace(/\/+$/, '');
@@ -54,16 +55,18 @@ export function normalizeDshBaseUrl(value) {
  */
 export async function probeDshBaseUrl(baseUrl, { timeoutMs = PROBE_TIMEOUT_MS } = {}) {
   const base = normalizeDshBaseUrl(baseUrl);
-  if (!base) return false;
+  if (!base || !isLoopbackBase(base)) return false;
   // 没有签名密钥就没有离线铸造 Cookie；此时不探测（否则每个端口都会 401，白白扫一遍）。
   const cookie = discoverDshSessionCookie(base);
   if (!cookie) return false;
   const endpoint = 'settings/describe';
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let response;
   try {
-    const response = await fetch(`${base}/api/${endpoint}`, {
+    response = await fetch(`${base}/api/${endpoint}`, {
       method: 'POST',
+      redirect: 'manual',
       headers: { cookie, 'content-type': 'application/json' },
       body: JSON.stringify({
         type: 'client-request',
@@ -80,6 +83,7 @@ export async function probeDshBaseUrl(baseUrl, { timeoutMs = PROBE_TIMEOUT_MS } 
     return false;
   } finally {
     clearTimeout(timer);
+    try { await response?.body?.cancel(); } catch {}
   }
 }
 

@@ -18,6 +18,7 @@
 
 | 文档 | 一句话说明 | 状态 |
 | --- | --- | --- |
+| [guides/AUDIT_2026-10-31.md](guides/AUDIT_2026-10-31.md) | 仓库安全与架构体检：跨会话资料隔离、发送撤权、联网与路径边界、依赖及历史隐私扫描、升级注意事项 | ✅ 2026-10-31 |
 | [guides/PROJECT_GUIDE.md](guides/PROJECT_GUIDE.md) | **权威项目说明书**（113 KB / 1450+ 行）：架构、内外核划分、数据流、配置全解、安全机制、调试与改进指南，含 2026-08-20 ~ 2026-09-11 的逐轮更新记录 | ✅ **唯一权威版本**（另一份同名精简版已归档到 legacy，见下） |
 | [guides/DSH_SETUP.md](guides/DSH_SETUP.md) | DSH 端安装说明：`qq-chat` / `qq-chat-v2` preset 与三个 MCP server 怎么挂到目标设备的 DSH 上 | ✅ |
 | guides/VOICE.md（**本地专属，未入库**） | 语音发送全解：独立工具（`voice-tool/` 的图形界面与命令行）、桥接 CLI、AI 工具、控制台面板，以及**工具拆出后的配置解析顺序** | ✅ 2026 整理时已更新（工具移到上一级 `voice-tool/`） |

@@ -72,6 +72,9 @@ export function isPrivateIp(ip) {
 
   if (net.isIP(h) === 4) {
     const parts = h.split('.').map(Number);
+    // Azure WireServer 看起来是公网 IPv4，但在 Azure VM 内指向平台服务。
+    // IPv4-mapped / NAT64 / 6to4 同样会递归到这里，不能只在 URL 字面量处拦截。
+    if (h === '168.63.129.16') return true;
     if (parts[0] === 10) return true;
     if (parts[0] === 127) return true;
     if (parts[0] === 0) return true;

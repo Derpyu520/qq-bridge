@@ -10,6 +10,7 @@
 // - `web_fetch` 仅允许 http/https：
 //   - 禁止 URL 内嵌凭据；
 //   - 禁止 localhost / .local / 私有 IP / 环回 / 链路本地 / CGNAT 等内网地址；
+//   - 仅允许常规 Web 端口（80/443/8080/8443），与桥接媒体抓取口径一致；
 //   - 域名会先做 DNS 解析并检查全部解析结果，避免解析到内网；
 //   - 手动跟随重定向，每一跳都重新校验；
 //   - 响应体按字节流限量读取，避免超大响应拖垮进程。
@@ -93,11 +94,11 @@ server.tool(
 
 server.tool(
   'web_fetch',
-  '只读抓取 HTTP(S) 网页正文，返回纯文本/HTML 前 50000 字符。禁止访问内网/本机地址，不执行任何本地操作。',
+  '只读抓取 HTTP(S) 网页正文，返回纯文本/HTML 前 50000 字符。仅允许 Web 端口 80/443/8080/8443，禁止访问内网/本机地址，不执行任何本地操作。',
   { url: z.string().describe('要抓取的 http(s) URL') },
   async ({ url }) => {
     try {
-      const result = await safeFetch(url);
+      const result = await safeFetch(url, 50000, { allowPorts: [80, 443, 8080, 8443] });
       return { content: [{ type: 'text', text: untrustedData(result) }] };
     } catch (error) {
       return {

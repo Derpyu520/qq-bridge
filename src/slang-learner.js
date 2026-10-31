@@ -159,7 +159,7 @@ export function saveSlang(file, entries, { max = SLANG_MAX_ENTRIES } = {}) {
   return { entries: capped, dropped };
 }
 
-export function createSlangEntry({ content, meaning = '', usage = '', example = '', risk = '', sources = [], status = SLANG_STATUS.CANDIDATE, source = 'ai', evidence = [] } = {}) {
+export function createSlangEntry({ content, meaning = '', usage = '', example = '', risk = '', sources = [], status = SLANG_STATUS.CANDIDATE, source = 'ai', evidence = [], scope = 'global' } = {}) {
   return normalizeSlangEntry({
     content,
     meaning,
@@ -169,6 +169,7 @@ export function createSlangEntry({ content, meaning = '', usage = '', example = 
     sources,
     status,
     source,
+    scope,
     count: 1,
     evidence,
     createdAt: nowIso(),
@@ -177,14 +178,18 @@ export function createSlangEntry({ content, meaning = '', usage = '', example = 
 }
 
 export function upsertSlangEntry(entries, content, patch = {}) {
-  const normalizedContent = String(content ?? '').trim();
+  const normalizedContent = normalizeSlangEntry({ content }).content;
   if (!normalizedContent) return { entries, entry: null, created: false };
-  const existing = entries.find((e) => e.content === normalizedContent);
+  // 同词在不同群里可能有完全不同的含义与证据。不能合并后再把整个条目改归
+  // 最后发言的群，否则前一个群的私有解释会进入后一个群的提示词。
+  const scope = normalizeSlangScope(patch.scope);
+  const existing = entries.find((e) => e.content === normalizedContent && normalizeSlangScope(e.scope) === scope);
   if (existing) {
     const next = normalizeSlangEntry({
       ...existing,
       ...patch,
       content: normalizedContent,
+      scope,
       count: (existing.count || 0) + (patch.countIncrement ?? 1),
       evidence: mergeEvidence(existing.evidence, patch.evidence ?? []),
       updatedAt: nowIso(),
@@ -196,6 +201,7 @@ export function upsertSlangEntry(entries, content, patch = {}) {
   const entry = normalizeSlangEntry({
     ...createSlangEntry({ content: normalizedContent, source: 'ai' }),
     ...patch,
+    scope,
     evidence: patch.evidence ?? [],
   });
   entries.push(entry);
