@@ -2083,7 +2083,11 @@ async function main() {
     if (usage !== undefined && usage !== null) patch.usage = String(usage);
     // 备注归属到写它的那个会话：备注内容常带群号/人名/话题，不该出现在别的会话的提示词里。
     // 控制台（无会话上下文）写下的备注保持全局。
-    if (currentKey) patch.noteScope = canonicalV2Key(currentKey) || 'global';
+    if (currentKey) {
+      const scope = canonicalV2Key(currentKey);
+      // key 不合法时保持原归属；退回 'global' 等于把私有备注广播给所有会话（fail-open）。
+      if (scope) patch.noteScope = scope;
+    }
     const updated = applyStickerNote(stickerEntries, stickerId, patch);
     if (!updated.entry) return null;
     stickerEntries = updated.entries;

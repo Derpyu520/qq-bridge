@@ -4,9 +4,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  buildSlangContext, createSlangEntry, loadSlang, saveSlang, upsertSlangEntry
+  buildSlangContext, createSlangEntry, loadSlang, normalizeSlangScope, saveSlang, slangScopeVisible, upsertSlangEntry
 } from '../src/slang-learner.js';
-import { applyStickerNote, formatStickerList, stickerForScope } from '../src/sticker-lib.js';
+import {
+  applyStickerNote, formatStickerList, normalizeNoteScope, noteScopeVisible, stickerForScope
+} from '../src/sticker-lib.js';
 import { safeJoinLibrary } from '../src/voice-core.js';
 
 let passed = 0;
@@ -68,6 +70,21 @@ try {
     assert.equal(entries[0].count, 2);
   });
 
+  check('unrecognized slang scope is quarantined instead of broadcast as global', () => {
+    const entry = createSlangEntry({ content: '坏归属词', meaning: '不该外泄的解释', status: 'confirmed', scope: 'bogus' });
+    assert.notEqual(entry.scope, 'global', 'invalid scope must not become global');
+    assert.equal(slangScopeVisible(entry.scope, 'group:101'), false);
+    assert.equal(slangScopeVisible(entry.scope, ''), false);
+    assert.equal(buildSlangContext([entry], 8, 'group:101'), '');
+    assert.equal(buildSlangContext([entry], 8), '', 'no key must not inject private entries');
+    // 加载时会再次归一化，隔离值必须幂等，否则会被写回全局。
+    assert.equal(normalizeSlangScope(entry.scope), entry.scope);
+    const file = path.join(tmp, 'quarantine-slang.json');
+    saveSlang(file, [entry]);
+    assert.equal(loadSlang(file)[0].scope, entry.scope);
+    assert.equal(createSlangEntry({ content: '旧全局词' }).scope, 'global');
+  });
+
   const sticker = {
     id: 'test-face', desc: 'QQ 公共备注', localNote: 'A 私有笔记', usage: 'A 私有用法',
     tags: ['A私有标签'], noteScope: 'group:101', lastContext: '最近使用的私有语境'
@@ -100,6 +117,15 @@ try {
     const sameScope = applyStickerNote([sticker], sticker.id, { tags: ['新标签'] }).entry;
     assert.equal(sameScope.localNote, 'A 私有笔记');
     assert.equal(sameScope.noteScope, 'group:101');
+  });
+
+  check('unrecognized sticker note scope is quarantined and hidden', () => {
+    assert.notEqual(normalizeNoteScope('bogus'), 'global');
+    assert.equal(noteScopeVisible('bogus', 'group:101'), false);
+    assert.equal(noteScopeVisible('bogus', ''), false);
+    assert.equal(stickerForScope({ ...sticker, noteScope: 'bogus' }, 'group:101').localNote, '');
+    // 归一化幂等：否则每次加载都会把隔离值写回全局。
+    assert.equal(normalizeNoteScope(normalizeNoteScope('bogus')), normalizeNoteScope('bogus'));
   });
 
   const library = path.join(tmp, 'library');
