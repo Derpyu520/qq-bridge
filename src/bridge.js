@@ -5517,6 +5517,12 @@ async function main() {
             sendJson({ ok: false, error: '已禁用多条发送，请合并为一条消息' }, 403);
             return;
           }
+          // 引用解析会返回目标原文；跨会话只授予发送，不能借引用读取目标聊天。
+          if (crossSessionPrefix(key, req.headers['x-agent-token']) && replyToMessageId !== undefined
+            && replyToMessageId !== null && String(replyToMessageId).trim() !== '') {
+            sendJson({ ok: false, error: '跨会话发送不支持引用目标会话消息，请使用普通文本发送' }, 403);
+            return;
+          }
           if (req.headers['x-agent-token'] && !sendAgentTokenOk(key, req.headers['x-agent-token'], messages.length)) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
           // 跨会话发送：首条消息前注明来源会话。
           {
@@ -7291,6 +7297,12 @@ async function main() {
             return;
           }
           if (currentMode === 'reserved2' && !token) { sendJson({ ok: false, error: 'reserved2 模式发送必须携带 agent token' }, 403); return; }
+          // 引用解析会返回目标原文；跨会话只授予发送，不能借引用读取目标聊天。
+          if (crossSessionPrefix(key, token) && replyToMessageId !== undefined
+            && replyToMessageId !== null && String(replyToMessageId).trim() !== '') {
+            sendJson({ ok: false, error: '跨会话发送不支持引用目标会话消息，请使用普通文本发送' }, 403);
+            return;
+          }
           if (token && !sendAgentTokenOk(key, token)) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
           const flag = isPrivate ? 'sendPrivate' : (isReply ? 'reply' : 'sendGroup');
           if (token && !v2ToolEnabled(flag)) { sendJson({ ok: false, error: `工具未启用：${flag}` }, 403); return; }

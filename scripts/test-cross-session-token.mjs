@@ -232,3 +232,20 @@ test('分条等待期间撤销来源白名单，后续跨会话正文停止出�
     assert.equal(h.calls.http.length, 1);
   });
 });
+
+
+test('跨会话不能借引用解析获取目标聊天原文', async () => {
+  await withHarness({ allowCrossSessionSend: true, allowAnySessionToOwner: true }, async ({ h, call, group, owner }) => {
+    h.appendSocialV2Message('private:123', 'owner', '私密引用内容', '私密引用内容', false, true, 42);
+    for (const [route, token, body] of [
+      ['/api/send/private', group, { userId: '123', token: group, message: '引用', replyToMessageId: 42 }],
+      ['/api/send/reply', owner, { groupId: '456', token: owner, message: '引用', replyToMessageId: 42 }],
+      ['/api/socialV2/send-message', group, { key: 'private:123', messages: ['引用'], replyToMessageId: 42 }]
+    ]) {
+      const r = await call(route, token, body);
+      assert.equal(r.status, 403, JSON.stringify(r));
+      assert.equal(r.quoted, undefined);
+    }
+    assert.equal(h.calls.http.length, 0);
+  });
+});
