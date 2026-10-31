@@ -1276,7 +1276,7 @@ function boundedTimerDelay(value, fallback = 0, min = 0, max = 86400000) {
   const n = Number(value);
   return Math.min(max, Math.max(min, Math.round(Number.isFinite(n) ? n : fallback)));
 }
-const sleep = (ms) => new Promise((r) => setTimeout(r, boundedTimerDelay(ms)));
+const sleep = (ms) => new Promise((r) => setTimeout(r, Math.min(86400000, Math.max(0, boundedTimerDelay(ms)))));
 const convKey = (kind, id) => `${kind}:${id}`;
 const SEND_TIMEOUT_MS = 15000;
 // DSH 控制类调用（停任务/归档会话）的超时。这些 await 以前是裸的：DSH 接受了连接但
