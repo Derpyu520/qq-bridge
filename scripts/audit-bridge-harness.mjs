@@ -25,6 +25,7 @@ import * as presetPrompt from '../src/preset-prompt.js';
 import * as roleCard from '../src/role-card.js';
 import * as stateAcl from '../src/state-acl.mjs';
 import { persistSnowLumaEndpoint, persistToken } from '../src/snowluma-conn.js';
+import * as memoryWorldModule from '../src/memory-world.mjs';
 import { unwrap, createTurnCollector } from '../src/dsh-client.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -166,6 +167,7 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     sendToQQ, sendBurstToQQ, sendMessagesV2, sendStickerV2, handleIncoming, handleRecallNotice, handlePokeNotice, handlePendingAnswer, pending, startConsoleServer, cfg, state, api, promptQueues, forwardMediaRefs, rememberForwardMedia, forwardMediaKey, setStickerEntries, getStickerEntries,
     getSocialV2State, appendSocialV2Message, recordSentMessagesV2,
     buildWakePromptV2, buildWakeSnapshotV2, sendWakePromptV2, socialV2,
+    memoryWorld, startDiaryScheduler, writeDiaryFor, diaryTick, diaryConfig, composeWorldMemoryText,
     syncStickerLibrary, listStickersForV2, getStickerImageData,
     refreshMode, sessionEvents, modeAllowed, trackTurnEvent, replayPendingWakeReasonsV2,
     collectors, reverse, setupSleepTimerV2,
@@ -210,8 +212,17 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     // 需要验证自愈逻辑的用例可以用 globals 覆盖它。
     discoverDshBaseUrl: async () => null,
     resolveInstalledPreset, synchronizePreset, renderPatch, persistSnowLumaEndpoint, persistToken,
+    // LLM 域名 DNS 预热：bridge.js 在投递 prompt 时会后台 `dnsLookup(api.deepseek.com)`。
+    // 测试不该做真实 DNS（也不该依赖宿主网络），桩成立即返回。
+    dnsLookup: async () => ({ address: '127.0.0.1', family: 4 }),
     ...markdown, ...sensitive, ...wait, ...safeFetch, ...forward, ...slang, ...sticker,
     ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...presetPrompt, ...roleCard,
+    // 世界记忆（soul/people/rooms/日记）：bridge.js 顶层 import 会被剥掉，这里补绑定。
+    createMemoryWorld: memoryWorldModule.createMemoryWorld,
+    memoryDayKey: memoryWorldModule.dayKey,
+    buildDiaryTranscript: memoryWorldModule.buildDiaryTranscript,
+    buildDiaryPrompt: memoryWorldModule.buildDiaryPrompt,
+    cleanDiaryText: memoryWorldModule.cleanDiaryText,
     // 桥接的出图出口会调归一化（体积/动图抽帧）：VM 里必须能拿到这几个函数。
     normalizeImageForModel: mediaNormalize.normalizeImageForModel,
     sniffImage: mediaNormalize.sniffImage,

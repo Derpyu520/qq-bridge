@@ -272,6 +272,25 @@
       "gifFrames": 6,
       "gifTile": 240,
       "normalizeTimeoutMs": 25000
+    },
+    "memory": {
+      "enabled": true,
+      "budget": {
+        "soul": 600,
+        "people": 520,
+        "room": 260,
+        "diary": 300
+      },
+      "diary": {
+        "enabled": true,
+        "at": "23:30",
+        "maxChars": 140,
+        "injectDays": 3,
+        "inject": "owner",
+        "catchUpDays": 2,
+        "preset": "minimal",
+        "timeoutMs": 180000
+      }
     }
   },
   "webSearch": {
