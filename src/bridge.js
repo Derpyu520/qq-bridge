@@ -3788,12 +3788,16 @@ async function main() {
         log('⚠️ DSH 不可用（重启中？），QQ 消息将入队等待');
       }
       // DSH 桌面版重启会换端口：这里顺手重新发现一次（15 秒节流在 resolveDshBaseUrl 里）。
-      const found = await resolveDshBaseUrl();
-      if (found && found !== cfg.dsh.baseUrl) {
-        log(`DSH 端口变化，自动切换：${cfg.dsh.baseUrl} → ${found}`);
-        cfg.dsh.baseUrl = found;
-        api.baseUrl = found;
-        api.invalidateAuth();
+      try {
+        const found = await resolveDshBaseUrl();
+        if (found && found !== cfg.dsh.baseUrl) {
+          log(`DSH 端口变化，自动切换：${cfg.dsh.baseUrl} → ${found}`);
+          cfg.dsh.baseUrl = found;
+          api.baseUrl = found;
+          api.invalidateAuth();
+        }
+      } catch (error) {
+        log(`DSH 端口发现失败（忽略，下轮再试）：${error?.message ?? error}`);
       }
     }
   };
