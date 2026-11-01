@@ -17,7 +17,7 @@
 // 原生组件是**专有组件**；由本程序**程序化启动/结束**它，落在"通过自动化脚本部署"的射程内。
 // 即便是"用户已装好、我们帮忙拉起"，也不值得为这点便利去踩一条需要书面授权的条款。
 //
-// 设计不变量 L6（见规划集 QSH_PLAN.md §6.0）：**QSH 只探测、不部署**——
+// 设计不变量 L6（见 NOTICE.md 与安全基线）：**qq-bridge 只探测、不部署**——
 // 永不安装、复制、打包或自动部署 SnowLuma 及其原生组件，也不程序化启停其进程。
 // 用户在 QQ 侧不可用时得到的应该是**可操作的提示**（"请自行启动 SnowLuma"），而不是被代劳。
 import fs from 'node:fs';
@@ -72,7 +72,7 @@ async function gatewayInfo() {
   }
 }
 
-const server = new McpServer({ name: 'snowluma-host', version: '0.2.1-r1' });
+const server = new McpServer({ name: 'snowluma-host', version: '0.2.1-r2' });
 
 server.registerTool(
   'snowluma_status',

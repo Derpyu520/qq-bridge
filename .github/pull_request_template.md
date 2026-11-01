@@ -25,7 +25,7 @@ Audit suite: / scripts passed.
 ## 自查
 
 - [ ] 跑过 `npm run test:audit`，结果写在上面
-- [ ] 跑过 `npm run privacy-scan`（没有新增命中；已知的 3 处误报可忽略）
+- [ ] 跑过 `npm run privacy-scan`（没有新增命中；历史命中和误报已逐项说明）
 - [ ] 新增行为带了回归脚本，**并已加进 `scripts/test-audit.mjs` 的清单**
 - [ ] 没有提交 token / Cookie / 真实 QQ 号 / 群号 / 本机绝对路径 / `state/`
 - [ ] 行为变更（配置项、工具名、端点、默认值）已同步更新 README 或 `docs/`

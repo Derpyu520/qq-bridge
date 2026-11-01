@@ -9,6 +9,8 @@
 >
 > 适配目标：`@deepseek-ai/dsh` **0.2.0-rc.2**（上一版适配目标是 0.1.7-rc.2）。
 > 对应提交：`e43186a`（主体）；本文写于 2026-10-02。
+>
+> **上游行为标注**：文中出现的 SnowLuma `[Hook]`、原生组件、逐字节比对、运行时源码等，均为对 SnowLuma 行为的记录或观测；qq-bridge 自身不注入、不挂钩、不修改其本体。
 
 ---
 
@@ -37,7 +39,7 @@
 | 4 | `scripts/scan-dsh-tool-names.mjs`（新增） | 拿安装包与守卫名单双向求差的 CLI（`npm run scan:tool-names`） | §3 对账工具 |
 | 5 | `plugins/qq-mode-console/lib/index.js` | 删掉 0.2.0 已移除的 `ctx.settings.register()` 死路，`apply()` 改为显式空实现 | §4 设置命名空间 |
 | 6 | `scripts/test-qq-mode-plugin.mjs` | 重写为 6 项，钉住命名空间可用的三点前提 + 「不许把已删除的 API 加回来」 | §4 |
-| 7 | `scripts/probe-auth.mjs`（新增）+ 5 个探针 + 4 个运维脚本 | 鉴权统一走离线铸造 Cookie；夹具改到系统临时目录 | §5 遗留缺口 |
+| 7 | `scripts/probe-auth.mjs`（新增）+ 5 个探针 + 4 个运维脚本 | 鉴权统一走本机 DSH 会话凭据生成 Cookie；夹具改到系统临时目录 | §5 遗留缺口 |
 | 8 | `scripts/probe-020-protocol.mjs`、`probe-020-settings.mjs`（新增） | 0.2.0 契约探针（帧结构 / settings 命名空间） | §2 §4 取证 |
 | 9 | `scripts/test-dsh-inbox-projection.mjs`（新增，12 项） | 用**真实 0.2.0 帧骨架**钉住队列解析（离线，已进 `test:audit`） | §2 回归网 |
 | 10 | `scripts/test-dsh-session-retire.mjs`（新增，11 项） | 活 DSH 端到端：退役会话必须成功且真的清掉队列 | §2 回归网 |
@@ -216,7 +218,7 @@ schema 接受全部 mode 拼写、**不再出现 `settings.register`**（只看�
   `?token=` 再换 Cookie"的引导。这条路在 0.1.7 就死了（启动 token 只存在内存、日志里是上一个进程的
   陈旧值），于是一律 401 —— **诊断工具本身坏了，而且没人会注意到**（探针不在回归套件里；
   生产代码当时修好了，工具没跟上）。
-  → 新增 `scripts/probe-auth.mjs`，统一走本机签名密钥离线铸造 Cookie，并提供
+  → 新增 `scripts/probe-auth.mjs`，统一走本机 DSH 会话凭据生成 Cookie，并提供
   `probeRpc` / `probeMuxSocket` / `probeWorkspaceDir`；9 个脚本全部改用它。
 - **落盘**：探针与测试夹具原先写在仓库 `state/` 下。`state/` 被 `harden-state-acl.mjs` 收紧了 ACL
   （见 §7.2），在 DSH 沙箱会话里**写不进去**（EPERM）。
@@ -342,7 +344,7 @@ HTTP transport 下起作用，而三个 MCP server 全是 stdio。清掉是为�
 | 22:08:15 | 入站：`没事` |
 | 22:08:29 | agent 再发 1 条 → **成功 1/1** |
 
-一条链路同时验证了：0.2.0 的 **preset bundle 机制**、**离线铸造 Cookie 鉴权**、
+一条链路同时验证了：0.2.0 的 **preset bundle 机制**、**本机会话 Cookie 生成**、
 `session/selectModel`、三个 **MCP 工具**的活调用，以及人设确实在起作用（短句、不像客服、不汇报）。
 
 ### 9.3 回归网的意义
@@ -358,7 +360,7 @@ HTTP transport 下起作用，而三个 MCP server 全是 stdio。清掉是为�
 1. `node scripts/verify-dsh-021-adaptation.mjs`（先看红在哪；活 DSH 段是主要信号）。
 2. `npm run scan:tool-names` —— **每次升级必跑**。守住两类漂移：假名静默失效、新能力漏隐藏。
 3. `node scripts/probe-020-protocol.mjs` —— 采样 `session/control` / `session/follow` / `$events` /
-   `session/cancel` 的**原始帧结构**，与本文 §2.3 §8 对账。
+   `session/cancel` 的**DSH RPC 返回结构（原始帧）**，与本文 §2.3 §8 对照。
 4. `node scripts/probe-020-settings.mjs` —— 命名空间是否还在、是否还可写。
 5. `npm run test:dsh-inbox` + `npm run test:session-retire:e2e` —— 队列与退役路径。
 6. `npm run test:audit`（30 个脚本）与 `npm run verify:persona`。
@@ -408,12 +410,12 @@ v0.2.0 发布后，有人反馈「**QQ 注入失败**」。调查后修了三类
 | 错法 | 后果 | 正确做法 |
 | --- | --- | --- |
 | `good` 取自 **`get_login_info`** | 它只返回 `{user_id, nickname}`，`good` 永远 `undefined`；而 SDK **只校验 status/retcode 信封、不校验 data 载荷** ⇒ 不报错、`good` 永远停在 `null`，那条"权威信号"整条是**死代码** | 取自 **`get_status`**（`{online, good}`），以及**每 30 秒心跳载荷里的 `status.good`** |
-| 用心跳/事件**静默**判断 hook 死活 | 心跳由 SnowLuma **自己的定时器无条件**发出（`HEARTBEAT_INTERVAL = 3e4`），不经过 QQ 事件流水线 ⇒ 静默**永远不触发**，检测不到它声称要检测的东西 | 接收链路的健康度只在 `status.good` 里；静默只能说明**进程/WS 卡住**，是另一个故障面 |
+| 用心跳/事件**静默**判断上游接入死活 | 心跳由 SnowLuma **自己的定时器无条件**发出（`HEARTBEAT_INTERVAL = 3e4`），不经过 QQ 事件流水线 ⇒ 静默**永远不触发**，检测不到它声称要检测的东西 | 接收链路的健康度只在 `status.good` 里；静默只能说明**进程/WS 卡住**，是另一个故障面 |
 
 两条都实测核对过 SnowLuma 1.14.9 运行时源码，并用 `npm run probe:heartbeat` 连真实网关验证：
 `status = {"online":true,"good":true}`、`interval = 30000`。
 新增 `test-snowluma-upstream-health.mjs`（9 项）把这两条钉住 —— 特别是**反面断言**：
-不得从 `get_login_info` 取 `good`、静默分支不得把结论指向 `[Hook]`。
+不得从 `get_login_info` 取 `good`、静默分支不得把结论指向 SnowLuma `[Hook]`。
 
 ### C. 客户端库升级 1.14.9/1.14.10 → 1.14.20
 
@@ -468,7 +470,7 @@ SnowLuma 同一账号的 **HTTP token（3000）与 WS token（3001）不同**，
 | 检查 | 证据 |
 | --- | --- |
 | 包完整性 | `SnowLuma-v1.14.20-win-x64-lite.zip` SHA256 == 官方发布资产 `digest` |
-| **原生组件跨版本未变** | 官方 1.14.9 包 == 本机 1.14.9 == 官方 1.14.20，`native/snowluma-win32-x64.{dll,node}` 与 `websocket-win32-x64.node` **逐字节相同**；`index.mjs` 7,062,899 → 7,476,546 B |
+| **SnowLuma 原生组件跨版本未变** | 官方 1.14.9 包 == 本机 1.14.9 == 官方 1.14.20，`native/snowluma-win32-x64.{dll,node}` 与 `websocket-win32-x64.node` **逐字节相同（发布包核对）**；`index.mjs` 7,062,899 → 7,476,546 B |
 | 配置迁移无损 | 桥接的 `readOneBotTokens()` 在新装目录解析出两个账号，HTTP/WS token 与旧装**逐一相同** |
 | 心跳主信号仍成立 | `status = {"online":true,"good":true}`、`interval = 30000` |
 | `bot_status` 真的出现了 | 1.14.9：**0** 次；1.14.20：**3** 次（带 `sub_type`/`user_id`） |
@@ -477,7 +479,7 @@ SnowLuma 同一账号的 **HTTP token（3000）与 WS token（3001）不同**，
 | **完整往返** | 唤醒 → DSH 建会话并挂 `qq-chat-v2` → 工具发送 `成功 1/1 条` → 群里实际出现两条回复 |
 
 > ⚠️ **更正**：本附录 A 一度暗示「升级 SnowLuma 可能修注入（1.14.17 刷新过原生组件）」。
-> 字节级证据表明**原生组件根本没有变**，那条推断是错的。升级只换 JS 层
+> SnowLuma 发布包字节级证据表明**原生组件根本没有变**，那条推断是错的。升级只换 JS 层
 > （事件流水线订阅更全、`bot_status`、markdown 带 text、收发修复），
 > **不会修「原生 hook 挂不上 QQ」**——那类问题要走 SnowLuma 自己的排查（QQ 版本、杀软拦注入、权限）。
 
@@ -491,9 +493,10 @@ SnowLuma 同一账号的 **HTTP token（3000）与 WS token（3001）不同**，
 | ~~`v0.2.1`~~ | r2 —— 采用本方案**之前**的一次性发布：标签与 Release **已撤回**（提交 `9bb7b98` 仍在历史里）。本节全部内容都包含在 r3 中，撤回无功能影响。撤回理由：它不符合「主版本与 DSH 同步」的方案，且发布仅约 26 分钟、无二进制资产、无下游依赖，改写代价为零；留着则每次看标签列表都要额外解释一次 |
 | `v0.2.0-r3` | r3 —— 上游健康 + 客户端库升级 + clone 可移植性 + 1.14.20 实测 |
 | `v0.2.0-r4` | r4 —— 表情包/动图链路、DSH 同源联网搜索、issue 修复、整体体检（见附录 J） |
-| `v0.2.1-r1` | r1（0.2.1 线）—— **当前版本**：DSH 0.2.1-rc.2 适配，P0 `{{cwd}}` 提示词变量修复 + 工具面守卫补齐（见 [DSH_021_ADAPTATION.md](DSH_021_ADAPTATION.md)）。用 `-r1` 而不是裸 `v0.2.1`：那个标签已被上表撤回的 r2 占用过 |
+| `v0.2.1-r1` | r1（0.2.1 线）—— DSH 0.2.1-rc.2 适配，P0 `{{cwd}}` 提示词变量修复 + 工具面守卫补齐（见 [DSH_021_ADAPTATION.md](DSH_021_ADAPTATION.md)）。用 `-r1` 而不是裸 `v0.2.1`：那个标签已被上表撤回的 r2 占用过 |
+| `v0.2.1-r2` | r2（0.2.1 线）—— 会话隔离、安全加固、断线投递与实例归属修复；继续沿用 `rN` 方案 |
 
-`package.json` 是 `"private": true`（不发布到 npm），所以 `0.2.1-r1` 这种 prerelease 写法
+`package.json` 是 `"private": true`（不发布到 npm），所以 `0.2.1-rN` 这种 prerelease 写法
 不产生 npm 语义影响；版本号与标签保持一致，便于 `verify:adaptation` 对账。
 
 ### I. r3 时**未**修、r4 已修的问题

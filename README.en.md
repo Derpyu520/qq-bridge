@@ -7,6 +7,8 @@ A local message bridge that forwards message events and AI replies between the *
 > [!IMPORTANT]
 > **qq-bridge is independently maintained. It is not a SnowLuma subproject and is not affiliated with SnowLuma, DeepSeek, or Tencent / QQ.**
 > It communicates through the **OneBot v11 interfaces** exposed by SnowLuma. The bridge and the SnowLuma backend are deployed and maintained independently, without affiliation, partnership, or endorsement. OneBot v11 is a public protocol, not a proprietary SnowLuma protocol.
+>
+> **Terminology and boundaries**: qq-bridge does not inject into or hook the QQ or SnowLuma processes, and does not modify SnowLuma itself or its native components. It does read local OneBot configuration and access tokens, connects to the OneBot interfaces, and patches the local `@snowluma/sdk` installation for ESM imports during `npm install`. “Persona injection” means adding text to prompts, while “prompt injection” means attacks from untrusted content. Upstream `[Hook]` entries refer only to SnowLuma's integration mechanism, not to qq-bridge.
 
 ```text
 QQ ↔ SnowLuma ↔ qq-bridge ↔ DeepSeek Harness ↔ Model provider
@@ -70,7 +72,7 @@ This installs the chat presets and MCP tools into DSH. **It is required for a fr
 npm start
 ```
 
-Open the [local console](http://127.0.0.1:3100) and sign in with the token printed at startup. Automatically generated tokens are stored in `state/console-token`. New installations default to second-generation simulation (`reserved2`), which speaks selectively; switch to `chat` for an initial message test from an allowed conversation.
+Open the [local console](http://127.0.0.1:3100) and enter the console token. Automatically generated tokens are stored in `state/console-token`; if `consoleToken` is set in `config.json`, use that value instead. Startup logs do not print the token. New installations default to second-generation simulation (`reserved2`), which speaks selectively; switch to `chat` for an initial message test from an allowed conversation.
 
 On Windows, `start.bat` also runs the bridge with automatic restart. Closing its window stops it.
 
@@ -98,6 +100,7 @@ npm run test:audit
 - Use only in conversations where participants are informed and use is permitted. Follow platform rules; using an unofficial QQ backend may lead to account restrictions.
 - DSH sends chat content to your configured model provider. Automatic slang research is enabled by default and may send extracted keywords to search services. See [NOTICE](NOTICE.md#四数据传输) for data flows and controls.
 - Protect `config.json`, `state/`, and console tokens. Keep services accessible only locally.
+- While DSH is offline, messages are queued only in memory, up to 50 per conversation. The queue is lost when the bridge exits and delivery is not guaranteed.
 - The bridge does not implement QQ login or its underlying protocol, or install, bundle, start, or stop the SnowLuma backend. It currently uses client packages including `@snowluma/sdk`; third-party terms apply separately.
 
 The current code is available under [PolyForm Noncommercial 1.0.0](LICENSE) for noncommercial use. Releases up to and including `v0.2.1-r1` retain their original MIT license. See [NOTICE](NOTICE.md) for third-party components, project independence, and usage risks.

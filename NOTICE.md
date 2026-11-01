@@ -11,7 +11,7 @@
 
 ### 1.1 著作权归属
 
-本软件著作权由 Derpyu520 及 qq-bridge / QSH 贡献者共同享有，依
+本软件著作权由 Derpyu520 及 qq-bridge 贡献者共同享有，依
 **PolyForm Noncommercial License 1.0.0**（SPDX 标识符：`PolyForm-Noncommercial-1.0.0`）授权。
 许可全文见 [`LICENSE`](LICENSE)，官方文本见
 <https://polyformproject.org/licenses/noncommercial/1.0.0>。
@@ -35,8 +35,8 @@
 
 ### 1.3 版本适用
 
-`v0.2.1-r1` 及更早版本以 MIT 许可发布，该等版本仍适用其发布时的许可。本许可仅适用于
-`v0.2.1-r1` 之后的版本。许可变更前已取得副本或已完成 fork 的，不受本许可约束。
+`v0.2.1-r1` 及更早发布版本仍可按其发布时的 MIT 条款使用；`v0.2.1-r1` 之后的发布版本及
+基于这些新版本形成的修改，适用其发布时的许可。仅取得旧版本或创建过 fork，不会改变后续版本的许可。
 
 仓库内随附的子包（`plugins/qq-agent-presets`、`plugins/qq-mode-console`）与根目录适用同一
 许可；它们的 `package.json` `license` 字段与根清单保持一致，不构成单独的 MIT 例外。
@@ -59,8 +59,8 @@ GitHub 的许可识别清单不包含 PolyForm 系列（2026-10-30 核验：`GET
 | 组件 | 许可 | 说明 |
 | --- | --- | --- |
 | [`@deepseek-ai/dsh`](https://github.com/deepseek-ai/deepseek-harness) 及 `@deepseek-ai/*` 各包 | MIT | DeepSeek Harness 本体与官方 API 客户端 |
-| [`@snowluma/sdk`](https://www.npmjs.com/package/@snowluma/sdk)、[`@snowluma/mcp`](https://www.npmjs.com/package/@snowluma/mcp) | 声明为 `SEE LICENSE IN LICENSE`，发布包内未附许可文件（见 2.2） | 经 npm 依赖使用；计划在 QSH 中移除 |
-| [SnowLuma](https://github.com/SnowLuma/SnowLuma) 本体 | 源码可见的非商业许可（非 OSI 开源许可） | 本软件不在仓库内包含或分发其源码与二进制，仅经 OneBot v11 协议通信（另只读其 `config/onebot_*.json` 以发现 token） |
+| [`@snowluma/sdk`](https://www.npmjs.com/package/@snowluma/sdk)、[`@snowluma/mcp`](https://www.npmjs.com/package/@snowluma/mcp) | 声明为 `SEE LICENSE IN LICENSE`，发布包内未附许可文件（见 2.2） | 经 npm 依赖使用 |
+| [SnowLuma](https://github.com/SnowLuma/SnowLuma) 本体 | 源码可见的非商业许可（非 OSI 开源许可） | 本软件不在仓库内包含或分发其源码与二进制，仅经 OneBot v11 协议通信；并在本机读取安装目录下 `config/onebot_*.json` 中的接入令牌，令牌仅用于连接相应的 OneBot 地址 |
 | `@modelcontextprotocol/sdk`、`js-yaml`、`zod` 等 | MIT / ISC | 见各自包内 LICENSE |
 
 ### 2.2 `@snowluma/sdk` 与 `@snowluma/mcp` 的许可状态
@@ -85,30 +85,27 @@ repository**」，而 `packages/sdk`、`packages/mcp` 位于该仓库之内，�
 2. `npm install` 的 `postinstall` 会运行 `scripts/patch-snowluma-sdk.mjs`，对
    `node_modules/@snowluma/{sdk,mcp}` 的 `dist/**/*.js` 执行一次机械修补（为相对导入补充 `.js`
    扩展名，规避该两包自身的 ESM 打包缺陷）。该修补仅作用于本机安装副本，不进入本仓库；
-   SnowLuma 许可 §2(c) 允许为自身非商业使用而修改。**本软件不对 SnowLuma 的源码或二进制作任何改动，
-   亦不对其作出「未修改」的陈述。**
-3. 移除计划（已列入 QSH 的 M2 里程碑）：
-   - `@snowluma/sdk` 在本软件中仅用于构造 1 处 WebSocket 客户端与 3 个 `text()` 调用点
-     （另有 3 个 `scripts/` 诊断脚本引用）。OneBot v11 为公开协议规范，可自行实现最小客户端；
-     移除依赖与替换客户端须同批完成，否则 `postinstall` 修补将失去作用对象。
-   - `@snowluma/mcp` 在本软件运行时不使用（`src/` 内无引用，仅 `scripts/test-mcp-exec.mjs` 引用），
-     计划改为自建能力矩阵。其 `catalog.js` 快照属再分发其内容，不得提交至本仓库；
-     仓库根目录曾跟踪的 `_snowluma-catalog.json` 已删除并加入 `.gitignore`。
+   SnowLuma 许可 §2(c) 允许为自身非商业使用而修改。**本软件不修改 SnowLuma 应用本体，
+   上述说明仅指对本机 npm 安装副本进行兼容性修补。**
+3. 后续如替换这些依赖，需同步调整客户端实现与 `postinstall` 修补，避免留下失效的构建步骤。
+   `@snowluma/mcp` 的 `catalog.js` 快照属于再分发其内容，不得提交至本仓库；
+   仓库根目录曾跟踪的 `_snowluma-catalog.json` 已删除并加入 `.gitignore`。
 4. 如需消除上述不确定性，应向 SnowLumaDevs 书面确认 `packages/sdk` 与 `packages/mcp` 所适用的许可。
 
 ---
 
 ## 三、与 SnowLuma 的关系
 
-### 3.1 无关联声明
+### 3.1 独立关系声明
 
-SnowLuma 为独立第三方项目，与本软件作者及腾讯公司（Tencent）、QQ 之间不存在任何隶属、合作、
-授权或背书关系。
+qq-bridge 是独立维护的第三方工具，不是 SnowLuma 的子项目；qq-bridge 与 SnowLuma、DeepSeek、
+腾讯 / QQ 之间不存在隶属、官方合作或背书关系。
 
 ### 3.2 互操作性质
 
-本软件不在仓库内包含或分发 SnowLuma 的源码与二进制，仅通过 OneBot v11 协议与其通信，
-并只读其 `config/onebot_*.json` 以发现账号 token。本软件不是 SnowLuma 的修改版或衍生版本。
+本软件不在仓库内包含或分发 SnowLuma 的源码与二进制，仅通过 OneBot v11 协议与其通信。
+它会在本机读取安装目录下的 `config/onebot_*.json`，从已有账号配置中寻找当前可用的接入令牌，
+并只将令牌用于连接相应的 OneBot 地址。本软件不是 SnowLuma 的修改版或衍生版本。
 
 ### 3.3 条款对照
 
@@ -119,7 +116,7 @@ SnowLuma 采用源码可见的非商业许可（[LICENSE](https://github.com/Sno
 | --- | --- | --- |
 | §2 授权 | 允许为非商业目的使用、运行，以及为自身非商业使用而修改 | 在授权范围内 |
 | §3(d) | 公开发布修改版或衍生版须事先取得书面许可 | 不适用：本软件不含、不分发其源码与二进制，非其修改版或衍生版 |
-| §4(a) | 禁止商业使用 | 不适用：本软件免费提供，无任何收费形态 |
+| §4(a) | 禁止商业使用 | 两项许可分别适用：qq-bridge 自身许可与 SnowLuma 许可均禁止商业使用，不构成相互豁免 |
 | §4(b) | 不得基于本软件开发、发布或分发另一个项目 | 见 3.4 |
 
 ### 3.4 关于 §4(b) 的解释与不确定性
@@ -134,8 +131,8 @@ SnowLuma 采用源码可见的非商业许可（[LICENSE](https://github.com/Sno
 
 此外，§2 授予的权利为可撤销（revocable），EULA §8 允许著作权人单方面更新条款。
 
-**本软件的立场**：不以「无需授权」为前提。在公开发布或公开宣布之前，应向 SnowLumaDevs 书面说明
-用途并询问是否需额外条件，并将答复（或未获答复的事实）归档于 `docs/design/decisions/`。
+**本软件的立场**：不因协议互操作而假定获得额外授权。使用者在评估公开分发、托管或相关服务时，
+应自行核对 SnowLuma 条款，并在需要时联系 SnowLumaDevs 确认；本软件不声称已取得额外许可。
 
 ### 3.5 EULA §5.4：必须遵守的边界
 
@@ -147,9 +144,9 @@ SnowLuma 采用源码可见的非商业许可（[LICENSE](https://github.com/Sno
 据此，本软件不安装、不复制、不打包、不自动部署 SnowLuma 及其原生组件，亦不以程序化方式启动或
 结束其进程；仅进行端口探测与状态查询，缺失时提示使用者自行经官方渠道获取并启动。
 
-该约束已作为设计不变量 L6 记录于 `QSH-plan/QSH_PLAN.md` §6.0。原 `start_snowluma` /
-`stop_snowluma` 工具与 `snowluma.allowProcessControl` 配置项已于 v0.1.5 移除，并有回归断言
-（`scripts/test-audit-setup-guards.mjs`）防止回退。
+该约束已作为设计不变量 L6 记录于本项目的[安全基线](docs/guides/SECURITY_BASELINE.md)。
+原 `start_snowluma` / `stop_snowluma` 工具与 `snowluma.allowProcessControl` 配置项已于 v0.1.5 移除，
+并有回归断言（`scripts/test-audit-setup-guards.mjs`）防止回退。
 
 ### 3.6 构成本软件明示排除的使用形态
 
@@ -169,21 +166,22 @@ SnowLuma 采用源码可见的非商业许可（[LICENSE](https://github.com/Sno
 
 ## 四、数据传输
 
-本软件运行时会向下列目的地传输数据。部署方应在部署前知悉，并按适用法律与所在平台规则履行
-告知义务。
+本软件运行时主要有下列网络出口。部署方应在部署前知悉，并按适用法律与所在平台规则履行告知义务。
 
 | 目的地 | 传输的数据 | 默认 | 关闭方式 |
 | --- | --- | --- | --- |
 | 本机 DSH（默认 `127.0.0.1:3080`） | 群聊与私聊消息文本、图片、昵称、会话上下文 | 启用 | 不运行 DSH |
 | LLM 提供方（经 DSH 调用，默认 `deepseek-official`） | 同上，包含群内其他成员的消息 | 启用 | 在 DSH 中更换 provider 或 model |
 | OneBot 网关（默认 `127.0.0.1:3000/3001`） | 发出的消息与动作参数 | 启用 | 不接入 QQ |
-| `web_search` → DeepSeek 搜索接口（默认）／Bing（仅前者不可用时回退） | 搜索关键词。黑话自学习默认启用（`slang.autoResearch: true`），会将自群聊提取的词条作为关键词发出 | 启用 | 不挂载 `mcp-web-search-safe`，或关闭黑话自动研究 |
-| `web_fetch` → 任意公网 URL | 被抓取的页面地址（由模型决定，可能来自聊天内容中的线索） | 启用 | 不挂载 `mcp-web-search-safe`；`safe-fetch.js` 仅拦截内网与私有地址 |
+| `web_search` → DeepSeek 搜索接口（默认）／Bing（回退）；也支持自定义 `webSearch.baseURL` | 搜索关键词，以及 DeepSeek / 自定义搜索端点所需的 API key 请求头。黑话自学习默认启用（`slang.autoResearch: true`），会将自群聊提取的词条作为关键词发出；自定义 `baseURL` 时 API key 也发往该端点 | 启用 | 不挂载 `mcp-web-search-safe`，或关闭黑话自动研究 |
+| `web_fetch` → 公网 URL | 被抓取的页面地址（由模型决定，可能来自聊天内容中的线索） | 启用 | 不挂载 `mcp-web-search-safe`；`safe-fetch.js` 拦截内网、私有及保留地址 |
+| 图片与表情等媒体 URL → QQ CDN 或其他公网地址 | 媒体地址及下载请求；地址可来自聊天消息或 OneBot 返回数据 | 启用 | 不发送含媒体的会话，或不接入 QQ |
 
-第 4、5 项的传输内容由模型决定，可能包含群聊中出现的词条或线索。部署方如愿限制，可将
-`webSearch.provider` 设为 `bing` 或 `deepseek`，或关闭黑话自动研究。
+搜索、网页与媒体请求的目标和内容可能由模型、聊天消息或自定义配置决定，可能包含群聊中出现的
+词条或线索。部署方可通过搜索服务配置、关闭黑话自动研究及限制媒体输入控制这些出口。
 
-本软件不包含遥测、统计或 phone-home 机制；上述五项为本软件全部对外数据传输目的地。
+本软件不包含遥测、统计或 phone-home 机制。上表描述本软件运行时的主要网络出口，
+不包括安装依赖、操作系统或用户自行启动的其他服务产生的网络流量。
 
 ---
 

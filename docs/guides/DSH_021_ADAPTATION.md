@@ -8,6 +8,8 @@
 > 适配目标：`@deepseek-ai/dsh` **0.2.1-rc.2**（上一版适配目标 0.2.0-rc.2，
 > 记录见 [DSH_020_ADAPTATION.md](DSH_020_ADAPTATION.md)）。本文写于 2026-10-22。
 >
+> **上游行为标注**：文中“协议层/线协议/实测”等指 DSH API 的兼容性验证；“本机签名密钥/Cookie 生成”等指 qq-bridge 自身的本机鉴权行为，不是 SnowLuma 或 DSH 的机制。
+>
 > 版本身份：桥接 `v0.2.1-r1`（版本号方案见 DSH_020 附录 H：主版本与 DSH 同步，
 > `r1` = 0.2.1 线第 1 次发布）。不用裸 `v0.2.1` 是因为历史上那次被撤回的标签
 > 已经用过这个名字（commit `9bb7b98` 仍在历史里），重名只会让标签列表更难解释。
@@ -30,14 +32,14 @@ Codex / Claude Code 改为按需安装，两个老工具名改判为「可选项
 
 ---
 
-## 1. 协议层实测：没动
+## 1. DSH API 兼容性实测：没动
 
 `node scripts/verify-dsh-021-adaptation.mjs`（改名自 `verify-dsh-020-adaptation.mjs`）
 在**运行中的 0.2.1** 上逐项断言，**75 通过 / 0 失败**：
 
 | 契约 | 0.2.1 实测 |
 |---|---|
-| 本机签名密钥离线铸造 Cookie | 成功（224 字节） |
+| 本机会话 Cookie 生成 | 成功（224 字节） |
 | `settings/describe` / `settings/update`（平铺多参数） | 可用，`qq-mode` 命名空间在列且可写 |
 | `agentPresets/list` | `standard, ptc, minimal, cordis, qq-chat, qq-chat-v2` |
 | `session/create` 挂 preset + `selectModel(deepseek-flash)` | 成功 |
@@ -51,7 +53,7 @@ Codex / Claude Code 改为按需安装，两个老工具名改判为「可选项
 | **preset 内 MCP 工具真调用** | `mcp__snowluma-host__snowluma_status` → `isError:false`，随后回复 `"完成"` |
 
 > 顺带记录：`src/dsh-client.js` 的传输层仍钉在 `@deepseek-ai/dsh-host-apiproxy@0.1.1-rc.2`
-> （`NodeApiClient extends AbstractApiClient`）。它**仍然讲得通 0.2.1 的线协议**——
+> （`NodeApiClient extends AbstractApiClient`）。它**仍然讲得通 DSH 0.2.1 的 API**——
 > 上面所有断言都是它的实测结果。这是唯一一个版本滞后的依赖，每次升级都要靠
 > `verify:adaptation` 盯住，不能假设它一直兼容。
 
@@ -87,7 +89,7 @@ QQ 侧的现象就是"发消息没反应"，而桥接日志里只有一行 `AI �
   系统提示词装配都抛错。这不是"少一条信息"，是**整条对话链 100% 不可用**。
 - 工作目录**并没有丢**：0.2.1 新增的 `dsh-working-directory` 会以
   `working-directory:current` 的**运行时上下文**（`required: true`、`interpolate: false`）
-  注入当前目录，persona 的 `includeRuntimeContext` 默认 true，模型照样看得到。
+  提供当前目录，persona 的 `includeRuntimeContext` 默认 true，模型照样看得到。
 
 ### 2.3 改法
 
@@ -189,7 +191,7 @@ node scripts/verify-dsh-021-adaptation.mjs       # 75 通过 0 失败
 | 子代理工具立即返回 child ID | 桥接不依赖子代理返回体 | 无 |
 | 自动化任务改为 Web 内置（`schedule` 转正） | 守卫早已覆盖 `schedule_*` | 无 |
 | 第三方插件兼容性优先看 `engines.dsh` | 三个 bundle 未声明 `engines`，回退 peer 规则，实测全过 | 无 |
-| API Key 优先级变更（Web 优先已保存凭据） | 桥接走 Cookie 铸造 + MCP，不读 API Key | 无 |
+| API Key 优先级变更（Web 优先已保存凭据） | 桥接走本机凭据鉴权 + MCP，不读 API Key | 无 |
 | pi-ai 1.0.2、DeepSeek-V4.1-Flash-1017 | `modelCatalog` 仍给 `deepseek-flash`，桥接默认模型不变 | 无 |
 | `dsh-client-ui-primitives` 等不再随 dsh 附带 | 与桥接无关 | 无 |
 | **提示词变量表移除 `cwd`** | **两个 preset 的 persona suffix** | **§2 已修** |

@@ -37,7 +37,7 @@ npm run test:audit
 
 `privacy-scan` 的规则文件 `scripts/privacy-rules.json` **不进仓库**（它本身会记录敏感判断依据）。
 没有它时扫描只走内置默认规则；干净 clone 上应当**直接通过**（内置规则已把测试夹具与文档占位符排除）。
-如果本机补了 `privacy-rules.json`（含你自己的真实 QQ 号/路径），扫描会用你的规则覆盖默认值。
+如果本机补了 `privacy-rules.json`（含你自己的真实 QQ 号/路径），扫描会在内置默认规则之上追加你的本地规则。
 
 ## 4. 提交 PR
 

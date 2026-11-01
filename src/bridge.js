@@ -82,7 +82,7 @@ const BRIDGE_LOG = path.join(STATE_DIR, 'bridge.log');
 /**
  * 模式拼写的**唯一**归一入口（输入边界）。
  *
- * `simulation` 是规范名（QSH_PLAN.md §2.1：对用户只暴露 `closed-agent` / `simulation`），
+ * `simulation` 是规范名（可作为 `closed-agent` / `simulation` 两类用户配置的输入拼写），
  * `chat` / `reserved` / `reserved2` 是历史拼写 —— 必须继续被**接受**（线上桥接持久化的全局值
  * 就是 `reserved2`），但进程内部一律用历史拼写存储与比较：`currentMode === 'reserved2'` 这类
  * 判断遍布发送闸门、定时器与 preset 解析，把规范名直接塞进 `currentMode` 会让它们全部变成假。
@@ -402,7 +402,7 @@ function writeRoleContent(name, content) {
 //   仿真提示词 = 预设内置，规定 AI 怎么调工具、怎么参与群聊（行为与协议）
 //   人格提示词 = roles/<名称>.md，规定 AI 是谁、什么性格（人设与语气）
 // 仿真层改完需要重启 DSH 才生效（preset 由 DSH 在会话创建时装配）；
-// 人格层由桥接每条消息注入，保存即生效。
+// 人格层由桥接按当前模式与注入节奏提供，保存后的下一次唤醒生效。
 // 两代仿真各自有独立的预设提示词：一代 qq-chat（空格分条 / [SILENT]），
 // 二代 qq-chat-v2（一切皆工具）。控制台可分别查看与修改。
 const PRESET_NAMES = { v1: 'qq-chat', v2: 'qq-chat-v2' };

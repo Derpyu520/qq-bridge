@@ -11,7 +11,7 @@
     "autoDiscoverPort": true
   },
   "role": {
-    "maxInjectChars": 6000,
+    "maxInjectChars": 8000,
     "injectEveryNWakes": 4,
     "injectDedupeWindowMs": 8000
   },

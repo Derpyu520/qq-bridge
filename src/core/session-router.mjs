@@ -1,42 +1,32 @@
 /**
  * Per-conversation policy routing for the QQ bridge.
  *
- * Why this module exists (P2 of QSH_PLAN.md §3):
- *   The bridge historically kept ONE process-global `currentMode`. That makes
- *   "this group runs simulation, but the admin's private chat runs closed-agent"
- *   impossible, and it means every mode decision in a 10k-line file reads the
- *   same mutable global. This module turns the decision into a pure lookup:
- *   given a conversation key, what are the mode / preset / model / effort?
+ * The bridge historically kept one process-global `currentMode`, which prevents
+ * different conversations from using different policies. This module turns each
+ * decision into a pure lookup: given a conversation key, what are the mode,
+ * preset, model and reasoning effort?
  *
- * Design constraints, all deliberate:
+ * Design constraints:
  *
- *  1. **Pure and synchronous.** No fs, no config, no timers, no DSH calls. The
- *     bridge keeps ownership of persistence and of preset *installation*; this
- *     module only answers policy questions. That keeps it testable offline and
- *     keeps the security-relevant logic in one auditable place.
+ *  1. **Pure and synchronous.** No fs, config, timers or DSH calls. Persistence
+ *     and preset installation remain with the caller, keeping this policy layer
+ *     testable offline.
  *
- *  2. **Legacy mode names are the internal vocabulary.** The four historical
- *     names (`chat` / `reserved` / `reserved2` / `closed-agent`) stay valid, so
- *     introducing this module changes *where* a decision is read from, not what
- *     the decision is. Converging the user-visible modes down to two
- *     (`closed-agent` / `simulation`) is a separate, later step.
+ *  2. **Legacy mode names stay valid.** The four historical names (`chat` /
+ *     `reserved` / `reserved2` / `closed-agent`) remain accepted, so introducing
+ *     this module changes where decisions are read, not their meaning.
  *
- *  3. **Fail-closed.** An unparseable key throws rather than defaulting; an
- *     unknown mode throws; a record that does not *name* its preset throws
- *     (`preset: null` was the retracted option A — ADR 0003 §决定 replaced it
- *     with an explicit `qsh-closed`, so "no preset named" is now a config error,
- *     not a silent fall back to a name baked in here); a preset that does not
- *     belong to its mode throws; `closed-agent` is refused for any key that is
- *     not the owner's private conversation. Nothing here may silently widen
- *     access.
+ *  3. **Fail-closed.** Invalid keys, unknown modes, missing presets and
+ *     mode/preset mismatches throw. `closed-agent` is refused for every key
+ *     except the owner's private conversation.
  *
  *  4. **Default is never privileged.** `defaults` must resolve to a simulation
- *     mode. `closed-agent` can only ever come from an explicit owner entry.
+ *     mode. `closed-agent` can only come from an explicit owner entry.
  *
  *  5. **Actor is a declaration, and the caller must authenticate it.** The
  *     `updatedBy` field records who asked for a change; this module does not
- *     verify it. Returned audit events are NOT persisted here — the caller must
- *     store them before treating a change as durable (iron law L5).
+ *     verify it. Returned audit events are not persisted here — the caller must
+ *     store them before treating a change as durable.
  */
 
 /** Simulation is the safe default: no local tools, whitelist-gated. */
@@ -63,31 +53,22 @@ const MODE_ALIASES = Object.freeze({
 const ALL_MODES = Object.freeze([...SIMULATION_MODES, 'simulation', 'closed-agent']);
 
 /**
- * Which presets a mode may use. `closed-agent` intentionally allows only its own
- * closed preset; simulation allows the simulator presets. Anything else is
- * rejected so a typo or a stale config cannot attach an unexpected tool surface.
+ * Which presets a mode may use. `closed-agent` intentionally allows only its
+ * closed preset; simulation allows simulator presets. A typo or stale config
+ * cannot attach an unexpected tool surface.
  *
- * **One generation per spelling, on purpose.** `simulation` is the canonical
- * rename of `reserved2` (QSH_PLAN.md §2.1), so it is the entry that carries the
- * QSH names the plan installs — `qsh-sim` / `qsh-sim-v2` (ADR 0003 §决定 point 4)
- * — and `[0]` is the preset this layer emits by default, exactly as
- * QSH_PLAN.md §3.1 writes `"defaults": { "mode": "simulation", "preset":
- * "qsh-sim" }`. The legacy spellings keep the presets that are actually
- * installed today (`qq-chat` / `qq-chat-v2`), so a config written before the P3
- * rename stays loadable *and* `reserved2 + qsh-sim` stays a detectable mismatch
- * instead of silently resolving to a preset that deployment never installed.
- * Deployments that install a different generation pass their own table through
- * the `modePresets` option — that is why both lists exist rather than one.
+ * Canonical `simulation` uses the currently installed `qq-chat-v2` preset; legacy
+ * spellings retain the `qq-chat` / `qq-chat-v2` mappings, so a generation
+ * mismatch remains a configuration error. `closed-agent` uses the DSH built-in
+ * `standard` preset because it intentionally has the full local tool surface.
+ * Deployments with different preset names can override the table below.
  */
 const DEFAULT_MODE_PRESETS = Object.freeze({
   chat: Object.freeze(['qq-chat']),
   reserved: Object.freeze(['qq-chat']),
   reserved2: Object.freeze(['qq-chat-v2']),
-  // `simulation` is the canonical spelling of `reserved2`. It leads with the
-  // canonical preset names; `qq-chat-v2` stays accepted because that is the
-  // preset the still-legacy bridge actually installs for this mode.
-  simulation: Object.freeze(['qsh-sim', 'qsh-sim-v2', 'qq-chat-v2']),
-  'closed-agent': Object.freeze(['qsh-closed']),
+  simulation: Object.freeze(['qq-chat-v2']),
+  'closed-agent': Object.freeze(['standard']),
 });
 
 /**
@@ -109,7 +90,7 @@ function buildModePresets(overrides = {}) {
   return Object.freeze(out);
 }
 
-/** Legacy mode -> canonical QSH mode (ADR 0003 / QSH_PLAN.md §2.1). */
+/** Legacy mode -> canonical simulation mode. */
 export const LEGACY_TO_CANONICAL = Object.freeze({
   chat: 'simulation',
   reserved: 'simulation',
@@ -237,14 +218,11 @@ function normalizePolicy(record, label, ownerKey, modePresets, { isDefault = fal
 
   const mode = normalizeMode(record.mode);
 
-  // The preset is NOT optional. ADR 0003 (§决定) retired option A — the one where
-  // `preset: null` meant "whatever the DSH global default is" — precisely because
-  // a policy that does not name its preset cannot be audited: the tool surface
-  // then depends on a setting this module cannot see. A record that names none
-  // is therefore a config error (L1 fail-closed), not an invitation to fill in a
-  // default here.
+  // The preset is not optional. A policy that does not name its preset cannot
+  // be audited because its tool surface would depend on an external default.
+  // Missing presets therefore fail closed instead of being filled in here.
   if (!own(record, 'preset') || record.preset === null) {
-    throw new TypeError(`${label} requires preset (preset: null was retired by ADR 0003)`);
+    throw new TypeError(`${label} requires an explicit preset`);
   }
   if (typeof record.preset !== 'string' || !modePresets[mode].includes(record.preset)) {
     throw new TypeError(`${label} has an unknown or unsafe preset for ${mode}`);
@@ -328,12 +306,9 @@ export function createInitialConversationState(ownerQQ, {
   const presets = modePresets ?? buildModePresets();
 
   // The fallback mode for conversations with no explicit entry.
-  // closed-agent may never be a *default*: it is a per-conversation privilege,
-  // never a blanket applied to every channel. Every other accepted spelling is a
-  // simulation mode, and they are collapsed onto the canonical one here so this
-  // layer never *emits* the legacy vocabulary (QSH_PLAN.md §3.1 writes
-  // `"defaults": { "mode": "simulation" }`). `defaultMode` is still validated:
-  // an unrecognised spelling is a config error, not a silent fallback.
+  // closed-agent may never be a default: it is a per-conversation privilege,
+  // never a blanket applied to every channel. Other accepted spellings collapse
+  // onto canonical simulation, while unknown values remain configuration errors.
   const requested = (defaultMode === null || defaultMode === undefined || defaultMode === '')
     ? null
     : normalizeMode(defaultMode);
@@ -342,11 +317,9 @@ export function createInitialConversationState(ownerQQ, {
     : LEGACY_TO_CANONICAL[requested];
 
   const conversations = {};
-  // Owner-private starts as closed-agent when the owner is known and the caller
-  // has not opted out — the documented first-run default (QSH_PLAN.md §6.2 step 3,
-  // "管理员模式开关，默认开启"). Pre-populating the owner's OWN conversation is
-  // not the same as initialising the global mode to closed-agent: it grants
-  // nothing to any other channel.
+  // Owner-private starts as closed-agent when the owner is known and has not
+  // opted out. Pre-populating only the owner's conversation does not grant
+  // privileges to any other channel.
   if (owner !== null && closedAgentEnabled) {
     conversations[`private:${owner}`] = {
       mode: 'closed-agent',
@@ -407,7 +380,7 @@ export function migrateLegacyMode({ mode, ownerQQ, modePresets } = {}) {
  * migration: behaviour for conversations without an override is unchanged.
  * The legacy spellings are accepted here (`reserved2` is what the running bridge
  * still has persisted) and are stored in canonical form — storing the raw
- * spelling would pair e.g. `reserved2` with the canonical `qsh-sim` preset and
+ * spelling would pair e.g. `reserved2` with the canonical `qq-chat-v2` preset and
  * then reject that same state on the next load, i.e. the router could not read
  * back what it had just written.
  */
