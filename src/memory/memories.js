@@ -15,7 +15,7 @@ export const MEMORY_FILE = 'memories.json';
 export const MEMORY_MD = 'MEMORY.md';
 
 export const SCOPE = { LONG: 'long', SHORT: 'short' };
-// 记忆的「归属层级」：global = 跨会话的总体记忆（关于某个人本身，任何群/私聊都查得到）；
+// 记忆的「归属层级」：global = 跨会话的共享记忆（关于某个人本身，任何群/私聊都查得到）；
 // session = 只在这个会话里有效（群梗、本群约定、这里发生的事）。
 export const LAYER = { GLOBAL: 'global', SESSION: 'session' };
 
@@ -45,7 +45,7 @@ function normalizeScope(value) {
 
 function normalizeLayer(value) {
   const s = String(value ?? '').trim().toLowerCase();
-  if (s === 'global' || s === '总体' || s === '共享') return LAYER.GLOBAL;
+  if (s === 'global' || s === '共享' || s === '总体') return LAYER.GLOBAL;
   return LAYER.SESSION;
 }
 
@@ -286,7 +286,7 @@ function compressText(text, maxChars) {
   return chars.slice(0, maxChars).join('') + '…';
 }
 
-/** 生成给模型/人看的 MEMORY.md（总体记忆在前，然后长期、短期）。 */
+/** 生成给模型/人看的 MEMORY.md（共享记忆在前，然后长期、短期）。 */
 export function writeMemoryMarkdown(dir, store = loadMemories(dir)) {
   const active = store.entries.filter((e) => e.status === 'active');
   const lines = [];
@@ -296,11 +296,13 @@ export function writeMemoryMarkdown(dir, store = loadMemories(dir)) {
   lines.push('> 修改请用 qq_memory_save / qq_memory_forget，手改会被下一次写入覆盖。');
   lines.push('');
 
+  // 只渲染这个文件里**真实存在**的分区：共享层目录里不该出现"本会话"分区（反之亦然）。
+  const hasLayer = (layer) => active.some((e) => normalizeLayer(e.layer) === layer);
   const sections = [
-    [LAYER.GLOBAL, SCOPE.LONG, '## 总体记忆（跨群共享）', '（关于这个人/这件事本身，任何会话都查得到）'],
+    [LAYER.GLOBAL, SCOPE.LONG, '## 共享记忆', '（关于这个人/这件事本身，任何会话都查得到）'],
     [LAYER.SESSION, SCOPE.LONG, '## 本会话 · 长期记忆', '（重要，长期保留；很久不被想起且不重要时会压缩或遗忘）'],
     [LAYER.SESSION, SCOPE.SHORT, '## 本会话 · 短期记忆', `（默认保留 ${DEFAULT_RETENTION.shortTermDays} 天：够重要就升为长期，否则遗忘）`],
-  ];
+  ].filter(([layer]) => hasLayer(layer));
   for (const [layer, scope, title, hint] of sections) {
     const list = active
       .filter((e) => normalizeLayer(e.layer) === layer && e.scope === scope)
@@ -342,6 +344,8 @@ export function importanceLabel(n) {
 }
 
 export { normalizeScope, normalizeImportance, normalizeLayer };
+
+
 
 
 

@@ -960,13 +960,13 @@ server.tool(
 
 server.tool(
   'qq_memory_save',
-  '写一条记忆。**记不记、记多久、放哪一层、要不要合并——都由你判断**。layer="global" 写进**总体记忆**（跨群/私聊共享，关于某个人或某件事本身）；layer="session"（默认）只在本会话有效。scope="long" 用于约定/偏好/重要经历；scope="short" 用于一时的话题/对方当下状态（3 天后：够重要升为长期，否则遗忘）。importance 1~5 认真给。\n\n【先读后写】写之前如果这件事可能已经记过（同一个人/同一个话题），先 qq_memory_candidates(who=…) 或 qq_memory_recall 看一眼已有的；如果已经有相关条目，就传 replaceId 把那条改写成合并后的完整版本，**不要制造两条重复记忆**。合并措辞、取舍细节由你决定。',
+  '写一条记忆。**记不记、记多久、放哪一层、要不要合并——都由你判断**。layer="global" 写进**共享记忆**（跨群/私聊共享，关于某个人或某件事本身）；layer="session"（默认）只在本会话有效。scope="long" 用于约定/偏好/重要经历；scope="short" 用于一时的话题/对方当下状态（3 天后：够重要升为长期，否则遗忘）。importance 1~5 认真给。\n\n【先读后写】写之前如果这件事可能已经记过（同一个人/同一个话题），先 qq_memory_candidates(who=…) 或 qq_memory_recall 看一眼已有的；如果已经有相关条目，就传 replaceId 把那条改写成合并后的完整版本，**不要制造两条重复记忆**。合并措辞、取舍细节由你决定。',
   {
     key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
     token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
     text: z.string().describe('记忆内容，写成一句你自己看得懂的话（"阿草在学吉他，说手指疼"）。要合并时写合并后的完整版本'),
     scope: z.enum(['long', 'short']).optional().describe('长期 long / 短期 short，默认 short'),
-    layer: z.enum(['global', 'session']).optional().describe('总体记忆 global（跨会话共享）/ 本会话 session，默认 session'),
+    layer: z.enum(['global', 'session']).optional().describe('共享记忆 global（跨会话共享）/ 本会话 session，默认 session'),
     importance: z.number().optional().describe('重要度 1~5，默认 3。★ 越高越不易被遗忘'),
     who: z.string().optional().describe('和谁有关（群友昵称），便于以后按人回忆'),
     replaceId: z.string().optional().describe('要合并/覆盖的记忆 id（来自 qq_memory_candidates / qq_memory_recall）。给了就把那条改写成 text，而不是新增')
@@ -992,7 +992,7 @@ server.tool(
     key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
     token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
     who: z.string().optional().describe('只看和这个人有关的记忆'),
-    layer: z.enum(['global', 'session']).optional().describe('总体记忆 global / 本会话 session'),
+    layer: z.enum(['global', 'session']).optional().describe('共享记忆 global / 本会话 session'),
     limit: z.number().optional().describe('最多返回几条，默认 12')
   },
   async ({ key, token, who, layer, limit }) => {
@@ -1504,4 +1504,5 @@ if (cfg.socialV2?.tools?.getForwardMsg !== false) {
 }
 
 await server.connect(new StdioServerTransport());
+
 

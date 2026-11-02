@@ -2478,45 +2478,33 @@ button:active:not(:disabled) {
       </details>
     </section>
 <section id="section-memory" data-page="memory" class="card span-all">
-      <h2>记忆（模拟人类记忆）</h2>
+      <h2>记忆</h2>
       <div class="meta">
-        记忆是<b>独立插件</b>（<code>src/memory/</code>）：每个会话有一份自己的记忆，写成人类可读的 <code>MEMORY.md</code>，
-        原始事件另存 <code>events-*.jsonl</code> 供检索。与 <code>social-v2.json</code> 的旧便签互不覆盖；
-        关闭后唤醒提示回落到旧便签，其它功能不受影响。数据目录：<code id="memDir">state/memory</code>。
+        记忆独立存放于 <code id="memDir">state/memory</code>：每个会话一份 <code>MEMORY.md</code>，另有跨会话共享的共享记忆。
+        关闭后唤醒提示回落到旧便签，已有数据保留。
       </div>
 
       <div class="row" style="margin-top:10px">
-        <label style="flex:1" for="memEnabled">启用记忆插件</label>
-        <label class="switch" title="开启 / 关闭记忆插件（写入 config.json，即时生效）">
-          <input type="checkbox" id="memEnabled" role="switch" aria-label="启用记忆插件">
+        <label style="flex:1" for="memEnabled">启用记忆</label>
+        <label class="switch" title="开启 / 关闭记忆（写入 config.json，即时生效）">
+          <input type="checkbox" id="memEnabled" role="switch" aria-label="启用记忆">
           <span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span>
         </label>
         <span class="meta" id="memEnabledMsg" role="status"></span>
       </div>
-      <div class="meta">开关写入 <code>config.json</code> 的 <code>memory.enabled</code>，即时生效、无需重启。关闭只停用注入与新事件写入，已有数据保留在磁盘上。</div>
-
-      <div class="meta" style="margin-top:12px">
-        <b>拟人记忆怎么工作</b>：唤醒提示里只告诉 AI「你有记忆、在哪、有多少、最近记了什么」，
-        正文不再塞进提示词。当话题牵扯到过去（某人提过的经历、约定、喜好），AI 会自己调用
-        <code>qq_memory_recall</code> 检索记忆文件再开口——像人回忆，而不是被灌一堆上下文。
-      </div>
 
       <table style="margin-top:12px">
         <tr><th>指标</th><th>值</th></tr>
-        <tr><td>已沉淀会话</td><td id="memStatSessions">—</td></tr>
+        <tr><td>会话</td><td id="memStatSessions">—</td></tr>
         <tr><td>聊天流水</td><td id="memStatEvents">—</td></tr>
         <tr><td>群友画像</td><td id="memStatProfiles">—</td></tr>
-        <tr><td>AI 自己写的记忆</td><td id="memStatMemories">—</td></tr>
+        <tr><td>记忆条目</td><td id="memStatMemories">—</td></tr>
         <tr><td>记忆文件</td><td id="memStatFile">—</td></tr>
       </table>
 
       <div class="row" style="margin-top:12px">
-        <button id="memRetentionBtn" class="small">执行记忆整理（升长期 / 压缩 / 遗忘）</button>
+        <button id="memRetentionBtn" class="small">整理记忆</button>
         <span class="meta" id="memRetentionMsg" role="status"></span>
-      </div>
-      <div class="meta">
-        规则：短期记忆默认保留 3 天，到期时重要度 ≥3 升为长期、其余遗忘；长期记忆 90 天没被想起时，
-        重要度 ≤2 遗忘、重要度 3 压缩、重要度 ≥4 原样保留（约定/重要经历不压缩）。每小时自动跑一次。
       </div>
 
       <details class="settings-group" style="margin-top:10px" open><summary>按会话查看 / 读取记忆正文</summary><div class="settings-content">
@@ -2524,9 +2512,9 @@ button:active:not(:disabled) {
           <tr><th>会话</th><th>条目</th><th>画像</th><th>最近记忆</th><th></th></tr>
         </table>
         <div class="row" style="margin-top:8px">
-          <button id="memReadFile" class="small">查看选中会话的记忆</button>
-          <button id="memReadGlobal" class="small">查看总体记忆（跨群共享）</button>
-          <button id="memRebuildFile" class="small">从事件重建记忆文件</button>
+          <button id="memReadFile" class="small">查看会话记忆</button>
+          <button id="memReadGlobal" class="small">查看共享记忆</button>
+          <button id="memRebuildFile" class="small">从流水重建</button>
           <span class="meta" id="memFileMsg" role="status"></span>
         </div>
         <pre id="memFileBody" style="max-height:420px;overflow:auto;white-space:pre-wrap;margin-top:8px;font-size:12px"></pre>
@@ -2534,12 +2522,7 @@ button:active:not(:disabled) {
 
       <div class="row" style="margin-top:12px">
         <button id="memResetAll" class="danger">清空全部记忆</button>
-        <span class="meta">只删除 <code>state/memory/</code> 下的文件，不碰会话映射与旧便签；不可撤销。</span>
-      </div>
-      <div class="meta" id="memResetMsg" role="status"></div>
-      <div class="meta" style="margin-top:8px">
-        机制：显著度够高的消息才进事件流（闲聊只更新画像）；检索用中文 2-gram BM25，按「相关 × 权重」排序后按预算注入；
-        权重由重要度/可信度/来源/新近/常用/关系六项在 node 侧算出，模型无法写入或抬高权重。
+        <span class="meta" id="memResetMsg" role="status"></span>
       </div>
     </section>
 <section id="section-reference" data-page="reference" class="card span-all">
@@ -4495,7 +4478,7 @@ function renderMemorySessions(sessions) {
   const table = document.getElementById('memSessions');
   table.replaceChildren();
   const head = document.createElement('tr');
-  for (const label of ['会话', '事件', '画像', '最近事件']) {
+  for (const label of ['会话', '条目', '画像', '最近记忆', '']) {
     const th = document.createElement('th');
     th.textContent = label;
     head.append(th);
@@ -4506,17 +4489,18 @@ function renderMemorySessions(sessions) {
     const td = document.createElement('td');
     td.colSpan = 5;
     td.className = 'meta';
-    td.textContent = '还没有沉淀记忆（AI 遇到值得记的消息后会自动出现）';
+    td.textContent = '还没有记忆';
     tr.append(td);
     table.append(tr);
     return;
   }
   for (const item of sessions) {
     const tr = document.createElement('tr');
-    tr.dataset.key = item.key;
+    // 共享记忆那一行（_global）用不同底色区分，且不参与"会话"计数
+    if (item.isGlobal) tr.style.background = 'rgba(120,140,255,0.07)';
     const cells = [
-      item.key,
-      String(item.events ?? 0),
+      item.isGlobal ? '共享记忆' : item.key,
+      String(item.memories ?? 0),
       String(item.profiles ?? 0),
       item.lastEventAt ? new Date(Number(item.lastEventAt)).toLocaleString('zh-CN', { hour12: false }) : '—'
     ];
@@ -4530,8 +4514,8 @@ function renderMemorySessions(sessions) {
     pick.className = 'small';
     pick.textContent = '读取';
     pick.addEventListener('click', () => {
-      memorySelectedKey = item.key;
-      showMemoryFile(item.key);
+      memorySelectedKey = item.isGlobal ? '_global' : item.key;
+      showMemoryFile(memorySelectedKey);
     });
     action.append(pick);
     tr.append(action);
@@ -4619,7 +4603,7 @@ document.getElementById('memRetentionBtn').addEventListener('click', async () =>
   const r = await api('/api/memory/retention', 'POST', {});
   if (r.ok) {
     const t = r.total || {};
-    msg.textContent = `✅ 升长期 ${t.promoted || 0}，压缩 ${t.compressed || 0}，遗忘 ${t.forgot || 0}，保留 ${t.kept || 0}`;
+    msg.textContent = `✅ 合并 ${t.merged || 0}，升长期 ${t.promoted || 0}，压缩 ${t.compressed || 0}，遗忘 ${t.forgot || 0}，保留 ${t.kept || 0}`;
     msg.className = 'meta ok';
     loadMemory();
   } else {
@@ -4700,7 +4684,7 @@ const consolePages = {
   'social-v2': ['二代仿真', '自主参与，恰到好处。', '管理 AI 的工具、唤醒与发言节奏。展开需要调整的分组，修改后保存参数。'],
   'social-v1': ['一代仿真', '为自然对话，设定合适的节奏。', '调整参与概率、活跃周期和分条发送；所有配置项完整保留。'],
   slang: ['黑话词库', '读懂群聊里的，言外之意。', '从候选到确认，让 AI 逐渐熟悉大家的表达习惯。'],
-  memory: ['记忆', '让每一次相遇，都留得下来。', '模拟人类记忆：事件流、遗忘曲线与记忆权重。可随时开关；关闭后唤醒提示回落到原来的便签记忆，不影响其它功能。'],
+  memory: ['记忆', '让每一次相遇，都留得下来。', 'AI 自己决定记什么、记多久；可随时开关，不影响其它功能。'],
   usage: ['令牌与花费', '每一次思考，都算得清楚。', '实时查看 AI 的 token 消耗与花费，可下钻到每个群、每个好友、每一轮对话。'],
   access: ['访问与安全', '明确边界，安心连接。', '管理允许对话的对象、管理员权限与控制台访问凭证。'],
   operations: ['调试与运维', '让桥接，始终井然有序。', '测试消息、引导 AI，或维护桥接进程与会话工作区。'],
@@ -5352,3 +5336,5 @@ setInterval(() => { if (currentConsolePage !== 'usage') return; refreshUsage(); 
 </script>
 </body>
 </html>
+
+

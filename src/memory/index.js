@@ -35,6 +35,9 @@ import {
 
 export const MEMORY_VERSION = 2;
 
+// 共享记忆的目录名（state/memory/_global）。它不是会话，控制台要单独区分。
+export const GLOBAL_DIR_NAME = '_global';
+
 // 记忆不再用「字符预算 / 人设锚上限」这种被动注入参数：内容由模型自己查（qq_memory_recall），
 // 提示词里只放索引（见 recall.js 的 describeMemory）。这两个常量保留导出只为兼容旧配置读取。
 export const DEFAULT_MEMORY_CONFIG = {
@@ -145,10 +148,10 @@ export function createMemoryPlugin(opts = {}) {
     return path.join(stateDir, safeSegment(key));
   }
 
-  // 总体记忆（跨会话共享）：放在 state/memory/_global/，关于「这个人/这件事本身」，
+  // 共享记忆（跨会话共享）：放在 state/memory/_global/，关于「这个人/这件事本身」，
   // 任何群聊/私聊都查得到。与会话记忆分开存，避免 A 群的具体聊天内容泄漏到 B 群。
   function globalDir() {
-    return path.join(stateDir, '_global');
+    return path.join(stateDir, GLOBAL_DIR_NAME);
   }
 
   function eventsFile(key, ts) {
@@ -434,8 +437,8 @@ export function createMemoryPlugin(opts = {}) {
     const st = stateFor(key);
     const q = String(question ?? '').trim();
 
-    // 1) 先查「模型自己写下的记忆」：**总体记忆（跨会话）+ 本会话记忆**一起查。
-    //    总体记忆排在前面——它记的是"这个人本身"，比某个群的上下文更该被想起。
+    // 1) 先查「模型自己写下的记忆」：**共享记忆（跨会话）+ 本会话记忆**一起查。
+    //    共享记忆排在前面——它记的是"这个人本身"，比某个群的上下文更该被想起。
     const globalStore = loadMemories(globalDir());
     const sessionStore = loadMemories(dir);
     const globalHits = recallModelMemories(globalStore.entries, q, { now: now(), limit: Math.ceil((opts.limit || 5) / 2) });
@@ -445,7 +448,7 @@ export function createMemoryPlugin(opts = {}) {
 
     if (globalHits.length || sessionHits.length) {
       const lines = [];
-      for (const h of globalHits) lines.push(`[总体] ${h.date} ${'★'.repeat(h.importance)} ${h.who ? h.who + '：' : ''}${h.text}`);
+      for (const h of globalHits) lines.push(`[共享] ${h.date} ${'★'.repeat(h.importance)} ${h.who ? h.who + '：' : ''}${h.text}`);
       for (const h of sessionHits) lines.push(`[本会话] ${h.date} ${'★'.repeat(h.importance)} ${h.who ? h.who + '：' : ''}${h.text}`);
       return {
         key,
@@ -453,7 +456,7 @@ export function createMemoryPlugin(opts = {}) {
         mode: 'memory',
         fragments: [{ date: formatDateOf((globalHits[0] || sessionHits[0]).t), age: '', lines }],
         total: globalStore.entries.length + sessionStore.entries.length,
-        hint: '这些是你自己记下的事：`[总体]` 是跨群通用的（关于这个人/这件事本身），`[本会话]` 只在这里有效。★ 越多越重要。引用细节要自然，别整段念。',
+        hint: '这些是你自己记下的事：`[共享]` 是跨群通用的（关于这个人/这件事本身），`[本会话]` 只在这里有效。★ 越多越重要。引用细节要自然，别整段念。',
       };
     }
 
@@ -464,7 +467,7 @@ export function createMemoryPlugin(opts = {}) {
     return result;
   }
 
-  /** 模型写记忆。scope=long/short，layer=global/session（总体/本会话），importance=1..5。 */
+  /** 模型写记忆。scope=long/short，layer=global/session（共享/本会话），importance=1..5。 */
   /** 模型写记忆。layer=global/session；给了 replaceId 就覆盖/合并那一条。 */
   function saveMemory(key, { text, scope, importance, who, layer, replaceId }) {
     if (!enabled) return null;
@@ -480,7 +483,7 @@ export function createMemoryPlugin(opts = {}) {
     return listCandidates(target, { who, layer, limit });
   }
 
-  /** 删除一条模型记忆（先查本会话，再查总体）。 */
+  /** 删除一条模型记忆（先查本会话，再查共享层）。 */
   function forgetMemoryById(key, id) {
     if (forgetMemory(keyDir(key), id)) return true;
     return forgetMemory(globalDir(), id);
@@ -491,7 +494,7 @@ export function createMemoryPlugin(opts = {}) {
     return applyRetention(keyDir(key), { now: now(), retention: cfg.retention });
   }
 
-  /** 整理总体记忆（跨会话共享层）。与会话层分开跑，避免每个会话重复处理同一份数据。 */
+  /** 整理共享记忆（跨会话共享层）。与会话层分开跑，避免每个会话重复处理同一份数据。 */
   function runRetentionGlobal() {
     return applyRetention(globalDir(), { now: now(), retention: cfg.retention });
   }
@@ -542,7 +545,7 @@ export function createMemoryPlugin(opts = {}) {
     return readMemoryMarkdown(keyDir(key));
   }
 
-  /** 读总体记忆（跨会话共享层）的 MEMORY.md。 */
+  /** 读共享记忆（跨会话共享层）的 MEMORY.md。 */
   function readGlobalFile() {
     return readMemoryMarkdown(globalDir());
   }
@@ -651,9 +654,12 @@ export function createMemoryPlugin(opts = {}) {
       let memStore = { entries: [] };
       try { memStore = loadMemories(dir); } catch { memStore = { entries: [] }; }
       const activeMem = (memStore.entries ?? []).filter((e) => e && e.status === 'active');
+      // _global 是共享记忆的存储目录，不是会话：单独标记，控制台不把它混进会话列表。
+      const isGlobal = dirName === GLOBAL_DIR_NAME;
       sessions.push({
-        key: String(meta.key ?? dirName),
+        key: isGlobal ? '共享记忆' : String(meta.key ?? dirName),
         dir: dirName,
+        isGlobal,
         events,
         profiles: Object.keys(profiles ?? {}).length,
         memories: activeMem.length,
@@ -664,12 +670,13 @@ export function createMemoryPlugin(opts = {}) {
       });
     }
     sessions.sort((a, b) => (Number(b.lastEventAt) || 0) - (Number(a.lastEventAt) || 0));
+    const realSessions = sessions.filter((x) => !x.isGlobal);
     return {
       sessions,
       totals: {
-        sessions: sessions.length,
-        events: sessions.reduce((sum, x) => sum + x.events, 0),
-        profiles: sessions.reduce((sum, x) => sum + x.profiles, 0),
+        sessions: realSessions.length,
+        events: realSessions.reduce((sum, x) => sum + x.events, 0),
+        profiles: realSessions.reduce((sum, x) => sum + x.profiles, 0),
         memories: sessions.reduce((sum, x) => sum + x.memories, 0),
         longMemories: sessions.reduce((sum, x) => sum + x.longMemories, 0),
         shortMemories: sessions.reduce((sum, x) => sum + x.shortMemories, 0),
@@ -740,6 +747,8 @@ export function createMemoryPlugin(opts = {}) {
     resetAll,
   };
 }
+
+
 
 
 

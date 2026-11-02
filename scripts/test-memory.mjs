@@ -476,11 +476,11 @@ test('模型写记忆：save/forget + 长期短期 + 重要度', () => {
   const short = plugin.saveMemory('private:900', { text: '今天他说有点累', scope: 'short', importance: 2, who: '老爹' });
   assert.equal(short.scope, 'short');
 
-  // MEMORY.md 分层：总体记忆 / 本会话长期 / 本会话短期，带 ★
+  // MEMORY.md 分层：会话文件只放本会话分区（共享记忆在共享层文件里），带 ★
   const md = plugin.readFile('private:900');
-  assert.ok(md.includes('## 总体记忆'), md);
   assert.ok(md.includes('## 本会话 · 长期记忆'), md);
   assert.ok(md.includes('## 本会话 · 短期记忆'), md);
+  assert.ok(!md.includes('## 共享记忆'), '会话文件不该出现共享分区：' + md);
   assert.ok(md.includes('★★★★★'), '重要度应显示为星：' + md);
   assert.ok(md.indexOf('摩天轮') < md.indexOf('有点累'), '长期应排在短期前：' + md);
 
@@ -527,22 +527,22 @@ test('遗忘策略：短期到期按重要度升长期或遗忘；长期陈旧�
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('总体记忆：跨会话共享，本会话记忆不外泄', () => {
+test('共享记忆：跨会话共享，本会话记忆不外泄', () => {
   const dir = tmpDir();
   const clock = { v: Date.now() };
   const plugin = createMemoryPlugin({ stateDir: dir, config: {}, now: () => clock.v });
 
-  // 在 A 群写下「总体记忆」：关于阿草本人
+  // 在 A 群写下「共享记忆」：关于阿草本人
   plugin.saveMemory('group:A', { text: '阿草在学吉他，说手指疼', scope: 'long', importance: 4, who: '阿草', layer: 'global' });
   // 在 A 群写下「本会话记忆」：只属于 A 群的
   plugin.saveMemory('group:A', { text: '本群周五要团建', scope: 'long', importance: 3, layer: 'session' });
   // 在 B 群写一条无关的
   plugin.saveMemory('group:B', { text: 'B 群在聊猫', scope: 'long', importance: 2, layer: 'session' });
 
-  // B 群查「吉他」→ 应命中总体记忆（跨会话共享）
+  // B 群查「吉他」→ 应命中共享记忆（跨会话共享）
   const inB = plugin.recall('group:B', '吉他');
   assert.equal(inB.mode, 'memory', JSON.stringify(inB));
-  assert.ok(inB.fragments[0].lines.join('').includes('[总体]'), JSON.stringify(inB.fragments));
+  assert.ok(inB.fragments[0].lines.join('').includes('[共享]'), JSON.stringify(inB.fragments));
   assert.ok(inB.fragments[0].lines.join('').includes('吉他'), JSON.stringify(inB.fragments));
 
   // B 群查「团建」→ 不该看到 A 群的本会话记忆（隐私隔离）
@@ -550,13 +550,13 @@ test('总体记忆：跨会话共享，本会话记忆不外泄', () => {
   const leakText = (leak.fragments || []).map((f) => f.lines.join('')).join('');
   assert.ok(!leakText.includes('团建'), `A 群的本会话记忆泄漏到 B 群：${leakText}`);
 
-  // A 群查「吉他」→ 总体 + 本会话都可见
+  // A 群查「吉他」→ 共享 + 本会话都可见
   const inA = plugin.recall('group:A', '吉他');
   assert.ok(inA.fragments[0].lines.join('').includes('吉他'), JSON.stringify(inA.fragments));
 
-  // A 群的 MEMORY.md 只放本会话记忆；总体记忆单独存在 _global/MEMORY.md
+  // A 群的 MEMORY.md 只放本会话记忆；共享记忆单独存在 _global/MEMORY.md
   assert.ok(plugin.readFile('group:A').includes('团建'), plugin.readFile('group:A'));
-  // 总体记忆在共享层可读
+  // 共享记忆在共享层可读
   const globalMd = fs.readFileSync(path.join(dir, '_global', 'MEMORY.md'), 'utf8');
   assert.ok(globalMd.includes('阿草在学吉他'), globalMd);
   fs.rmSync(dir, { recursive: true, force: true });
@@ -629,4 +629,7 @@ if (fail) {
   for (const { name, error } of failures) console.error(`\nFAILED: ${name}\n${error?.stack ?? error}`);
   process.exit(1);
 }
+
+
+
 

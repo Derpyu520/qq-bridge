@@ -1454,7 +1454,7 @@ async function main() {
         forgot += r.forgot || 0;
         compressed += r.compressed || 0;
       }
-      // 总体记忆（跨会话共享层）单独整理一次
+      // 共享记忆（跨会话共享层）单独整理一次
       const cg = memoryPlugin.runConsolidateGlobal();
       merged += cg.merged || 0;
       const g = memoryPlugin.runRetentionGlobal();
@@ -4254,7 +4254,7 @@ async function main() {
           const key = String(url.searchParams.get('key') ?? '').trim();
           if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
           if (req.headers['x-agent-token']) { sendJson({ ok: false, error: '该接口仅控制台可用' }, 403); return; }
-          // key=_global 读总体记忆（跨会话共享层）
+          // key=_global 读共享记忆（跨会话共享层）
           const isGlobal = key === '_global';
           const content = isGlobal ? memoryPlugin.readGlobalFile() : memoryPlugin.readFile(key);
           sendJson({
@@ -7004,7 +7004,7 @@ async function main() {
                 ? `已按你指定的 ${entry.mergedInto} 合并改写（没有新增重复条目）。`
                 : `内容和已有记忆 ${entry.mergedInto} 完全相同，没有重复新增（已计为再次确认）。`
               : entry?.layer === 'global'
-                ? '已写入总体记忆（跨群/私聊共享，任何会话都查得到）。'
+                ? '已写入共享记忆（跨群/私聊共享，任何会话都查得到）。'
                 : entry?.scope === 'long'
                   ? '已作为本会话的长期记忆保存。'
                   : `已作为本会话的短期记忆保存（${memoryPlugin.config.retention?.shortTermDays ?? 3} 天内没被升为长期就自动遗忘）。`
@@ -12408,3 +12408,4 @@ main().catch((error) => {
   console.error('[bridge] 启动失败:', error);
   process.exit(1);
 });
+

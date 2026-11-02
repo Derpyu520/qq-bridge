@@ -186,10 +186,10 @@ export function recallMemory(events, question, options = {}) {
 export function describeMemory({ key, counts, latest, now }) {
   const t = Number(now) || Date.now();
   const lines = [];
-  lines.push('【你的记忆】两层：**总体记忆**（跨群/私聊共享，关于某人/某事本身）+ **本会话记忆**（只在这里有效）。');
+  lines.push('【你的记忆】两层：**共享记忆**（跨群/私聊共享，关于某人/某事本身）+ **本会话记忆**（只在这里有效）。');
   const memBits = [];
   if (counts.memories) memBits.push(`本会话 ${counts.memories} 条（长期 ${counts.longMemories ?? 0}/短期 ${counts.shortMemories ?? 0}）`);
-  if (counts.globalMemories) memBits.push(`总体 ${counts.globalMemories} 条`);
+  if (counts.globalMemories) memBits.push(`共享 ${counts.globalMemories} 条`);
   memBits.push(`流水 ${counts.events} 条 / ${counts.profiles} 人 / ${counts.days} 天`);
   lines.push(`- ${memBits.join('，')}。`);
   if (latest) {
@@ -199,10 +199,12 @@ export function describeMemory({ key, counts, latest, now }) {
     lines.push(`- 最近流水：${age}，${who}「${String(latest.text ?? '').slice(0, 20)}…」`);
   }
   lines.push('【记不记由你判断】值得记就自己写：qq_memory_save(key, text, scope, importance, who, layer)');
-  lines.push('  · layer=global → 总体记忆（换群也适用：某人的经历/喜好）；layer=session（默认）→ 只在本会话有效（群约定/本轮话题）。');
+  lines.push('  · layer=global → 共享记忆（换群也适用：某人的经历/喜好）；layer=session（默认）→ 只在本会话有效（群约定/本轮话题）。');
   lines.push('  · scope=long 约定/偏好/重要经历；scope=short 一时话题（3 天后重要的升 long，其余遗忘）。importance 1~5 认真给。');
   lines.push('  · 不写也不丢细节（流水仍在、recall 查得到），但只有写下的才算"记得"。');
-  lines.push('【牵扯到过去就先查】先 qq_memory_recall(key, question)，它同时查总体+本会话（结果标 [总体]/[本会话]），再开口。');
+  lines.push('【牵扯到过去就先查】先 qq_memory_recall(key, question)，它同时查共享+本会话（结果标 [共享]/[本会话]），再开口。');
   lines.push('  例：有人提「上次摩天轮」→ 先查「摩天轮」，再聊细节（那天冰淇淋很甜）。别凭印象编，查不到就照常聊。');
   return lines.join('\n');
 }
+
+
