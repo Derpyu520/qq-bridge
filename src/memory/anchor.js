@@ -13,6 +13,9 @@
 import { truncate } from './util.js';
 
 export const ANCHOR_MAX_CHARS = 400;
+// 抽锚算法版本：改动 buildAnchor 的取句/拼接逻辑时 +1，用于让磁盘上的 anchor.json 缓存失效
+// （缓存 stamp = 角色卡 mtime/size + 本版本号；不加版本号时改了算法也看不到效果）。
+export const ANCHOR_VERSION = 2;
 
 function splitSections(text) {
   const sections = [];
@@ -101,7 +104,11 @@ export function buildAnchor(selectedText, options = {}) {
   }
 
   if (style) {
-    const bullets = bulletLines(style.lines).slice(0, 2);
+    // 行尾的「。」先去掉再拼：否则会出现「…想补一句就让它成为下一条。；默认 1~10 字」这种双标点。
+    const bullets = bulletLines(style.lines)
+      .slice(0, 2)
+      .map((line) => line.replace(/[。；;！!]+$/, '').trim())
+      .filter(Boolean);
     if (bullets.length) parts.push(cutAtSentence(bullets.join('；'), 110));
   }
 

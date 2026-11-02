@@ -574,9 +574,16 @@ let modelCatalogInFlight = null;
 // 控制台改强度后递增它，让已在运行的会话在下一条消息重新 selectModel；
 // 放在模块级是为了不依赖 main() 内部声明的执行顺序（避免 TDZ）。
 let modelSelectionEpoch = 0;
-// DeepSeek provider 明确支持的取值（见 dsh-llm-deepseek：其它值会抛 UNSUPPORTED_REASONING_EFFORT）。
-// 'off' 虽然合法（关闭思考），但 QQ 聊天助手依赖思考，控制台不提供该档。
-const REASONING_EFFORT_OPTIONS = ['low', 'high', 'max'];
+// 思考强度（reasoningEffort）的取值**按 provider 而异**，不是全平台一套：
+//   · deepseek-official / deepseek-account → off/low/high/max
+//   · trae / trae-global                   → low/high/xhigh（'max'/'medium' 会被拒）
+//   · google-antigravity（Gemini）          → low/medium/high
+//   · codearts                             → on/off
+// 所以这里只做「拼写合法」的兜底白名单；真正可用的档位以 DSH 的 session/modelCatalog 为准
+// （/api/dsh/model 会把 catalog 公布的档位回给控制台，本清单仅在 catalog 不可用时兜底）。
+// 换模型后档位不匹配的后果是 selectModel 抛 session/model-unavailable（每条消息都失败），
+// 所以别把某个 provider 的取值当成「平台通用」。
+const REASONING_EFFORT_OPTIONS = ['off', 'on', 'low', 'medium', 'high', 'xhigh', 'max'];
 const REASONING_EFFORT_DEFAULT = 'max';
 function normalizeReasoningEffort(value) {
   const v = String(value ?? '').trim().toLowerCase();
@@ -11115,7 +11122,12 @@ async function main() {
 
     // 二代仿真模式（reserved2）：唤醒调度
     if (currentMode === 'reserved2') {
-      const sender = kind === 'group' ? (event.sender?.card || event.sender?.nickname || String(event.user_id)) : '私聊';
+      // 私聊不要再用字面量「私聊」当发送者名：记忆插件会把它当画像 key，
+      // 结果 private:* 的「关于他们」里全是同一个人叫「私聊」（count 累加、无法区分是谁）。
+      // 用对方昵称，取不到再退回 QQ 号（稳定、不会因改昵称分裂成两个画像）。
+      const sender = kind === 'group'
+        ? (event.sender?.card || event.sender?.nickname || String(event.user_id))
+        : (event.sender?.card || event.sender?.nickname || `QQ${event.user_id}`);
       appendSocialV2Message(key, sender, textContent, plainContent, quoteTargetIsSelf, isOwner, event.message_id ?? event.msg_id ?? null, mediaList, event.user_id ?? null, extractForwardIds(event.message ?? []));
       // 二代同样收集群聊黑话学习素材（AI 自主提交之外，桥接仍自动提取高频陌生词）
       if (kind === 'group') feedSlangWindow(key, sender, plainContent);

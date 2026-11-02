@@ -23,8 +23,8 @@ import {
 } from './util.js';
 import { bm25Scores } from './tokenize.js';
 import { DEFAULT_FORGETTING, DEFAULT_WEIGHTS, W_TIERS, computeW, profileRapport, retention } from './weights.js';
-import { salienceBreakdown, eventFromMessage, selfEventFromText, isForcedMemory, updateProfile } from './encoder.js';
-import { buildAnchor, ANCHOR_MAX_CHARS } from './anchor.js';
+import { salienceBreakdown, eventFromMessage, selfEventFromText, isForcedMemory, isSelfEventWorthKeeping, updateProfile } from './encoder.js';
+import { buildAnchor, ANCHOR_MAX_CHARS, ANCHOR_VERSION } from './anchor.js';
 
 export const MEMORY_VERSION = 1;
 export const DEFAULT_MEMORY_CONFIG = {
@@ -184,7 +184,18 @@ export function createMemoryPlugin(opts = {}) {
     const st = {
       key,
       events,
-      profiles: profiles && typeof profiles === 'object' ? profiles : {},
+      // 旧版本把某些会话的画像名写成了字面量「私聊」（private:* 全部挤在同一个人身上）。
+      // 加载时清掉这种无意义画像，让它们按新的真实昵称重新累积。
+      profiles: (() => {
+        const raw = profiles && typeof profiles === 'object' ? profiles : {};
+        const clean = {};
+        for (const [name, value] of Object.entries(raw)) {
+          if (name === '私聊' || name === '未知' || name === '') continue;
+          if (['__proto__', 'constructor', 'prototype'].includes(name)) continue;
+          clean[name] = value;
+        }
+        return clean;
+      })(),
       anchor: anchor && typeof anchor === 'object' ? anchor : null,
       self: self && typeof self === 'object' ? self : { openThreads: [] },
       meta: meta && typeof meta === 'object' ? meta : {},
@@ -241,11 +252,16 @@ export function createMemoryPlugin(opts = {}) {
   /** 编码自己发出去的消息（人格连续性："我上次说过什么"）。 */
   function encodeSelf(key, texts) {
     if (!enabled) return 0;
-    const list = (Array.isArray(texts) ? texts : [texts]).map((t) => String(t ?? '').trim()).filter(Boolean);
+    const list = (Array.isArray(texts) ? texts : [texts])
+      .map((t) => String(t ?? '').trim())
+      .filter(Boolean)
+      // 只留「有信息量」的自我发言：以前每条都记，自己占了事件流 60%~94%，
+      // 把群友的偏好/约定挤出了「最近的记忆」（见 encoder.isSelfEventWorthKeeping）。
+      .filter(isSelfEventWorthKeeping);
     if (!list.length) return 0;
     const st = stateFor(key);
     for (const text of list) {
-      const ev = selfEventFromText(text, { now: now(), seq: ++st.meta.lastEventSeq });
+      const ev = selfEventFromText(text, { now: now(), seq: ++st.meta.lastEventSeq, importance: 0.4 });
       st.events.push(ev);
       appendJsonl(eventsFile(key, ev.t), ev);
     }
@@ -313,7 +329,9 @@ export function createMemoryPlugin(opts = {}) {
     }
     if (!info?.text) return '';
     const st = stateFor(key);
-    const stamp = String(info.stamp ?? info.name ?? '');
+    // stamp 里带 ANCHOR_VERSION：抽锚算法改了以后，旧的 anchor.json 缓存必须失效，
+    // 否则磁盘上会一直用老文案（改了 buildAnchor 却看不到效果）。
+    const stamp = `${String(info.stamp ?? info.name ?? '')}:a${ANCHOR_VERSION}`;
     if (st.anchor && st.anchor.stamp === stamp && st.anchor.text) return st.anchor.text;
     const text = buildAnchor(info.text, { maxChars: cfg.anchorMaxChars });
     if (!text) return '';

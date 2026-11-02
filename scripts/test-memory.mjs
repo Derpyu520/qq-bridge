@@ -10,8 +10,8 @@ import path from 'node:path';
 
 import { tokenize, jaccard, bm25Scores } from '../src/memory/tokenize.js';
 import { retention, computeW, wTier, DEFAULT_FORGETTING } from '../src/memory/weights.js';
-import { salienceBreakdown, isAddressedToBot } from '../src/memory/encoder.js';
-import { buildAnchor } from '../src/memory/anchor.js';
+import { salienceBreakdown, isAddressedToBot, isSelfEventWorthKeeping } from '../src/memory/encoder.js';
+import { buildAnchor, ANCHOR_VERSION } from '../src/memory/anchor.js';
 import { createMemoryPlugin } from '../src/memory/index.js';
 import { selectRoleText } from '../src/role-card.js';
 
@@ -307,6 +307,52 @@ test('控制台页面：已挂载记忆页与开关（静态检查）', () => {
     assert.ok(html.includes(needle), `控制台缺少 ${needle}`);
   }
   assert.ok(html.includes("memory: ['记忆'"), 'consolePages 缺少 memory 条目');
+});
+
+test('自己发言：只留信息量够的，语气词不进事件流', () => {
+  assert.equal(isSelfEventWorthKeeping('草'), false);
+  assert.equal(isSelfEventWorthKeeping('？'), false);
+  assert.equal(isSelfEventWorthKeeping('哈哈'), false);
+  assert.equal(isSelfEventWorthKeeping('好好好'), false);
+  // 约定/提醒类：短也要留（以后要兑现）
+  assert.equal(isSelfEventWorthKeeping('说好明天给你带'), true);
+  assert.equal(isSelfEventWorthKeeping('记得吃药'), true);
+  // 提问：够长就留
+  assert.equal(isSelfEventWorthKeeping('你那个吉他练得怎么样了？'), true);
+  // 够长的一般叙述：留
+  assert.equal(isSelfEventWorthKeeping('我刚刚看到个挺离谱的新闻'), true);
+
+  const dir = tmpDir();
+  const clock = { v: Date.now() };
+  const plugin = createMemoryPlugin({ stateDir: dir, config: {}, now: () => clock.v });
+  const kept = plugin.encodeSelf('group:900', ['草', '？', '哈哈', '说好明天给你带', '我刚刚看到个挺离谱的新闻']);
+  assert.equal(kept, 2, '应只留下约定与长句两条');
+  const texts = plugin.stateFor('group:900').events.map((ev) => ev.text);
+  assert.deepEqual(texts, ['说好明天给你带', '我刚刚看到个挺离谱的新闻']);
+  assert.ok(plugin.stateFor('group:900').events.every((ev) => ev.importance === 0.4), '自我事件重要度应为 0.4');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('人设锚：不出现「。；」双标点，且缓存带算法版本', () => {
+  // 与上一个锚测试一样：不同分支的人格卡文件名不同，能读哪张读哪张。
+  const candidates = ['../roles/小鲸鱼-改.md', '../roles/小鲸鱼.md'];
+  const roleUrl = candidates.map((p) => new URL(p, import.meta.url)).find((u) => fs.existsSync(u));
+  assert.ok(roleUrl, '找不到可测的人格卡');
+  const roleText = fs.readFileSync(roleUrl, 'utf8');
+  const anchor = buildAnchor(selectRoleText(roleText, 'v2'), { maxChars: 400 });
+  assert.ok(!anchor.includes('。；'), `锚里有双标点：${anchor}`);
+  assert.ok(!/；$/.test(anchor), `锚以分号结尾：${anchor}`);
+  assert.equal(ANCHOR_VERSION, 2);
+
+  // 算法版本变化必须让缓存的 anchor.json 失效（否则改了文案也刷不出来）
+  const dir = tmpDir();
+  const clock = { v: Date.now() };
+  const role = { name: '测试角色', stamp: 'a:1:100', text: '## 一、你是谁\n你是一只会吐槽的鲸鱼。\n' };
+  const plugin = createMemoryPlugin({ stateDir: dir, config: {}, now: () => clock.v, getRoleInfo: () => role });
+  plugin.renderAnchor('private:901');
+  const cached = JSON.parse(fs.readFileSync(path.join(dir, 'private-901', 'anchor.json'), 'utf8'));
+  assert.ok(String(cached.stamp).includes(`:a${ANCHOR_VERSION}`), `缓存 stamp 缺版本号：${cached.stamp}`);
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 // ── 汇总 ──────────────────────────────────────────────────────────────────

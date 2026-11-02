@@ -83,8 +83,27 @@ export function eventFromMessage(msg, { salience = 0.5, kind = null, source = nu
   };
 }
 
+/**
+ * 自己的发言要不要进事件流？
+ *
+ * 以前是「每条都记」，结果自己占事件流 60%~94%（"草""？""哈哈"全进），
+ * 把群友说的偏好/约定挤出「最近的记忆」。这里按信息量过一遍：
+ *   · 约定/偏好/提醒类词句 —— 一定记（以后要兑现、或别踩雷）；
+ *   · 提问/反问 —— 记（说明当时在追问什么）；
+ *   · 其余要有一定长度才记（太短的语气词没有连续性价值）。
+ */
+const SELF_INFO_RE = /(说好|约好|答应|记得|别忘|提醒|明天|后天|下周|改天|生日|喜欢|讨厌|不爱|最怕|帮你|告诉我|回头|待会|等我)/;
+
+export function isSelfEventWorthKeeping(text) {
+  const s = String(text ?? '').replace(/\s+/g, ' ').trim();
+  if (!s) return false;
+  if (SELF_INFO_RE.test(s)) return true;
+  if (/[?？]$/.test(s) && Array.from(s).length >= 6) return true;
+  return Array.from(s).length >= 12;
+}
+
 /** 自己说过的话：也进事件流（"我上次说过什么"是人格连续的一部分）。 */
-export function selfEventFromText(text, { now = Date.now(), seq = 0 } = {}) {
+export function selfEventFromText(text, { now = Date.now(), seq = 0, importance = 0.4 } = {}) {
   return {
     v: 1,
     t: now,
@@ -97,7 +116,9 @@ export function selfEventFromText(text, { now = Date.now(), seq = 0 } = {}) {
     isSelf: true,
     quotedSelf: false,
     text: truncate(String(text ?? ''), 160),
-    importance: 0.5,
+    // 0.4 而不是 0.5：自己说的话对「记得别人」的价值低于别人说的，
+    // 也让它在权重排序里自然排在群友信息之后，而不是靠数量压过去。
+    importance,
     strength: 1,
     accessCount: 0,
   };
