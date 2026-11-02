@@ -2525,6 +2525,7 @@ button:active:not(:disabled) {
         </table>
         <div class="row" style="margin-top:8px">
           <button id="memReadFile" class="small">查看选中会话的记忆</button>
+          <button id="memReadGlobal" class="small">查看总体记忆（跨群共享）</button>
           <button id="memRebuildFile" class="small">从事件重建记忆文件</button>
           <span class="meta" id="memFileMsg" role="status"></span>
         </div>
@@ -4602,6 +4603,7 @@ document.getElementById('memEnabled').addEventListener('change', async (event) =
   }
 });
 document.getElementById('memReadFile').addEventListener('click', () => showMemoryFile(memorySelectedKey));
+document.getElementById('memReadGlobal').addEventListener('click', () => showMemoryFile('_global'));
 document.getElementById('memRebuildFile').addEventListener('click', async () => {
   if (!memorySelectedKey) { const m = document.getElementById('memFileMsg'); m.textContent = '先选一个会话'; m.className = 'meta err'; return; }
   if (!confirm('用事件流重新生成 ' + memorySelectedKey + ' 的 MEMORY.md？（会覆盖现有正文，事件数据不受影响）')) return;

@@ -186,26 +186,23 @@ export function recallMemory(events, question, options = {}) {
 export function describeMemory({ key, counts, latest, now }) {
   const t = Number(now) || Date.now();
   const lines = [];
-  lines.push('【你的记忆】你有自己的长期记忆（按会话分开，别人看不到）。');
+  lines.push('【你的记忆】两层：**总体记忆**（跨群/私聊共享，关于某人/某事本身）+ **本会话记忆**（只在这里有效）。');
   const memBits = [];
-  if (counts.memories) memBits.push(`自己记下 ${counts.memories} 条（长期 ${counts.longMemories ?? 0} / 短期 ${counts.shortMemories ?? 0}）`);
-  memBits.push(`聊天流水 ${counts.events} 条，涉及 ${counts.profiles} 个人，跨 ${counts.days} 天`);
-  lines.push(`- ${memBits.join('；')}。`);
+  if (counts.memories) memBits.push(`本会话 ${counts.memories} 条（长期 ${counts.longMemories ?? 0}/短期 ${counts.shortMemories ?? 0}）`);
+  if (counts.globalMemories) memBits.push(`总体 ${counts.globalMemories} 条`);
+  memBits.push(`流水 ${counts.events} 条 / ${counts.profiles} 人 / ${counts.days} 天`);
+  lines.push(`- ${memBits.join('，')}。`);
   if (latest) {
     const ageDays = Math.max(0, (t - Number(latest.t)) / DAY_MS);
     const age = ageDays < 1 ? `${Math.max(1, Math.round(ageDays * 24))} 小时前` : `${Math.round(ageDays)} 天前`;
     const who = latest.isSelf ? '我' : String(latest.sender ?? '未知');
-    lines.push(`- 最近一条流水：${age}，${who}说「${String(latest.text ?? '').slice(0, 24)}…」`);
+    lines.push(`- 最近流水：${age}，${who}「${String(latest.text ?? '').slice(0, 20)}…」`);
   }
-  lines.push('');
-  lines.push('【记什么由你判断】不是每句话都值得记。觉得这件事有长期或短期记忆价值时，自己写进去：');
-  lines.push('  · qq_memory_save(key, text, scope="long"|"short", importance=1~5) —— 约定/偏好/重要经历/对某人的具体印象写 long；');
-  lines.push('    一时的话题、对方当下的状态写 short（默认 3 天后：重要的升 long，其余自动遗忘）。');
-  lines.push('  · 不写也不会丢细节：聊天流水仍在，qq_memory_recall 能查到；但只有你写下的才会被当作"记得"。');
-  lines.push('  · importance 认真给：★ 越高越不容易被压缩/遗忘，也越容易被想起来。');
-  lines.push('');
-  lines.push('【牵扯到过去就先查】话题勾到以前发生过的事时，先调 qq_memory_recall(key, question) 查，再开口。');
-  lines.push(`  例：有人说「上次那个摩天轮」→ 先查「摩天轮」，再接着聊细节（比如那天吃的冰淇淋很甜）。`);
-  lines.push('  不要凭印象编；查不到就照常聊。记错了用 qq_memory_save 补一条更正、或 qq_memory_forget 删掉。');
+  lines.push('【记不记由你判断】值得记就自己写：qq_memory_save(key, text, scope, importance, who, layer)');
+  lines.push('  · layer=global → 总体记忆（换群也适用：某人的经历/喜好）；layer=session（默认）→ 只在本会话有效（群约定/本轮话题）。');
+  lines.push('  · scope=long 约定/偏好/重要经历；scope=short 一时话题（3 天后重要的升 long，其余遗忘）。importance 1~5 认真给。');
+  lines.push('  · 不写也不丢细节（流水仍在、recall 查得到），但只有写下的才算"记得"。');
+  lines.push('【牵扯到过去就先查】先 qq_memory_recall(key, question)，它同时查总体+本会话（结果标 [总体]/[本会话]），再开口。');
+  lines.push('  例：有人提「上次摩天轮」→ 先查「摩天轮」，再聊细节（那天冰淇淋很甜）。别凭印象编，查不到就照常聊。');
   return lines.join('\n');
 }

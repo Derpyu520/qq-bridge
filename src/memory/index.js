@@ -145,6 +145,12 @@ export function createMemoryPlugin(opts = {}) {
     return path.join(stateDir, safeSegment(key));
   }
 
+  // 总体记忆（跨会话共享）：放在 state/memory/_global/，关于「这个人/这件事本身」，
+  // 任何群聊/私聊都查得到。与会话记忆分开存，避免 A 群的具体聊天内容泄漏到 B 群。
+  function globalDir() {
+    return path.join(stateDir, '_global');
+  }
+
   function eventsFile(key, ts) {
     return path.join(keyDir(key), `events-${dayKey(ts)}.jsonl`);
   }
@@ -426,20 +432,28 @@ export function createMemoryPlugin(opts = {}) {
     if (!enabled) return { fragments: [], total: 0, question: String(question ?? ''), mode: 'empty' };
     const dir = keyDir(key);
     const st = stateFor(key);
-
-    // 1) 先查「模型自己写下的记忆」（带重要度/长期短期，质量最高）
-    const store = loadMemories(dir);
     const q = String(question ?? '').trim();
-    const modelHits = recallModelMemories(store.entries, q, { now: now(), limit: opts.limit });
-    if (modelHits.length) {
-      for (const hit of modelHits) touchMemory(dir, hit.id, now());
+
+    // 1) 先查「模型自己写下的记忆」：**总体记忆（跨会话）+ 本会话记忆**一起查。
+    //    总体记忆排在前面——它记的是"这个人本身"，比某个群的上下文更该被想起。
+    const globalStore = loadMemories(globalDir());
+    const sessionStore = loadMemories(dir);
+    const globalHits = recallModelMemories(globalStore.entries, q, { now: now(), limit: Math.ceil((opts.limit || 5) / 2) });
+    const sessionHits = recallModelMemories(sessionStore.entries, q, { now: now(), limit: opts.limit });
+    for (const hit of globalHits) touchMemory(globalDir(), hit.id, now());
+    for (const hit of sessionHits) touchMemory(dir, hit.id, now());
+
+    if (globalHits.length || sessionHits.length) {
+      const lines = [];
+      for (const h of globalHits) lines.push(`[总体] ${h.date} ${'★'.repeat(h.importance)} ${h.who ? h.who + '：' : ''}${h.text}`);
+      for (const h of sessionHits) lines.push(`[本会话] ${h.date} ${'★'.repeat(h.importance)} ${h.who ? h.who + '：' : ''}${h.text}`);
       return {
         key,
         question: q,
         mode: 'memory',
-        fragments: [{ date: formatDateOf(modelHits[0].t), age: '', lines: modelHits.map((h) => `${h.date} ${'★'.repeat(h.importance)} ${h.who ? h.who + '：' : ''}${h.text}`) }],
-        total: store.entries.length,
-        hint: '这些是它自己记下的事（★ 越多越重要）。引用细节要自然，别整段念。',
+        fragments: [{ date: formatDateOf((globalHits[0] || sessionHits[0]).t), age: '', lines }],
+        total: globalStore.entries.length + sessionStore.entries.length,
+        hint: '这些是你自己记下的事：`[总体]` 是跨群通用的（关于这个人/这件事本身），`[本会话]` 只在这里有效。★ 越多越重要。引用细节要自然，别整段念。',
       };
     }
 
@@ -450,32 +464,40 @@ export function createMemoryPlugin(opts = {}) {
     return result;
   }
 
-  /** 模型写记忆。scope=long/short，importance=1..5。 */
-  function saveMemory(key, { text, scope, importance, who }) {
+  /** 模型写记忆。scope=long/short，layer=global/session（总体/本会话），importance=1..5。 */
+  function saveMemory(key, { text, scope, importance, who, layer }) {
     if (!enabled) return null;
-    const dir = keyDir(key);
-    const entry = addMemory(dir, { text, scope, importance, who, source: 'model', now: now() });
+    const target = String(layer ?? '').toLowerCase() === 'global' ? globalDir() : keyDir(key);
+    const entry = addMemory(target, { text, scope, importance, who, layer, source: 'model', now: now() });
     return entry;
   }
 
-  /** 删除一条模型记忆。 */
+  /** 删除一条模型记忆（先查本会话，再查总体）。 */
   function forgetMemoryById(key, id) {
-    return forgetMemory(keyDir(key), id);
+    if (forgetMemory(keyDir(key), id)) return true;
+    return forgetMemory(globalDir(), id);
   }
 
-  /** 执行保留/压缩/遗忘（控制台或定时调用）。 */
+  /** 执行保留/压缩/遗忘（控制台或定时调用）：只整理本会话。 */
   function runRetention(key) {
     return applyRetention(keyDir(key), { now: now(), retention: cfg.retention });
+  }
+
+  /** 整理总体记忆（跨会话共享层）。与会话层分开跑，避免每个会话重复处理同一份数据。 */
+  function runRetentionGlobal() {
+    return applyRetention(globalDir(), { now: now(), retention: cfg.retention });
   }
 
   /** 注入提示词用的记忆索引（不含正文）。 */
   function describe(key) {
     if (!enabled) return '';
     const st = stateFor(key);
-    const store = loadMemories(keyDir(key));
+    const sessionStore = loadMemories(keyDir(key));
+    const globalStore = loadMemories(globalDir());
     const days = new Set(st.events.map((ev) => dayKey(ev.t))).size;
     const latest = st.events.length ? st.events[st.events.length - 1] : null;
-    const active = store.entries.filter((e) => e.status === 'active');
+    const active = sessionStore.entries.filter((e) => e.status === 'active');
+    const globalActive = globalStore.entries.filter((e) => e.status === 'active');
     return describeMemory({
       key,
       counts: {
@@ -483,8 +505,9 @@ export function createMemoryPlugin(opts = {}) {
         profiles: Object.keys(st.profiles ?? {}).length,
         days,
         memories: active.length,
-        longMemories: active.filter((e) => e.scope === 'long').length,
-        shortMemories: active.filter((e) => e.scope === 'short').length,
+        longMemories: active.filter((e) => e.scope === 'long' && (e.layer ?? 'session') === 'session').length,
+        shortMemories: active.filter((e) => e.scope === 'short' && (e.layer ?? 'session') === 'session').length,
+        globalMemories: globalActive.length,
       },
       latest,
       now: now(),
@@ -494,6 +517,11 @@ export function createMemoryPlugin(opts = {}) {
   /** 读 MEMORY.md 原文（运维/控制台查看用）。 */
   function readFile(key) {
     return readMemoryMarkdown(keyDir(key));
+  }
+
+  /** 读总体记忆（跨会话共享层）的 MEMORY.md。 */
+  function readGlobalFile() {
+    return readMemoryMarkdown(globalDir());
   }
 
   /** 从事件流重建 MEMORY.md（迁移/修复用）。 */
@@ -667,10 +695,12 @@ export function createMemoryPlugin(opts = {}) {
     recall,
     describe,
     readFile,
+    readGlobalFile,
     rebuildFile,
     saveMemory,
     forgetMemoryById,
     runRetention,
+    runRetentionGlobal,
     query,
     checkpoint,
     migrateFromSocialV2,

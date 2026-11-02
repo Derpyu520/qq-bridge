@@ -959,20 +959,21 @@ server.tool(
 
 server.tool(
   'qq_memory_save',
-  '写一条记忆。**记不记、记多久由你判断**：觉得这件事有记忆价值时自己写进去。scope="long" 用于长期（约定、偏好、重要经历、对某人的具体印象）；scope="short" 用于一时的话题/对方当下的状态（默认保留 3 天：够重要会自动升为长期，否则遗忘）。importance 1~5 认真给：★ 越高越不容易被压缩/遗忘，也越容易被想起来。',
+  '写一条记忆。**记不记、记多久、放哪一层由你判断**。layer="global" 写进**总体记忆**（跨群/私聊共享，关于某个人或某件事本身，例如「阿草在学吉他」「老爹喜欢草莓味」）；layer="session"（默认）只在本会话有效（本群约定、这轮话题）。scope="long" 用于长期（约定/偏好/重要经历）；scope="short" 用于一时的话题/对方当下状态（默认保留 3 天：够重要自动升为长期，否则遗忘）。importance 1~5 认真给：★ 越多越不易被压缩/遗忘，也越容易被想起来。',
   {
     key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
     token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
     text: z.string().describe('记忆内容，写成一句你自己看得懂的话（"阿草在学吉他，说手指疼"）'),
     scope: z.enum(['long', 'short']).optional().describe('长期 long / 短期 short，默认 short'),
+    layer: z.enum(['global', 'session']).optional().describe('总体记忆 global（跨会话共享）/ 本会话 session，默认 session'),
     importance: z.number().optional().describe('重要度 1~5，默认 3。★ 越高越不易被遗忘'),
     who: z.string().optional().describe('和谁有关（群友昵称），便于以后按人回忆')
   },
-  async ({ key, token, text, scope, importance, who }) => {
+  async ({ key, token, text, scope, layer, importance, who }) => {
     try {
       const data = await agentApi('/api/socialV2/memory-save', {
         method: 'POST',
-        body: JSON.stringify({ key, text, scope: scope || 'short', importance: importance ?? 3, who: who || '' }),
+        body: JSON.stringify({ key, text, scope: scope || 'short', layer: layer || 'session', importance: importance ?? 3, who: who || '' }),
         headers: { 'x-agent-token': token }
       });
       return { content: [{ type: 'text', text: serializeModelData(data) }] };

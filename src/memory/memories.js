@@ -15,6 +15,9 @@ export const MEMORY_FILE = 'memories.json';
 export const MEMORY_MD = 'MEMORY.md';
 
 export const SCOPE = { LONG: 'long', SHORT: 'short' };
+// 记忆的「归属层级」：global = 跨会话的总体记忆（关于某个人本身，任何群/私聊都查得到）；
+// session = 只在这个会话里有效（群梗、本群约定、这里发生的事）。
+export const LAYER = { GLOBAL: 'global', SESSION: 'session' };
 
 // 保留/压缩/遗忘策略（可按需在 config.memory.retention 覆盖）
 export const DEFAULT_RETENTION = {
@@ -40,6 +43,12 @@ function normalizeScope(value) {
   return SCOPE.SHORT;
 }
 
+function normalizeLayer(value) {
+  const s = String(value ?? '').trim().toLowerCase();
+  if (s === 'global' || s === '总体' || s === '共享') return LAYER.GLOBAL;
+  return LAYER.SESSION;
+}
+
 export function loadMemories(dir) {
   const raw = readJsonSafe(path.join(dir, MEMORY_FILE), null, () => {});
   if (!raw || typeof raw !== 'object' || !Array.isArray(raw.entries)) {
@@ -58,7 +67,7 @@ export function saveMemories(dir, store) {
 }
 
 /** 模型写一条记忆。返回落库后的条目。 */
-export function addMemory(dir, { text, scope, importance, who, source = 'model', now = Date.now() }) {
+export function addMemory(dir, { text, scope, importance, who, layer, source = 'model', now = Date.now() }) {
   const store = loadMemories(dir);
   const clean = String(text ?? '').replace(/\s+/g, ' ').trim();
   if (!clean) throw new Error('记忆内容不能为空');
@@ -67,6 +76,7 @@ export function addMemory(dir, { text, scope, importance, who, source = 'model',
     t: Number(now) || Date.now(),
     text: truncate(clean, 400),
     scope: normalizeScope(scope),
+    layer: normalizeLayer(layer),
     importance: normalizeImportance(importance),
     who: truncate(String(who ?? ''), 40),
     source: String(source ?? 'model').slice(0, 20),
@@ -171,7 +181,7 @@ function compressText(text, maxChars) {
   return chars.slice(0, maxChars).join('') + '…';
 }
 
-/** 生成给模型/人看的 MEMORY.md（长期在前，短期在后）。 */
+/** 生成给模型/人看的 MEMORY.md（总体记忆在前，然后长期、短期）。 */
 export function writeMemoryMarkdown(dir, store = loadMemories(dir)) {
   const active = store.entries.filter((e) => e.status === 'active');
   const lines = [];
@@ -181,11 +191,14 @@ export function writeMemoryMarkdown(dir, store = loadMemories(dir)) {
   lines.push('> 修改请用 qq_memory_save / qq_memory_forget，手改会被下一次写入覆盖。');
   lines.push('');
 
-  for (const [scope, title, hint] of [
-    [SCOPE.LONG, '## 长期记忆', '（重要，长期保留；很久不被想起且不重要时会压缩或遗忘）'],
-    [SCOPE.SHORT, '## 短期记忆', `（默认保留 ${DEFAULT_RETENTION.shortTermDays} 天：够重要就升为长期，否则遗忘）`],
-  ]) {
-    const list = active.filter((e) => e.scope === scope)
+  const sections = [
+    [LAYER.GLOBAL, SCOPE.LONG, '## 总体记忆（跨群共享）', '（关于这个人/这件事本身，任何会话都查得到）'],
+    [LAYER.SESSION, SCOPE.LONG, '## 本会话 · 长期记忆', '（重要，长期保留；很久不被想起且不重要时会压缩或遗忘）'],
+    [LAYER.SESSION, SCOPE.SHORT, '## 本会话 · 短期记忆', `（默认保留 ${DEFAULT_RETENTION.shortTermDays} 天：够重要就升为长期，否则遗忘）`],
+  ];
+  for (const [layer, scope, title, hint] of sections) {
+    const list = active
+      .filter((e) => normalizeLayer(e.layer) === layer && e.scope === scope)
       .sort((a, b) => (b.importance - a.importance) || (b.t - a.t));
     lines.push(title + hint);
     if (!list.length) {
@@ -203,7 +216,11 @@ export function writeMemoryMarkdown(dir, store = loadMemories(dir)) {
   }
   ensureDir(dir);
   fs.writeFileSync(path.join(dir, MEMORY_MD), lines.join('\n').trimEnd() + '\n', 'utf8');
-  return { long: active.filter((e) => e.scope === SCOPE.LONG).length, short: active.filter((e) => e.scope === SCOPE.SHORT).length };
+  return {
+    global: active.filter((e) => normalizeLayer(e.layer) === LAYER.GLOBAL).length,
+    long: active.filter((e) => normalizeLayer(e.layer) === LAYER.SESSION && e.scope === SCOPE.LONG).length,
+    short: active.filter((e) => normalizeLayer(e.layer) === LAYER.SESSION && e.scope === SCOPE.SHORT).length,
+  };
 }
 
 export function readMemoryMarkdown(dir) {
@@ -219,4 +236,4 @@ export function importanceLabel(n) {
   return IMPORTANCE_LABEL[Math.min(5, Math.max(0, Math.round(Number(n) || 3)))] || '一般';
 }
 
-export { normalizeScope, normalizeImportance };
+export { normalizeScope, normalizeImportance, normalizeLayer };
