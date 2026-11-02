@@ -2504,10 +2504,20 @@ button:active:not(:disabled) {
       <table style="margin-top:12px">
         <tr><th>指标</th><th>值</th></tr>
         <tr><td>已沉淀会话</td><td id="memStatSessions">—</td></tr>
-        <tr><td>记忆条目</td><td id="memStatEvents">—</td></tr>
+        <tr><td>聊天流水</td><td id="memStatEvents">—</td></tr>
         <tr><td>群友画像</td><td id="memStatProfiles">—</td></tr>
+        <tr><td>AI 自己写的记忆</td><td id="memStatMemories">—</td></tr>
         <tr><td>记忆文件</td><td id="memStatFile">—</td></tr>
       </table>
+
+      <div class="row" style="margin-top:12px">
+        <button id="memRetentionBtn" class="small">执行记忆整理（升长期 / 压缩 / 遗忘）</button>
+        <span class="meta" id="memRetentionMsg" role="status"></span>
+      </div>
+      <div class="meta">
+        规则：短期记忆默认保留 3 天，到期时重要度 ≥3 升为长期、其余遗忘；长期记忆 90 天没被想起时，
+        重要度 ≤2 遗忘、重要度 3 压缩、重要度 ≥4 原样保留（约定/重要经历不压缩）。每小时自动跑一次。
+      </div>
 
       <details class="settings-group" style="margin-top:10px" open><summary>按会话查看 / 读取记忆正文</summary><div class="settings-content">
         <table id="memSessions" style="margin-top:6px">
@@ -4560,6 +4570,10 @@ function loadMemory() {
     document.getElementById('memStatProfiles').textContent = String(totals.profiles ?? 0);
     const totalChars = sessions.reduce((sum, s) => sum + (Number(s.memoryChars) || 0), 0);
     document.getElementById('memStatFile').textContent = totalChars ? (totalChars + ' 字符') : '—';
+    const totalMems = sessions.reduce((sum, s) => sum + (Number(s.memories) || 0), 0);
+    document.getElementById('memStatMemories').textContent = totalMems
+      ? `${totalMems} 条（长期 ${sessions.reduce((n, s) => n + (Number(s.longMemories) || 0), 0)} / 短期 ${sessions.reduce((n, s) => n + (Number(s.shortMemories) || 0), 0)}）`
+      : '0 条（等 AI 自己写）';
     renderMemorySessions(sessions);
     const st = document.getElementById('memEnabledMsg');
     st.textContent = enabled ? '运行中' : '已关闭（回落到便签记忆）';
@@ -4596,6 +4610,20 @@ document.getElementById('memRebuildFile').addEventListener('click', async () => 
   msg.textContent = r.ok ? `✅ 已重建（${r.chars} 字符 / ${r.entries} 条）` : ('❌ ' + (r.error || '失败'));
   msg.className = r.ok ? 'meta ok' : 'meta err';
   if (r.ok) showMemoryFile(memorySelectedKey);
+});
+document.getElementById('memRetentionBtn').addEventListener('click', async () => {
+  const msg = document.getElementById('memRetentionMsg');
+  msg.textContent = '执行中…'; msg.className = 'meta';
+  const r = await api('/api/memory/retention', 'POST', {});
+  if (r.ok) {
+    const t = r.total || {};
+    msg.textContent = `✅ 升长期 ${t.promoted || 0}，压缩 ${t.compressed || 0}，遗忘 ${t.forgot || 0}，保留 ${t.kept || 0}`;
+    msg.className = 'meta ok';
+    loadMemory();
+  } else {
+    msg.textContent = '❌ ' + (r.error || '失败');
+    msg.className = 'meta err';
+  }
 });
 document.getElementById('memResetAll').addEventListener('click', async () => {
   if (!confirm('确定清空全部记忆？只删除 state/memory/ 下的文件，不可撤销。')) return;

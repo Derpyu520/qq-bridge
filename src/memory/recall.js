@@ -187,18 +187,25 @@ export function describeMemory({ key, counts, latest, now }) {
   const t = Number(now) || Date.now();
   const lines = [];
   lines.push('【你的记忆】你有自己的长期记忆（按会话分开，别人看不到）。');
-  lines.push(`- 这个会话（${key}）里已经记下 ${counts.events} 条，涉及 ${counts.profiles} 个人，跨 ${counts.days} 天。`);
+  const memBits = [];
+  if (counts.memories) memBits.push(`自己记下 ${counts.memories} 条（长期 ${counts.longMemories ?? 0} / 短期 ${counts.shortMemories ?? 0}）`);
+  memBits.push(`聊天流水 ${counts.events} 条，涉及 ${counts.profiles} 个人，跨 ${counts.days} 天`);
+  lines.push(`- ${memBits.join('；')}。`);
   if (latest) {
     const ageDays = Math.max(0, (t - Number(latest.t)) / DAY_MS);
     const age = ageDays < 1 ? `${Math.max(1, Math.round(ageDays * 24))} 小时前` : `${Math.round(ageDays)} 天前`;
     const who = latest.isSelf ? '我' : String(latest.sender ?? '未知');
-    lines.push(`- 最近一条：${age}，${who}说「${String(latest.text ?? '').slice(0, 24)}…」`);
-  } else {
-    lines.push('- 还没有任何记忆（第一次遇到值得记的事会自动写入）。');
+    lines.push(`- 最近一条流水：${age}，${who}说「${String(latest.text ?? '').slice(0, 24)}…」`);
   }
-  lines.push('- 【牵扯到过去就先查】话题勾到以前发生过的事（某人的经历、约定、喜好、上次聊到一半的事）时，');
-  lines.push(`  先调 qq_memory_recall(key="${key}", question="你想回忆的关键词") 查自己的记忆，再开口。`);
-  lines.push('  例：有人说「上次那个摩天轮」→ 先查「摩天轮」，再接着聊细节（比如那天吃的冰淇淋很甜）。');
-  lines.push('  不要凭印象编；查不到就照常聊。查完发现记错了，用 qq_memory_append 补一条更正。');
+  lines.push('');
+  lines.push('【记什么由你判断】不是每句话都值得记。觉得这件事有长期或短期记忆价值时，自己写进去：');
+  lines.push('  · qq_memory_save(key, text, scope="long"|"short", importance=1~5) —— 约定/偏好/重要经历/对某人的具体印象写 long；');
+  lines.push('    一时的话题、对方当下的状态写 short（默认 3 天后：重要的升 long，其余自动遗忘）。');
+  lines.push('  · 不写也不会丢细节：聊天流水仍在，qq_memory_recall 能查到；但只有你写下的才会被当作"记得"。');
+  lines.push('  · importance 认真给：★ 越高越不容易被压缩/遗忘，也越容易被想起来。');
+  lines.push('');
+  lines.push('【牵扯到过去就先查】话题勾到以前发生过的事时，先调 qq_memory_recall(key, question) 查，再开口。');
+  lines.push(`  例：有人说「上次那个摩天轮」→ 先查「摩天轮」，再接着聊细节（比如那天吃的冰淇淋很甜）。`);
+  lines.push('  不要凭印象编；查不到就照常聊。记错了用 qq_memory_save 补一条更正、或 qq_memory_forget 删掉。');
   return lines.join('\n');
 }

@@ -1,71 +1,83 @@
 # 记忆（拟人记忆）
 
-> 小鲸鱼有自己的长期记忆：**存成可读的 Markdown 文件**，唤醒时只看到一份「索引」，
-> 话题牵扯到过去时由它**自己调用 `qq_memory_recall` 去翻**——像人回忆，而不是被灌一堆上下文。
+> 小鲸鱼有自己的长期/短期记忆。**记不记、记多久，由它自己判断**（不是规则替它决定）；
+> 遗忘也按重要度自动进行——像人一样，重要的事留着，琐碎的忘掉。
 
 ---
 
-## 1. 它是怎么工作的
+## 1. 谁来决定记什么
+
+**AI 自己决定。** 唤醒提示里只给它一份索引和规则，不塞记忆正文：
 
 ```
-消息 → 显著性打分 → 值得记才写进 events-*.jsonl（检索用）
-                  └→ 同时写进 MEMORY.md（人类/模型都可读的正文）
-
-唤醒 → 提示词里只放「记忆索引」：
-        你有记忆，这个会话已记 N 条、涉及 M 个人、最近一条是…
-        牵扯到过去就先调 qq_memory_recall(key, question)，再开口
-
-模型判断需要回忆 → qq_memory_recall("摩天轮")
-                → 本地 BM25 检索 + 时间衰减 + **上下文扩展**
-                → 返回带日期的记忆片段（同一段对话前后几分钟一起带回）
-                → 模型用细节接话：「那天摩天轮上的冰淇淋我记得，很甜」
+【你的记忆】你有自己的长期记忆（按会话分开，别人看不到）。
+- 聊天流水 196 条，涉及 3 个人，跨 5 天。
+【记什么由你判断】觉得这件事有长期/短期记忆价值时，自己写进去：
+  qq_memory_save(key, text, scope="long"|"short", importance=1~5)
+  约定/偏好/重要经历写 long；一时的话题/对方当下状态写 short。
+  不写也不会丢细节（流水仍在，recall 查得到），但只有写下的才被当作"记得"。
+【牵扯到过去就先查】先 qq_memory_recall(key, question) 查，再开口，别凭印象编。
 ```
 
-**为什么不是「把记忆塞进提示词」**：那样模型只是被动接收一段文本，既浪费 token，也不会
-"想起来"。现在正文留在文件里，只在需要时取——检索不到就不硬说记得。
+于是它遇到「阿草说她在学吉他」会自己判断：这值得记 → `qq_memory_save(..., scope="long", importance=3, who="阿草")`。
+闲聊「今天吃啥」它可能就不写。
 
-## 2. 存储
+## 2. 遗忘：按重要度保留 / 压缩 / 遗忘
+
+| 情形 | 动作 |
+| --- | --- |
+| 短期记忆超过 3 天，重要度 ≥3 | **升为长期**（同时压成一行摘要） |
+| 短期记忆超过 3 天，重要度 ≤2 | **遗忘** |
+| 长期记忆 90 天没被回忆，重要度 ≤2 | **遗忘** |
+| 长期记忆 90 天没被回忆，重要度 =3 | **压缩**（保留前 80 字） |
+| 长期记忆 90 天没被回忆，重要度 ≥4 | **原样保留**（约定/重要经历不压缩） |
+
+- 纯规则、可解释、不调模型；每小时自动跑一次，控制台也能手动触发。
+- 被 `qq_memory_recall` 命中会刷新 `lastAccess`——"常被想起的事"不会淡。
+- 遗忘的条目保留 7 天便于追溯，之后物理删除。
+- 容量护栏：单会话最多 400 条，超出丢最不重要且最旧的。
+
+## 3. 存储
 
 ```
 state/memory/<会话 key 冒号转横线>/
-  MEMORY.md                 可读正文（按天分节，最新在上，每条带 [#编号] 与时间/说话人）
-  events-YYYY-MM-DD.jsonl   原始事件（检索与增量用，append-only）
-  profiles.json             群友画像（互动次数/最近出现/最后一句）
-  index.json                条目锚点索引
-  meta.json                 版本 / 迁移标记 / 最近清理时间
+  memories.json   AI 自己写的记忆（scope/importance/lastAccess/status）——权威数据
+  MEMORY.md       上面那份的可读视图（长期在前、短期在后、★ 表示重要度）
+  events-*.jsonl  聊天流水（自动记录，供 recall 查细节与审计）
+  profiles.json   群友画像   index.json 锚点索引   meta.json 水位
 ```
 
-- `MEMORY.md` 可以直接用编辑器打开查看、修正；改坏了用控制台「从事件重建」还原。
-- 会话之间**完全隔离**：A 群的记忆不会出现在 B 群，私聊也不会串到群里。
+会话之间**完全隔离**：A 群的记忆不会出现在 B 群，私聊也不会串到群里。
 
-## 3. 控制台
+## 4. 工具（MCP）
 
-左侧「聊天行为 → 记忆」：
+| 工具 | 用途 |
+| --- | --- |
+| **`qq_memory_save(key, text, scope, importance, who)`** | AI 自己写记忆（长期/短期 + 重要度） |
+| **`qq_memory_recall(key, question, limit?)`** | 主动回忆：先查自己写的记忆，再查聊天流水；带日期与上下文 |
+| **`qq_memory_forget(key, id)`** | 删掉写错/过时的记忆 |
+| `qq_memory_append` / `query` / `remove` / `clear` | 旧的轻量便签（话题/想说未说的话/群友印象），保留兼容 |
 
-- **启用记忆插件**（开关）：写 `config.json` 的 `memory.enabled`，即时生效、无需重启。
-  关闭后唤醒提示回落到旧的便签记忆（进行中的话题 / 想说未说的话 / 群友印象），数据保留。
-- **按会话查看**：条目数 / 画像数 / 最近记忆，可**读取 MEMORY.md 正文**、**从事件重建**。
-- **清空全部记忆**：只删 `state/memory/`，不碰会话映射与旧便签，不可撤销。
+`qq_memory_recall` 的检索：2-gram BM25 + 时间衰减 + **上下文扩展**（命中一条会把同一段对话前后几分钟一起带回），
+整句提问查不到时退化为关键词再查；完全无重合时返回空（宁可说不知道，也不塞无关记忆）。
 
-接口（仅控制台令牌可访问）：
+## 5. 控制台
 
-| 方法 | 路径 | 用途 |
-| --- | --- | --- |
-| GET | `/api/memory` | 开关、统计、按会话明细 |
-| GET | `/api/memory/file?key=` | 读 MEMORY.md 正文 |
-| POST | `/api/memory/rebuild` | 从事件流重建 MEMORY.md |
-| POST | `/api/memory/enabled` | `{ enabled }` |
-| POST | `/api/memory/config` | `{ eventThreshold?, recentDays? }` |
-| POST | `/api/memory/reset` | `{}` 清空全部；`{ key }` 清空单个会话 |
+「聊天行为 → 记忆」：启用开关、统计（流水/画像/AI 自己写的记忆/文件大小）、
+**按会话读取 MEMORY.md**、**从事件重建**、**执行记忆整理**、清空。
 
-模型侧工具（MCP，带会话令牌）：
+| 接口 | 用途 |
+| --- | --- |
+| GET `/api/memory` | 开关、统计、按会话明细 |
+| GET `/api/memory/file?key=` | 读 MEMORY.md |
+| POST `/api/memory/retention` | 手动跑保留策略（`{}` 全部会话，`{key}` 单个） |
+| POST `/api/memory/rebuild` | 从事件重建 MEMORY.md |
+| POST `/api/memory/enabled` | 开关（写 config.json，即时生效） |
+| POST `/api/memory/reset` | 清空（`{}` 全部 / `{key}` 单个） |
 
-- **`qq_memory_recall(key, question, limit?)`** —— 回忆，返回带日期的记忆片段（核心）
-- `qq_memory_append` —— 记一条（约定/偏好/重要经历/对某人的印象）
-- `qq_memory_query` —— 查当前轻量便签（话题/想说未说的话/群友印象）
-- `qq_memory_remove` / `qq_memory_clear` —— 删除
+模型侧：`/api/socialV2/memory-save`、`memory-forget`、`memory-recall`（会话令牌鉴权）。
 
-## 4. 配置
+## 6. 配置
 
 ```json
 {
@@ -74,33 +86,34 @@ state/memory/<会话 key 冒号转横线>/
     "dir": "state/memory",
     "eventThreshold": 0.45,
     "recentDays": 7,
-    "maxEventsRead": 5000,
-    "migrateSocialV2": true,
-    "weights": { "importance": 0.3, "confidence": 0.2, "source": 0.15, "recency": 0.15, "access": 0.1, "relation": 0.1 },
-    "forgetting": { "tauFastDays": 1.5, "tauSlowDays": 30, "fastShare": 0.6 }
+    "retention": {
+      "shortTermDays": 3,
+      "promoteImportance": 3,
+      "longStaleDays": 90,
+      "longForgetImportance": 2,
+      "longCompressChars": 80
+    }
   }
 }
 ```
 
-`eventThreshold` 调高 → 记得更挑剔；调低 → 记得更勤。`recentDays` 影响「最近的记忆」窗口。
-
-## 5. 运维
+## 7. 运维
 
 ```bash
-npm run test:memory                          # 27 项：分词/BM25、遗忘曲线、权重、回忆、Markdown 读写、控制台
-node scripts/probe-memory-limits.mjs <key>   # 看某会话的记忆检索效果
-node scripts/migrate-memory-markdown.mjs     # 事件流 → MEMORY.md（已有数据升级/修复）
+npm run test:memory                        # 29 项：检索、记忆写入、遗忘策略、Markdown、控制台
+node scripts/migrate-memory-markdown.mjs   # 把聊天流水重建成可读 MEMORY.md
+node scripts/probe-memory-limits.mjs <key> # 看某会话的检索效果
 ```
 
-- 想让它「重新认识」某个群：控制台清空该会话记忆。
-- 觉得它乱回忆：调高 `eventThreshold`，或清理 `MEMORY.md` 里不该留的条目。
-- 隐私：记忆只在本地；会话间隔离；提示词里不会出现本机路径。
+- 觉得它记太碎：调高 `eventThreshold`，或在提示词里强调"只记以后会用到的"。
+- 觉得它忘太快：调大 `retention.shortTermDays` / `longStaleDays`。
+- 想让它重新认识某个群：控制台清空该会话记忆。
 
-## 6. 如何移除
+## 8. 如何移除
 
-1. 控制台关掉开关（写 `memory.enabled: false`）；
+1. 控制台关掉开关；
 2. 删 `src/memory/`、`scripts/*memory*`；
-3. 删 `bridge.js` 里 `createMemoryPlugin` 的接入、`/api/memory*` 路由、`/api/socialV2/memory-recall`，
-   `public/console.html` 的记忆页，以及 `config.json` 的 `memory` 段。
+3. 删 `bridge.js` 里 `createMemoryPlugin` 的接入、`/api/memory*`、`/api/socialV2/memory-*` 路由，
+   `public/console.html` 的记忆页，`config.json` 的 `memory` 段。
 
 桥接对记忆的依赖只有几处 `memoryPlugin?.` 软调用，删掉后其余功能不受影响。

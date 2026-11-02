@@ -20,7 +20,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   DAY_MS, ensureDir, readJsonSafe, writeJsonAtomic, appendJsonl, readJsonl, dayKey, truncate, safeSegment,
-} from './util.js';import { bm25Scores } from './tokenize.js';
+} from './util.js';
+import { bm25Scores } from './tokenize.js';
 import { DEFAULT_FORGETTING, DEFAULT_WEIGHTS, W_TIERS, computeW, profileRapport, retention } from './weights.js';
 import { salienceBreakdown, eventFromMessage, selfEventFromText, isForcedMemory, isSelfEventWorthKeeping, updateProfile } from './encoder.js';
 import { buildAnchor, ANCHOR_MAX_CHARS, ANCHOR_VERSION } from './anchor.js';
@@ -28,6 +29,9 @@ import {
   appendMemoryMarkdown, loadMemoryIndex, readMemoryMarkdown, rebuildMemoryMarkdown, saveMemoryIndex, MEMORY_MD,
 } from './markdown.js';
 import { recallMemory, describeMemory } from './recall.js';
+import {
+  addMemory, applyRetention, forgetMemory, loadMemories, touchMemory,
+} from './memories.js';
 
 export const MEMORY_VERSION = 2;
 
@@ -41,6 +45,8 @@ export const DEFAULT_MEMORY_CONFIG = {
   maxEventsRead: 5000,
   pruneIntervalMs: 6 * 60 * 60 * 1000,
   migrateSocialV2: true,
+  // 记忆保留/压缩/遗忘策略（见 memories.js 的 DEFAULT_RETENTION）
+  retention: {},
   // 兼容旧字段（读得到就夹取一下，不再影响注入长度）
   budgetChars: 1600,
   anchorMaxChars: ANCHOR_MAX_CHARS,
@@ -83,6 +89,34 @@ function ageLabel(ts, now) {
 
 function oneLine(text, max = 60) {
   return truncate(String(text ?? '').replace(/\s+/g, ' ').trim(), max);
+}
+
+function formatDateOf(ts) {
+  const d = new Date(Number(ts) || Date.now());
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/**
+ * 在「模型自己写的记忆」里检索（带重要度加权：重要的事更容易被想起，也排更前）。
+ * 用 2-gram BM25 复用 tokenize，避免再引一套分词。
+ */
+function recallModelMemories(entries, question, { now = Date.now(), limit = 5 } = {}) {
+  const q = String(question ?? '').trim();
+  const active = (Array.isArray(entries) ? entries : []).filter((e) => e && e.status === 'active');
+  if (!q || !active.length) return [];
+  const hits = bm25Scores(active, q, (e) => `${e.text} ${e.who ?? ''}`)
+    .slice(0, Math.max(1, Math.min(20, Number(limit) || 5)));
+  if (!hits.length) return [];
+  return hits.map(({ item }) => ({
+    id: item.id,
+    t: item.t,
+    date: formatDateOf(item.t),
+    who: item.who ?? '',
+    text: item.text,
+    importance: Number(item.importance) || 3,
+    scope: item.scope,
+    score: Number(hits.find((h) => h.item === item)?.score?.toFixed?.(3) ?? 0),
+  }));
 }
 
 /**
@@ -390,23 +424,68 @@ export function createMemoryPlugin(opts = {}) {
    */
   function recall(key, question, opts = {}) {
     if (!enabled) return { fragments: [], total: 0, question: String(question ?? ''), mode: 'empty' };
+    const dir = keyDir(key);
     const st = stateFor(key);
-    const result = recallMemory(st.events, question, { now: now(), limit: opts.limit });
+
+    // 1) 先查「模型自己写下的记忆」（带重要度/长期短期，质量最高）
+    const store = loadMemories(dir);
+    const q = String(question ?? '').trim();
+    const modelHits = recallModelMemories(store.entries, q, { now: now(), limit: opts.limit });
+    if (modelHits.length) {
+      for (const hit of modelHits) touchMemory(dir, hit.id, now());
+      return {
+        key,
+        question: q,
+        mode: 'memory',
+        fragments: [{ date: formatDateOf(modelHits[0].t), age: '', lines: modelHits.map((h) => `${h.date} ${'★'.repeat(h.importance)} ${h.who ? h.who + '：' : ''}${h.text}`) }],
+        total: store.entries.length,
+        hint: '这些是它自己记下的事（★ 越多越重要）。引用细节要自然，别整段念。',
+      };
+    }
+
+    // 2) 没写过的记忆命中 → 退回聊天流水检索（补细节/兜底）
+    const result = recallMemory(st.events, q, { now: now(), limit: opts.limit });
     result.key = key;
-    // file 只在控制台/运维侧用，不进模型可见内容
-    result.file = path.join(keyDir(key), MEMORY_MD);
+    result.file = path.join(dir, MEMORY_MD);
     return result;
+  }
+
+  /** 模型写记忆。scope=long/short，importance=1..5。 */
+  function saveMemory(key, { text, scope, importance, who }) {
+    if (!enabled) return null;
+    const dir = keyDir(key);
+    const entry = addMemory(dir, { text, scope, importance, who, source: 'model', now: now() });
+    return entry;
+  }
+
+  /** 删除一条模型记忆。 */
+  function forgetMemoryById(key, id) {
+    return forgetMemory(keyDir(key), id);
+  }
+
+  /** 执行保留/压缩/遗忘（控制台或定时调用）。 */
+  function runRetention(key) {
+    return applyRetention(keyDir(key), { now: now(), retention: cfg.retention });
   }
 
   /** 注入提示词用的记忆索引（不含正文）。 */
   function describe(key) {
     if (!enabled) return '';
     const st = stateFor(key);
+    const store = loadMemories(keyDir(key));
     const days = new Set(st.events.map((ev) => dayKey(ev.t))).size;
     const latest = st.events.length ? st.events[st.events.length - 1] : null;
+    const active = store.entries.filter((e) => e.status === 'active');
     return describeMemory({
       key,
-      counts: { events: st.events.length, profiles: Object.keys(st.profiles ?? {}).length, days },
+      counts: {
+        events: st.events.length,
+        profiles: Object.keys(st.profiles ?? {}).length,
+        days,
+        memories: active.length,
+        longMemories: active.filter((e) => e.scope === 'long').length,
+        shortMemories: active.filter((e) => e.scope === 'short').length,
+      },
       latest,
       now: now(),
     });
@@ -517,11 +596,18 @@ export function createMemoryPlugin(opts = {}) {
       // MEMORY.md 的字符数：控制台用它反映"记忆文件有多大"（不再是注入预算）。
       let memoryChars = 0;
       try { memoryChars = fs.statSync(path.join(dir, MEMORY_MD)).size; } catch { memoryChars = 0; }
+      // AI 自己写下的记忆（长期/短期）
+      let memStore = { entries: [] };
+      try { memStore = loadMemories(dir); } catch { memStore = { entries: [] }; }
+      const activeMem = (memStore.entries ?? []).filter((e) => e && e.status === 'active');
       sessions.push({
         key: String(meta.key ?? dirName),
         dir: dirName,
         events,
         profiles: Object.keys(profiles ?? {}).length,
+        memories: activeMem.length,
+        longMemories: activeMem.filter((e) => e.scope === 'long').length,
+        shortMemories: activeMem.filter((e) => e.scope === 'short').length,
         memoryChars,
         lastEventAt: lastEventAt || null,
       });
@@ -533,6 +619,9 @@ export function createMemoryPlugin(opts = {}) {
         sessions: sessions.length,
         events: sessions.reduce((sum, x) => sum + x.events, 0),
         profiles: sessions.reduce((sum, x) => sum + x.profiles, 0),
+        memories: sessions.reduce((sum, x) => sum + x.memories, 0),
+        longMemories: sessions.reduce((sum, x) => sum + x.longMemories, 0),
+        shortMemories: sessions.reduce((sum, x) => sum + x.shortMemories, 0),
         memoryChars: sessions.reduce((sum, x) => sum + x.memoryChars, 0),
       },
     };
@@ -579,6 +668,9 @@ export function createMemoryPlugin(opts = {}) {
     describe,
     readFile,
     rebuildFile,
+    saveMemory,
+    forgetMemoryById,
+    runRetention,
     query,
     checkpoint,
     migrateFromSocialV2,

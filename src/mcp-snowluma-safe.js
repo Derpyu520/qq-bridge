@@ -323,6 +323,8 @@ const TOOL_CONFIG_FLAGS = {
   qq_get_active_members: 'getActiveMembers',
   qq_get_group_members: 'getGroupMembers',
   qq_memory_recall: 'memory',
+  qq_memory_save: 'memory',
+  qq_memory_forget: 'memory',
   qq_memory_append: 'memory',
   qq_memory_query: 'memory',
   qq_memory_remove: 'memory',
@@ -951,6 +953,53 @@ server.tool(
       return { content: [{ type: 'text', text: serializeModelData(data) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `回忆失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_memory_save',
+  '写一条记忆。**记不记、记多久由你判断**：觉得这件事有记忆价值时自己写进去。scope="long" 用于长期（约定、偏好、重要经历、对某人的具体印象）；scope="short" 用于一时的话题/对方当下的状态（默认保留 3 天：够重要会自动升为长期，否则遗忘）。importance 1~5 认真给：★ 越高越不容易被压缩/遗忘，也越容易被想起来。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    text: z.string().describe('记忆内容，写成一句你自己看得懂的话（"阿草在学吉他，说手指疼"）'),
+    scope: z.enum(['long', 'short']).optional().describe('长期 long / 短期 short，默认 short'),
+    importance: z.number().optional().describe('重要度 1~5，默认 3。★ 越高越不易被遗忘'),
+    who: z.string().optional().describe('和谁有关（群友昵称），便于以后按人回忆')
+  },
+  async ({ key, token, text, scope, importance, who }) => {
+    try {
+      const data = await agentApi('/api/socialV2/memory-save', {
+        method: 'POST',
+        body: JSON.stringify({ key, text, scope: scope || 'short', importance: importance ?? 3, who: who || '' }),
+        headers: { 'x-agent-token': token }
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `写记忆失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_memory_forget',
+  '删掉一条自己写错的/过时的记忆（按 qq_memory_recall 返回的 id）。聊天流水不会被删，只是不再当作"记得"。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    id: z.string().describe('记忆 id，例如 m12（qq_memory_recall 会返回）')
+  },
+  async ({ key, token, id }) => {
+    try {
+      const data = await agentApi('/api/socialV2/memory-forget', {
+        method: 'POST',
+        body: JSON.stringify({ key, id }),
+        headers: { 'x-agent-token': token }
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `删除记忆失败：${error?.message ?? error}` }], isError: true };
     }
   }
 );

@@ -464,6 +464,69 @@ test('历史脏画像「私聊」在加载时被清掉', () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('模型写记忆：save/forget + 长期短期 + 重要度', () => {
+  const dir = tmpDir();
+  const clock = { v: Date.parse('2026-11-02T20:00:00+08:00') };
+  const plugin = createMemoryPlugin({ stateDir: dir, config: {}, now: () => clock.v });
+
+  const long = plugin.saveMemory('private:900', { text: '老爹坐摩天轮时吃了草莓味冰淇淋，说很甜', scope: 'long', importance: 5, who: '老爹' });
+  assert.equal(long.scope, 'long');
+  assert.equal(long.importance, 5);
+  assert.ok(long.id.startsWith('m'), JSON.stringify(long));
+
+  const short = plugin.saveMemory('private:900', { text: '今天他说有点累', scope: 'short', importance: 2, who: '老爹' });
+  assert.equal(short.scope, 'short');
+
+  // MEMORY.md 里长期在前、短期在后，带 ★
+  const md = plugin.readFile('private:900');
+  assert.ok(md.includes('## 长期记忆'), md);
+  assert.ok(md.includes('## 短期记忆'), md);
+  assert.ok(md.includes('★★★★★'), '重要度应显示为星：' + md);
+  assert.ok(md.indexOf('摩天轮') < md.indexOf('有点累'), '长期应排在短期前：' + md);
+
+  // recall 优先命中模型写下的记忆（mode=memory）
+  const r = plugin.recall('private:900', '摩天轮');
+  assert.equal(r.mode, 'memory', JSON.stringify(r));
+  assert.ok(r.fragments[0].lines.join('').includes('冰淇淋'), JSON.stringify(r.fragments));
+
+  // 删除
+  assert.equal(plugin.forgetMemoryById('private:900', long.id), true);
+  assert.ok(!plugin.readFile('private:900').includes('摩天轮'), '删除后不该还在：' + plugin.readFile('private:900'));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('遗忘策略：短期到期按重要度升长期或遗忘；长期陈旧压缩/遗忘', () => {
+  const dir = tmpDir();
+  let clock = { v: Date.parse('2026-09-01T12:00:00+08:00') };
+  const plugin = createMemoryPlugin({ stateDir: dir, config: {}, now: () => clock.v });
+
+  // 三条短期：重要(4)、一般(2)，外加长期：重要约定(5) 与 低重要度的旧事(2)
+  plugin.saveMemory('group:910', { text: '阿草说她在学吉他，手指疼', scope: 'short', importance: 4, who: '阿草' });
+  plugin.saveMemory('group:910', { text: '今天群里在聊外卖', scope: 'short', importance: 2 });
+  plugin.saveMemory('group:910', { text: '很重要的约定：下周三给他带咖啡，要少糖', scope: 'long', importance: 5, who: '老爹' });
+  plugin.saveMemory('group:910', { text: '以前聊过的那部番，具体剧情细节都记不清了只记得好看', scope: 'long', importance: 2 });
+
+  // 推进 4 天（短期到期）
+  clock.v += 4 * DAY;
+  const r1 = plugin.runRetention('group:910');
+  assert.equal(r1.promoted, 1, JSON.stringify(r1));   // 重要度 4 的升长期
+  assert.equal(r1.forgot, 1, JSON.stringify(r1));     // 重要度 2 的短期遗忘
+  const md1 = plugin.readFile('group:910');
+  assert.ok(!md1.includes('外卖'), '不重要的短期应被遗忘：' + md1);
+  assert.ok(md1.includes('吉他'), '重要的短期应升长期并保留：' + md1);
+
+  // 再推进 120 天：长期里「重要度 <4」的陈旧条目会被压缩或遗忘；
+  // 重要度 4/5 的（约定、重要经历）必须原样保留——压缩掉细节就失去价值了。
+  clock.v += 120 * DAY;
+  const r2 = plugin.runRetention('group:910');
+  assert.ok(r2.compressed + r2.forgot >= 1, JSON.stringify(r2));
+  const md2 = plugin.readFile('group:910');
+  assert.ok(md2.includes('咖啡') && md2.includes('少糖'), '重要度 5 的约定不该被压缩/遗忘：' + md2);
+  assert.ok(md2.includes('吉他'), '重要度 4 的长期记忆不该被压缩/遗忘：' + md2);
+  assert.ok(!md2.includes('具体剧情细节'), '重要度 2 的陈旧长期记忆应被压缩：' + md2);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 // ── 汇总 ──────────────────────────────────────────────────────────────────
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) {

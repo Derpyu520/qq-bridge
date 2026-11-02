@@ -1438,6 +1438,28 @@ async function main() {
   });
   if (memoryPlugin.enabled) log(`🧠 记忆插件已启用：${path.resolve(ROOT, String(cfg.memory?.dir || 'state/memory'))}`);
 
+  // 记忆保留策略：每小时跑一次「短期到期→升长期/遗忘、长期陈旧→压缩/遗忘」。
+  // 纯规则、不调模型；控制台也能手动触发（/api/memory/retention）。
+  const MEMORY_RETENTION_TICK_MS = 60 * 60 * 1000;
+  const memoryRetentionTimer = setInterval(() => {
+    if (!memoryPlugin.enabled) return;
+    try {
+      let promoted = 0; let forgot = 0; let compressed = 0;
+      for (const key of socialV2.conversations.keys()) {
+        const r = memoryPlugin.runRetention(key);
+        promoted += r.promoted || 0;
+        forgot += r.forgot || 0;
+        compressed += r.compressed || 0;
+      }
+      if (promoted || forgot || compressed) {
+        log(`🧠 记忆整理：升长期 ${promoted}，压缩 ${compressed}，遗忘 ${forgot}`);
+      }
+    } catch (error) {
+      log(`⚠️ 记忆整理失败：${error?.message ?? error}`);
+    }
+  }, MEMORY_RETENTION_TICK_MS);
+  memoryRetentionTimer.unref?.();
+
   // ── 群聊黑话/网络用语学习（slang） ──────────────────────────────────────
   let slangEntries = [];
   // 读失败时（被占用 / 权限 / JSON 损坏）必须**暂停写入**：否则内存里的空数组
@@ -4279,6 +4301,26 @@ async function main() {
           sendJson({ ok: true, config: applied });
           return;
         }
+        // 手动执行「保留 / 压缩 / 遗忘」（也可由定时任务自动跑）
+        if (req.method === 'POST' && url.pathname === '/api/memory/retention') {
+          const body = await readBody();
+          const key = String(body.key ?? '').trim();
+          if (req.headers['x-agent-token']) { sendJson({ ok: false, error: '该接口仅控制台可用' }, 403); return; }
+          const keys = key ? [key] : [...socialV2.conversations.keys()];
+          const results = [];
+          for (const k of keys) {
+            try { results.push({ key: k, ...memoryPlugin.runRetention(k) }); } catch (error) { results.push({ key: k, error: String(error?.message ?? error) }); }
+          }
+          const total = results.reduce((acc, r) => ({
+            promoted: acc.promoted + (r.promoted || 0),
+            forgot: acc.forgot + (r.forgot || 0),
+            compressed: acc.compressed + (r.compressed || 0),
+            kept: acc.kept + (r.kept || 0),
+          }), { promoted: 0, forgot: 0, compressed: 0, kept: 0 });
+          log(`控制台：记忆保留策略已执行（升长期 ${total.promoted}，压缩 ${total.compressed}，遗忘 ${total.forgot}）`);
+          sendJson({ ok: true, total, results });
+          return;
+        }
         if (req.method === 'POST' && url.pathname === '/api/memory/reset') {
           const body = await readBody();
           const key = String(body.key ?? '').trim();
@@ -6913,6 +6955,46 @@ async function main() {
                 ? '没有直接匹配到相关记忆，下面是最近记下的几件事。若确实没有，就照常聊，不要硬说记得。'
                 : '这个会话还没有记忆。'
           });
+          return;
+        }
+        // 模型写记忆 / 删记忆：记什么、记多久由模型自己判断（scope + importance 决定保留策略）
+        if (req.method === 'POST' && url.pathname === '/api/socialV2/memory-save') {
+          const body = await readBody();
+          const key = String(body.key ?? '').trim();
+          const text = String(body.text ?? '').trim();
+          if (!key || !text) { sendJson({ ok: false, error: 'key 与 text 不能为空' }, 400); return; }
+          if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2ToolEnabled('memory')) { sendJson({ ok: false, error: '工具未启用：qq_memory_save' }, 403); return; }
+          // 与其它写接口一致：写入前脱敏，绝不把令牌/路径写进记忆
+          const safeText = redactKnownTokensOnly(text).slice(0, 400);
+          const entry = memoryPlugin.saveMemory(key, {
+            text: safeText,
+            scope: body.scope,
+            importance: body.importance,
+            who: String(body.who ?? '').trim(),
+          });
+          log(`记忆写入 ${key}：${safeText.slice(0, 60)}（${entry?.scope}/${entry?.importance}★）`);
+          sendJson({
+            ok: true,
+            entry,
+            hint: entry?.scope === 'long'
+              ? '已作为长期记忆保存。'
+              : `已作为短期记忆保存（${memoryPlugin.config.retention?.shortTermDays ?? 3} 天内没被升为长期就自动遗忘）。`
+          });
+          return;
+        }
+        if (req.method === 'POST' && url.pathname === '/api/socialV2/memory-forget') {
+          const body = await readBody();
+          const key = String(body.key ?? '').trim();
+          const id = String(body.id ?? '').trim();
+          if (!key || !id) { sendJson({ ok: false, error: 'key 与 id 不能为空' }, 400); return; }
+          if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2ToolEnabled('memory')) { sendJson({ ok: false, error: '工具未启用：qq_memory_forget' }, 403); return; }
+          const removed = memoryPlugin.forgetMemoryById(key, id);
+          if (!removed) { sendJson({ ok: false, error: `找不到记忆 ${id}` }, 404); return; }
+          sendJson({ ok: true, id, hint: '已删除。聊天流水还在，但不再当作"记得"。' });
           return;
         }
         if (req.method === 'POST' && url.pathname === '/api/socialV2/memory-remove') {
