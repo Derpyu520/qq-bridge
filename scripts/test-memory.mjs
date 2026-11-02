@@ -12,7 +12,9 @@ import { tokenize, jaccard, bm25Scores } from '../src/memory/tokenize.js';
 import { retention, computeW, wTier, DEFAULT_FORGETTING } from '../src/memory/weights.js';
 import { salienceBreakdown, isAddressedToBot, isSelfEventWorthKeeping } from '../src/memory/encoder.js';
 import { buildAnchor, ANCHOR_VERSION } from '../src/memory/anchor.js';
-import { createMemoryPlugin, MAX_BUDGET_CHARS, MIN_BUDGET_CHARS, MAX_ANCHOR_CHARS, MIN_ANCHOR_CHARS } from '../src/memory/index.js';
+import { createMemoryPlugin } from '../src/memory/index.js';
+import { recallMemory, describeMemory } from '../src/memory/recall.js';
+import { rebuildMemoryMarkdown, appendMemoryMarkdown, MEMORY_MD } from '../src/memory/markdown.js';
 import { selectRoleText } from '../src/role-card.js';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -151,10 +153,15 @@ test('插件：编码→重载→cue 检索→注入块', () => {
 
   // 重新建实例：从磁盘恢复
   const reloaded = createMemoryPlugin({ stateDir: dir, config: { recentDays: 7 }, now: () => clock.v });
-  const block = reloaded.render('group:100', { cue: '吉他', budgetChars: 800 });
-  assert.ok(block.includes('吉他'), `block=${block}`);
-  assert.ok(block.includes('【最近的记忆】'), block);
-  assert.ok(block.includes('阿草'), block);
+  // render 现在只给索引（不再把记忆正文塞进提示词）
+  const block = reloaded.render('group:100');
+  assert.ok(block.includes('【你的记忆】'), block);
+  assert.ok(block.includes('qq_memory_recall'), block);
+  assert.ok(block.length < 800, '索引应该很短：' + block.length);
+  // 正文要能通过 recall 查到（recall 返回 fragments，每段含若干行）
+  const recalled = reloaded.recall('group:100', '吉他');
+  assert.ok(recalled.fragments.length >= 1, JSON.stringify(recalled));
+  assert.ok(recalled.fragments.some((f) => f.lines.join('').includes('吉他')), JSON.stringify(recalled.fragments));
 
   const hits = reloaded.query('group:100', '吉他', 3);
   assert.ok(hits.length >= 1 && hits[0].text.includes('吉他'), JSON.stringify(hits));
@@ -266,23 +273,82 @@ test('插件：运行期开关 setEnabled 立即生效（不重启）', () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('插件：updateConfig 热更新预算与人设锚上限', () => {
+test('插件：updateConfig 热更新事件阈值/回看天数', () => {
   const dir = tmpDir();
   const clock = { v: Date.now() };
   const plugin = createMemoryPlugin({ stateDir: dir, config: {}, now: () => clock.v });
-  const applied = plugin.updateConfig({ budgetChars: 300, anchorMaxChars: 150 });
-  assert.equal(applied.budgetChars, 300);
-  assert.equal(applied.anchorMaxChars, 150);
-  assert.equal(plugin.config.budgetChars, 300);
-  // 越界值被夹回合法区间（上限常量与 bridge 路由 / 控制台 input 的 max 保持一致）
-  const clamped = plugin.updateConfig({ budgetChars: 99999 });
-  assert.equal(clamped.budgetChars, MAX_BUDGET_CHARS);
-  assert.equal(clamped.budgetChars, 4000);
-  const clampedAnchor = plugin.updateConfig({ anchorMaxChars: 99999 });
-  assert.equal(clampedAnchor.anchorMaxChars, MAX_ANCHOR_CHARS);
-  assert.equal(clampedAnchor.anchorMaxChars, 1200);
-  // 下界同样夹取
-  assert.equal(plugin.updateConfig({ budgetChars: 1 }).budgetChars, MIN_BUDGET_CHARS);
+  const applied = plugin.updateConfig({ eventThreshold: 0.7, recentDays: 14 });
+  assert.equal(applied.eventThreshold, 0.7);
+  assert.equal(applied.recentDays, 14);
+  assert.equal(plugin.config.eventThreshold, 0.7);
+  // 越界值被夹回合法区间
+  assert.equal(plugin.updateConfig({ eventThreshold: 5 }).eventThreshold, 1);
+  assert.equal(plugin.updateConfig({ recentDays: 999 }).recentDays, 30);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('拟人记忆：recall 能按关键词翻出很久以前的细节', () => {
+  const dir = tmpDir();
+  const clock = { v: Date.parse('2026-11-02T20:00:00+08:00') };
+  const plugin = createMemoryPlugin({ stateDir: dir, config: {}, now: () => clock.v });
+  // 三个月前的摩天轮那件事
+  const longAgo = clock.v - 90 * DAY;
+  plugin.encode('private:600', msg({ seq: 1, sender: 'Phoeky', userId: '9', isOwner: true, time: longAgo, plain: '上周去坐了摩天轮，在上面吃了个冰淇淋' }));
+  plugin.encode('private:600', msg({ seq: 2, sender: 'Phoeky', userId: '9', isOwner: true, time: longAgo + 60000, plain: '那个冰淇淋特别甜，草莓味的' }));
+  // 最近一些无关的话
+  plugin.encode('private:600', msg({ seq: 3, sender: 'Phoeky', userId: '9', isOwner: true, time: clock.v, plain: '今天天气不错' }));
+
+  const hit = plugin.recall('private:600', '摩天轮');
+  assert.ok(hit.fragments.length >= 1, `没召回：${JSON.stringify(hit)}`);
+  // 关键：上下文扩展应把「冰淇淋特别甜」那条一起带出来
+  const joined = hit.fragments.map((f) => f.lines.join('\n')).join('\n');
+  assert.ok(joined.includes('冰淇淋'), `上下文没带出细节：${joined}`);
+  const top = hit.fragments[0];
+  assert.ok(top.date && top.age, '片段要带日期与相对时间');
+  assert.ok(top.age.includes('个月'), `90 天前应显示为月：${top.age}`);
+
+  // 换个说法也要能查到（BM25 2-gram + 关键词退化）
+  const hit2 = plugin.recall('private:600', '摩天轮上吃的什么');
+  assert.ok(hit2.fragments.map((f) => f.lines.join('')).join('').includes('冰淇淋'), JSON.stringify(hit2));
+
+  // 完全无关的问题返回空（不许拿无关记忆硬凑，否则模型会以为"我记得"）
+  const miss = plugin.recall('private:600', '量子力学');
+  assert.deepEqual(miss.fragments, []);
+  assert.equal(miss.mode, 'empty');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('拟人记忆：describe 只给索引（不含正文与本地路径）', () => {
+  const dir = tmpDir();
+  const clock = { v: Date.now() };
+  const plugin = createMemoryPlugin({ stateDir: dir, config: {}, now: () => clock.v });
+  plugin.encode('group:610', msg({ sender: '阿草', userId: '6101', plain: '小鲸鱼你在吗', quoteTargetIsSelf: true, time: clock.v }));
+  const text = plugin.describe('group:610');
+  assert.ok(text.includes('【你的记忆】'), text);
+  assert.ok(text.includes('qq_memory_recall'), '索引里必须教模型去查：' + text);
+  // 索引用"最近一条"的 ≤24 字引子当钩子（带省略号表示截断），但绝不能是完整正文，
+  // 更不能出现本机路径——模型不需要知道文件系统，项目隐私基线也禁止。
+  assert.ok(text.includes('小鲸鱼你在吗…'), '引子应带省略号表示截断：' + text);
+  assert.ok(text.length < 700, '索引应该很短：' + text.length);
+  assert.ok(!/[A-Za-z]:\\/.test(text) && !text.includes('MEMORY.md'), '索引漏了本地路径：' + text);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('记忆文件：encode 会写一份人类可读的 MEMORY.md', () => {
+  const dir = tmpDir();
+  const clock = { v: Date.parse('2026-11-02T20:00:00+08:00') };
+  const plugin = createMemoryPlugin({ stateDir: dir, config: {}, now: () => clock.v });
+  plugin.encode('group:620', msg({ sender: '阿草', userId: '6201', plain: '小鲸鱼你在吗，今天学了吉他', quoteTargetIsSelf: true, time: clock.v }));
+  const md = plugin.readFile('group:620');
+  assert.ok(md.includes('# 记忆'), md);
+  assert.ok(md.includes('**阿草**'), md);
+  assert.ok(md.includes('吉他'), md);
+  assert.ok(/## \d{4}-\d{2}-\d{2}/.test(md), '应有按天分节：' + md);
+
+  // 重建：从事件流还原正文
+  const rebuilt = plugin.rebuildFile('group:620');
+  assert.ok(rebuilt.entries >= 1);
+  assert.ok(plugin.readFile('group:620').includes('吉他'));
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -309,10 +375,13 @@ test('插件：overview 汇总多会话并保留原始 key，resetAll 清空', (
 
 test('控制台页面：已挂载记忆页与开关（静态检查）', () => {
   const html = fs.readFileSync(new URL('../public/console.html', import.meta.url), 'utf8');
-  for (const needle of ['section-memory', 'data-view="memory"', 'id="memEnabled"', 'id="memBudgetChars"', 'id="memResetAll"', "loadMemory()"]) {
+  for (const needle of ['section-memory', 'data-view="memory"', 'id="memEnabled"', 'id="memReadFile"', 'id="memFileBody"', 'id="memResetAll"', "loadMemory()"]) {
     assert.ok(html.includes(needle), `控制台缺少 ${needle}`);
   }
   assert.ok(html.includes("memory: ['记忆'"), 'consolePages 缺少 memory 条目');
+  // 预算/锚上限已移除（记忆正文改为 AI 主动查，不再靠注入长度调节）
+  assert.ok(!html.includes('id="memBudgetChars"'), '不该再有注入预算输入框');
+  assert.ok(!html.includes('id="memAnchorChars"'), '不该再有人设锚上限输入框');
 });
 
 test('自己发言：只留信息量够的，语气词不进事件流', () => {

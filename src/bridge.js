@@ -4205,9 +4205,9 @@ async function main() {
             ok: true,
             enabled: memoryPlugin.enabled,
             dir: path.resolve(ROOT, String(cfg.memory?.dir || 'state/memory')),
+            // 不再暴露「注入预算 / 人设锚上限」：记忆正文由 AI 主动查（qq_memory_recall），
+            // 提示词里只放索引，长度不再是一个需要调的旋钮。
             config: {
-              budgetChars: memoryPlugin.config.budgetChars,
-              anchorMaxChars: memoryPlugin.config.anchorMaxChars,
               eventThreshold: memoryPlugin.config.eventThreshold,
               recentDays: memoryPlugin.config.recentDays,
               recallMinW: memoryPlugin.config.recallMinW,
@@ -4215,6 +4215,32 @@ async function main() {
             totals,
             sessions
           });
+          return;
+        }
+        // 读取某个会话的 MEMORY.md 正文（运维查看/校对用）
+        if (req.method === 'GET' && url.pathname === '/api/memory/file') {
+          const key = String(url.searchParams.get('key') ?? '').trim();
+          if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
+          if (req.headers['x-agent-token']) { sendJson({ ok: false, error: '该接口仅控制台可用' }, 403); return; }
+          const content = memoryPlugin.readFile(key);
+          sendJson({
+            ok: true,
+            key,
+            content,
+            chars: content.length,
+            file: path.join(path.resolve(ROOT, String(cfg.memory?.dir || 'state/memory')), key.replace(/:/g, '-'), 'MEMORY.md'),
+          });
+          return;
+        }
+        // 用事件流重建 MEMORY.md（正文被改坏时的修复入口）
+        if (req.method === 'POST' && url.pathname === '/api/memory/rebuild') {
+          const body = await readBody();
+          const key = String(body.key ?? '').trim();
+          if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
+          if (req.headers['x-agent-token']) { sendJson({ ok: false, error: '该接口仅控制台可用' }, 403); return; }
+          const result = memoryPlugin.rebuildFile(key);
+          log(`控制台：已从事件重建 ${key} 的记忆文件（${result.entries} 条）`);
+          sendJson({ ok: true, key, ...result });
           return;
         }
         if (req.method === 'POST' && url.pathname === '/api/memory/enabled') {
@@ -4238,11 +4264,6 @@ async function main() {
             return Math.round(Math.min(max, Math.max(min, n)));
           };
           const next = {};
-          // 与 src/memory/index.js 的 MAX_BUDGET_CHARS / MAX_ANCHOR_CHARS 保持一致。
-          const budget = pick(body.budgetChars, 200, 4000);
-          if (budget !== null) next.budgetChars = budget;
-          const anchor = pick(body.anchorMaxChars, 80, 1200);
-          if (anchor !== null) next.anchorMaxChars = anchor;
           const threshold = Number(body.eventThreshold);
           if (Number.isFinite(threshold)) next.eventThreshold = Math.min(1, Math.max(0, Number(threshold.toFixed(3))));
           const recent = pick(body.recentDays, 1, 30);
@@ -4805,7 +4826,7 @@ async function main() {
             getActiveMembers: 'qq_get_active_members',
             setWakeConfig: 'qq_set_wake_config',
             markRead: 'qq_mark_read',
-            memory: 'qq_memory_append / qq_memory_query / qq_memory_remove / qq_memory_clear',
+            memory: 'qq_memory_recall / qq_memory_append / qq_memory_query / qq_memory_remove / qq_memory_clear',
             slangQuery: 'qq_slang_query',
             slangSubmit: 'qq_slang_submit',
             getImages: 'qq_get_message_images',
@@ -6864,6 +6885,34 @@ async function main() {
             raw.pendingThoughts = [];
           }
           sendJson({ ok: true, key, category, formatted: formatMemoryV2({ ...st, ...raw }), raw });
+          return;
+        }
+        // AI 主动查记忆（拟人记忆的核心）：带着问题来翻自己的 MEMORY.md。
+        // 与上面 old「读便签」不同，这里检索的是长期记忆文件（事件流 + 可读 Markdown）。
+        if (req.method === 'GET' && url.pathname === '/api/socialV2/memory-recall') {
+          const key = String(url.searchParams.get('key') ?? '').trim();
+          const question = String(url.searchParams.get('question') ?? '').trim();
+          const limit = Number(url.searchParams.get('limit')) || 8;
+          if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
+          if (!question) { sendJson({ ok: false, error: 'question 不能为空（用一句话说明你想回忆什么）' }, 400); return; }
+          if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2ToolEnabled('memory')) { sendJson({ ok: false, error: '工具未启用：qq_memory_recall' }, 403); return; }
+          const recalled = memoryPlugin.recall(key, question, { limit });
+          sendJson({
+            ok: true,
+            key,
+            question: recalled.question,
+            total: recalled.total,
+            // 不把本机路径给模型（隐私基线：绝不透露本地路径）
+            fragments: recalled.fragments,
+            note: recalled.note,
+            hint: recalled.mode === 'match'
+              ? '以上是记忆片段（按相关度排，已带上同一段对话的前后文）。引用细节时自然地说「我记得…」，别整段复述，也别暴露"我在翻记录"。'
+              : recalled.mode === 'recent'
+                ? '没有直接匹配到相关记忆，下面是最近记下的几件事。若确实没有，就照常聊，不要硬说记得。'
+                : '这个会话还没有记忆。'
+          });
           return;
         }
         if (req.method === 'POST' && url.pathname === '/api/socialV2/memory-remove') {
@@ -10441,10 +10490,9 @@ async function main() {
     const identityLine = selfIdentityTextV2();
     const st = getSocialV2State(key);
     const tokenLine = `【会话令牌】${st.agentToken}（调用二代状态工具时请在参数中带上此令牌）\n\n`;
-    // 检索线索取最近一条别人说的话：cue 命中旧事时才会把「相关的回忆」带进来。
-    const lastIncoming = [...(Array.isArray(st.unread) ? st.unread : [])].reverse().find((m) => m && !m.isSelf);
-    const cueText = String(lastIncoming?.plain || lastIncoming?.text || '').slice(0, 120);
-    const memoryText = (memoryPlugin?.render(key, { cue: cueText, socialSt: st }) || '') || formatMemoryV2(st);
+    // 记忆：这里只注入**索引**（有多少条、最近记了什么、文件在哪 + "牵扯到过去就先查"的指示）。
+    // 正文不塞进提示词，由 AI 在需要时自己调 qq_memory_recall 去翻——这是拟人记忆的关键。
+    const memoryText = (memoryPlugin?.render(key, { socialSt: st }) || '') || formatMemoryV2(st);
     const memoryLine = memoryText ? `${memoryText}\n\n` : '';
     // 注意：黑话表不在这里注入，deliverPromptNow 的 withSlangContext 会统一注入，
     // 避免唤醒 prompt 出现两份黑话表。

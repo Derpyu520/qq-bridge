@@ -20,33 +20,30 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   DAY_MS, ensureDir, readJsonSafe, writeJsonAtomic, appendJsonl, readJsonl, dayKey, truncate, safeSegment,
-} from './util.js';
-import { bm25Scores } from './tokenize.js';
+} from './util.js';import { bm25Scores } from './tokenize.js';
 import { DEFAULT_FORGETTING, DEFAULT_WEIGHTS, W_TIERS, computeW, profileRapport, retention } from './weights.js';
 import { salienceBreakdown, eventFromMessage, selfEventFromText, isForcedMemory, isSelfEventWorthKeeping, updateProfile } from './encoder.js';
 import { buildAnchor, ANCHOR_MAX_CHARS, ANCHOR_VERSION } from './anchor.js';
+import {
+  appendMemoryMarkdown, loadMemoryIndex, readMemoryMarkdown, rebuildMemoryMarkdown, saveMemoryIndex, MEMORY_MD,
+} from './markdown.js';
+import { recallMemory, describeMemory } from './recall.js';
 
-export const MEMORY_VERSION = 1;
+export const MEMORY_VERSION = 2;
 
-// 上限说明：
-//   budgetChars —— 记忆块是唤醒 prompt 的一段，其余段落（角色/锚/状态/睡前规则）合计约 5~6k 字符，
-//                  4000 已是"记忆占四成"的合理天花板，再大就会把工具协议挤到模型注意力之外。
-//   anchorMaxChars —— 人设锚每轮都注入，且与角色卡内容重叠；1200 字足够容纳身份+说话方式+雷点，
-//                  再多会稀释重点（完整角色卡仍可用 qq_get_prompt 现拉）。
-export const MAX_BUDGET_CHARS = 4000;
-export const MIN_BUDGET_CHARS = 200;
-export const MAX_ANCHOR_CHARS = 1200;
-export const MIN_ANCHOR_CHARS = 80;
+// 记忆不再用「字符预算 / 人设锚上限」这种被动注入参数：内容由模型自己查（qq_memory_recall），
+// 提示词里只放索引（见 recall.js 的 describeMemory）。这两个常量保留导出只为兼容旧配置读取。
 export const DEFAULT_MEMORY_CONFIG = {
   enabled: true,
-  budgetChars: 1600,
-  anchorMaxChars: ANCHOR_MAX_CHARS,
   eventThreshold: 0.45,
   recentDays: 7,
   recallMinW: W_TIERS.inject,
   maxEventsRead: 5000,
   pruneIntervalMs: 6 * 60 * 60 * 1000,
   migrateSocialV2: true,
+  // 兼容旧字段（读得到就夹取一下，不再影响注入长度）
+  budgetChars: 1600,
+  anchorMaxChars: ANCHOR_MAX_CHARS,
 };
 
 function clampInt(value, min, max, fallback) {
@@ -66,8 +63,6 @@ export function normalizeMemoryConfig(input = {}) {
   return {
     ...DEFAULT_MEMORY_CONFIG,
     ...src,
-    budgetChars: clampInt(src.budgetChars, MIN_BUDGET_CHARS, MAX_BUDGET_CHARS, DEFAULT_MEMORY_CONFIG.budgetChars),
-    anchorMaxChars: clampInt(src.anchorMaxChars, MIN_ANCHOR_CHARS, MAX_ANCHOR_CHARS, DEFAULT_MEMORY_CONFIG.anchorMaxChars),
     eventThreshold: clampNum(src.eventThreshold, 0, 1, DEFAULT_MEMORY_CONFIG.eventThreshold),
     recentDays: clampInt(src.recentDays, 1, 30, DEFAULT_MEMORY_CONFIG.recentDays),
     recallMinW: clampNum(src.recallMinW, 0, 1, DEFAULT_MEMORY_CONFIG.recallMinW),
@@ -254,6 +249,17 @@ export function createMemoryPlugin(opts = {}) {
     const ev = eventFromMessage(msg, { salience: bd.score, now: nowMs });
     st.events.push(ev);
     appendJsonl(eventsFile(key, ev.t), ev);
+    // 同步写进人类可读的 MEMORY.md：AI 查的是它，你排查时看的也是它。
+    try {
+      const index = loadMemoryIndex(keyDir(key));
+      const seq = Number(index.nextSeq) || 1;
+      index.nextSeq = seq + 1;
+      index.entries = { ...(index.entries ?? {}), [seq]: { t: ev.t, seq, sender: ev.sender, isSelf: ev.isSelf, kind: ev.kind } };
+      appendMemoryMarkdown(keyDir(key), ev, seq);
+      saveMemoryIndex(keyDir(key), index);
+    } catch (error) {
+      log(`⚠️ 写记忆文件失败 ${key}：${error?.message ?? error}`);
+    }
     st.meta = { ...(st.meta ?? {}), version: MEMORY_VERSION, lastEventAt: nowMs };
     saveStructured(key, st);
     return { stored: true, salience: bd.score, event: ev };
@@ -360,108 +366,68 @@ export function createMemoryPlugin(opts = {}) {
   }
 
   /**
-   * 渲染注入块。
+   * 生成注入唤醒提示的**记忆索引**（不含正文）。
+   *
+   * 这是与旧实现最大的区别：以前把记忆内容按字符预算塞进提示词（"喂给"模型），
+   * 现在只告诉模型「你有记忆、在哪、有多少、最近记了什么」，正文由模型自己
+   * 调 qq_memory_recall 去查——这才是拟人记忆（需要时才回忆，而不是被灌一堆）。
+   *
    * @param {string} key
-   * @param {{cue?: string, socialSt?: object, budgetChars?: number}} [options]
+   * @param {{socialSt?: object}} [options]
    */
   function render(key, options = {}) {
     if (!enabled) return '';
     if (options.socialSt) migrateFromSocialV2(key, options.socialSt);
+    return describe(key);
+  }
+
+  /**
+   * AI 主动查记忆（qq_memory_recall 的后端）。
+   * 这是「拟人记忆」的核心：模型带着问题来翻，拿到的是可读片段，而不是被塞进提示词的一堆文本。
+   * @param {string} key
+   * @param {string} question 自然语言问题（"摩天轮" / "我上次说要去哪"）
+   * @param {{limit?: number, includeFile?: boolean}} [opts]
+   */
+  function recall(key, question, opts = {}) {
+    if (!enabled) return { fragments: [], total: 0, question: String(question ?? ''), mode: 'empty' };
     const st = stateFor(key);
-    const nowMs = now();
-    const budget = clampInt(options.budgetChars, MIN_BUDGET_CHARS, MAX_BUDGET_CHARS, cfg.budgetChars);
-    const recentCutoff = nowMs - cfg.recentDays * DAY_MS;
-    const cue = String(options.cue ?? '').trim();
+    const result = recallMemory(st.events, question, { now: now(), limit: opts.limit });
+    result.key = key;
+    // file 只在控制台/运维侧用，不进模型可见内容
+    result.file = path.join(keyDir(key), MEMORY_MD);
+    return result;
+  }
 
-    const scored = st.events.map((ev) => ({ ev, w: scoreEvent(ev, st, nowMs) }));
+  /** 注入提示词用的记忆索引（不含正文）。 */
+  function describe(key) {
+    if (!enabled) return '';
+    const st = stateFor(key);
+    const days = new Set(st.events.map((ev) => dayKey(ev.t))).size;
+    const latest = st.events.length ? st.events[st.events.length - 1] : null;
+    return describeMemory({
+      key,
+      counts: { events: st.events.length, profiles: Object.keys(st.profiles ?? {}).length, days },
+      latest,
+      now: now(),
+    });
+  }
 
-    // 每段的候选上限。真正进不进去由 budgetChars 决定（下面的贪心装配），
-    // 所以调大预算时能自动多塞几条，而不是被写死的 3 条卡住。
-    // 上限按预算缩放：预算 4000 时最多各取 24 条，够填满；预算小时也够用。
-    const slotCap = Math.max(3, Math.min(24, Math.ceil(budget / 150)));
-    const MAX_RECENT = slotCap;
-    const MAX_RECALL = slotCap;
-    const MAX_PROFILES = Math.max(3, Math.min(12, Math.ceil(budget / 250)));
+  /** 读 MEMORY.md 原文（运维/控制台查看用）。 */
+  function readFile(key) {
+    return readMemoryMarkdown(keyDir(key));
+  }
 
-    // 1) 最近的记忆：近 N 天里权重最高的若干条
-    const recentTop = scored
-      .filter((entry) => Number(entry.ev.t) >= recentCutoff && entry.w >= W_TIERS.weak)
-      .sort((a, b) => b.w - a.w)
-      .slice(0, MAX_RECENT);
-
-    // 2) 相关回忆：cue 命中的、不在"最近"里的旧事
-    const recentSet = new Set(recentTop.map((entry) => entry.ev));
-    const recall = [];
-    if (cue) {
-      for (const hit of bm25Scores(st.events, cue, (ev) => ev.text)) {
-        if (recall.length >= MAX_RECALL) break;
-        if (recentSet.has(hit.item)) continue;
-        const w = scoreEvent(hit.item, st, nowMs);
-        if (w < cfg.recallMinW) continue;
-        recall.push({ ev: hit.item, w, score: hit.score });
-      }
-    }
-
-    // 3) 关于他们：按亲密度取前若干
-    const profiles = Object.values(st.profiles ?? {})
-      .filter((p) => p && p.name)
-      .map((p) => ({ profile: p, rapport: profileRapport(p, nowMs, cfg.forgetting) }))
-      .filter((entry) => entry.rapport > 0.05)
-      .sort((a, b) => b.rapport - a.rapport)
-      .slice(0, MAX_PROFILES);
-
-    // 每节带 items（对应的记忆对象）：只有**真正注入**的行才算「被回忆一次」，
-    // 间隔效应的强化只给读到的记忆，而不是候选池里的全部。
-    const sections = [];
-    if (recentTop.length) {
-      sections.push({
-        title: '【最近的记忆】',
-        items: recentTop.map(({ ev }) => ev),
-        lines: recentTop.map(({ ev }) => `- ${ageLabel(ev.t, nowMs)} ${ev.isSelf ? '我' : oneLine(ev.sender, 20)}：${oneLine(ev.text)}`),
-      });
-    }
-    if (recall.length) {
-      sections.push({
-        title: '【相关的回忆】',
-        items: recall.map(({ ev }) => ev),
-        lines: recall.map(({ ev }) => `- ${ageLabel(ev.t, nowMs)} ${oneLine(ev.sender, 20)}：${oneLine(ev.text)}`),
-      });
-    }
-    if (profiles.length) {
-      sections.push({
-        title: '【关于他们】',
-        items: profiles.map(({ profile }) => ({ profile })),
-        lines: profiles.map(({ profile }) => {
-          const ago = ageLabel(profile.lastSeen, nowMs);
-          const last = profile.lastText ? `，上次说「${oneLine(profile.lastText, 24)}」` : '';
-          return `- ${oneLine(profile.name, 16)}：聊过 ${Number(profile.count) || 0} 次，${ago}${last}`;
-        }),
-      });
-    }
-    if (!sections.length) {
-      saveStructured(key, st);
-      return '';
-    }
-
-    // 按预算逐行装配：标题在预算够时必留；某一行放不下就停在那一行，
-    // 而不是「整段放不下就整段丢掉」——后者会让预算调大后依然只吐一个标题。
-    let out = '';
-    outer:
-    for (const section of sections) {
-      const header = out ? `\n${section.title}` : section.title;
-      if (header.length > budget - out.length) break;
-      out += header;
-      for (let i = 0; i < section.lines.length; i += 1) {
-        const piece = `\n${section.lines[i]}`;
-        if (piece.length > budget - out.length) break outer;
-        out += piece;
-        const item = section.items?.[i];
-        if (item?.ev) item.ev.accessCount = (Number(item.ev.accessCount) || 0) + 1;
-      }
-    }
-    const text = out.trim();
-    saveStructured(key, st);
-    return text;
+  /** 从事件流重建 MEMORY.md（迁移/修复用）。 */
+  function rebuildFile(key) {
+    const st = stateFor(key);
+    const result = rebuildMemoryMarkdown(keyDir(key), st.events);
+    const index = { version: 1, entries: {}, nextSeq: 1 };
+    [...st.events].sort((a, b) => Number(b.t) - Number(a.t)).forEach((ev, i) => {
+      index.entries[i + 1] = { t: ev.t, seq: i + 1, sender: ev.sender, isSelf: ev.isSelf, kind: ev.kind };
+    });
+    index.nextSeq = st.events.length + 1;
+    saveMemoryIndex(keyDir(key), index);
+    return result;
   }
 
   /** 检索接口（调试 / 未来的 MCP 工具共用）：返回相关旧事。 */
@@ -500,13 +466,11 @@ export function createMemoryPlugin(opts = {}) {
     }
   }
 
-  /** 控制台用：热更新可调参数（budgetChars / anchorMaxChars 等），不重启进程。 */
+  /** 控制台用：热更新可调参数（事件阈值 / 回看天数等），不重启进程。 */
   function updateConfig(partial = {}) {
     const next = normalizeMemoryConfig({ ...cfg, ...(partial ?? {}) });
     Object.assign(cfg, next);
     return {
-      budgetChars: cfg.budgetChars,
-      anchorMaxChars: cfg.anchorMaxChars,
       eventThreshold: cfg.eventThreshold,
       recentDays: cfg.recentDays,
       recallMinW: cfg.recallMinW,
@@ -536,7 +500,6 @@ export function createMemoryPlugin(opts = {}) {
       const dir = path.join(stateDir, dirName);
       const meta = readJsonSafe(path.join(dir, 'meta.json'), {}) ?? {};
       const profiles = readJsonSafe(path.join(dir, 'profiles.json'), {}) ?? {};
-      const anchor = readJsonSafe(path.join(dir, 'anchor.json'), null, () => {});
       let events = 0;
       let lastEventAt = Number(meta.lastEventAt) || 0;
       try {
@@ -551,12 +514,15 @@ export function createMemoryPlugin(opts = {}) {
           }
         }
       } catch { /* 目录不可读按空处理 */ }
+      // MEMORY.md 的字符数：控制台用它反映"记忆文件有多大"（不再是注入预算）。
+      let memoryChars = 0;
+      try { memoryChars = fs.statSync(path.join(dir, MEMORY_MD)).size; } catch { memoryChars = 0; }
       sessions.push({
         key: String(meta.key ?? dirName),
         dir: dirName,
         events,
         profiles: Object.keys(profiles ?? {}).length,
-        anchorChars: anchor?.text?.length ?? 0,
+        memoryChars,
         lastEventAt: lastEventAt || null,
       });
     }
@@ -567,6 +533,7 @@ export function createMemoryPlugin(opts = {}) {
         sessions: sessions.length,
         events: sessions.reduce((sum, x) => sum + x.events, 0),
         profiles: sessions.reduce((sum, x) => sum + x.profiles, 0),
+        memoryChars: sessions.reduce((sum, x) => sum + x.memoryChars, 0),
       },
     };
   }
@@ -608,6 +575,10 @@ export function createMemoryPlugin(opts = {}) {
     encodeSelf,
     render,
     renderAnchor,
+    recall,
+    describe,
+    readFile,
+    rebuildFile,
     query,
     checkpoint,
     migrateFromSocialV2,

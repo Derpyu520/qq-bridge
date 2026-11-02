@@ -322,6 +322,7 @@ const TOOL_CONFIG_FLAGS = {
   qq_get_message_detail: 'getMessageDetail',
   qq_get_active_members: 'getActiveMembers',
   qq_get_group_members: 'getGroupMembers',
+  qq_memory_recall: 'memory',
   qq_memory_append: 'memory',
   qq_memory_query: 'memory',
   qq_memory_remove: 'memory',
@@ -929,6 +930,27 @@ server.tool(
       return { content: [{ type: 'text', text: serializeModelData(data) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `记忆写入失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_memory_recall',
+  '回忆：在自己的长期记忆里检索以前发生过的事（只读）。当话题可能牵扯到过去——某人提过的经历、约定、喜好、上次聊到一半的事——先用这个工具查，再开口，不要凭印象编。question 用自然语言或关键词都行（例如「摩天轮」「阿草说过她喜欢什么」）。返回的是带日期的记忆片段（含同一段对话的前后文），可直接引用细节。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    question: z.string().describe('你想回忆什么：一句话或几个关键词（如「摩天轮」「上次说的那家店」）'),
+    limit: z.number().optional().describe('最多返回几条，默认 8，最大 20')
+  },
+  async ({ key, token, question, limit }) => {
+    try {
+      const q = new URLSearchParams({ key, question });
+      if (limit) q.set('limit', String(limit));
+      const data = await agentApi(`/api/socialV2/memory-recall?${q.toString()}`, { headers: { 'x-agent-token': token } });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `回忆失败：${error?.message ?? error}` }], isError: true };
     }
   }
 );

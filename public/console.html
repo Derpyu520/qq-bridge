@@ -2480,9 +2480,9 @@ button:active:not(:disabled) {
 <section id="section-memory" data-page="memory" class="card span-all">
       <h2>记忆（模拟人类记忆）</h2>
       <div class="meta">
-        记忆是<b>独立插件</b>（<code>src/memory/</code>）：事件流只追加、按会话分目录，与 <code>social-v2.json</code> 的旧便签互不覆盖。
-        关闭后唤醒提示回落到旧的便签记忆（进行中的话题 / 想说未说的话 / 对群友的印象），其它功能不受影响。
-        数据目录：<code id="memDir">state/memory</code>。
+        记忆是<b>独立插件</b>（<code>src/memory/</code>）：每个会话有一份自己的记忆，写成人类可读的 <code>MEMORY.md</code>，
+        原始事件另存 <code>events-*.jsonl</code> 供检索。与 <code>social-v2.json</code> 的旧便签互不覆盖；
+        关闭后唤醒提示回落到旧便签，其它功能不受影响。数据目录：<code id="memDir">state/memory</code>。
       </div>
 
       <div class="row" style="margin-top:10px">
@@ -2495,34 +2495,30 @@ button:active:not(:disabled) {
       </div>
       <div class="meta">开关写入 <code>config.json</code> 的 <code>memory.enabled</code>，即时生效、无需重启。关闭只停用注入与新事件写入，已有数据保留在磁盘上。</div>
 
-      <div class="row" style="margin-top:10px">
-        <label style="flex:1">记忆注入预算（字符）</label>
-        <input type="number" id="memBudgetChars" min="200" max="4000" step="100" style="width:100px">
-        <label style="flex:1;margin-left:12px">人设锚上限（字符）</label>
-        <input type="number" id="memAnchorChars" min="80" max="1200" step="50" style="width:100px">
-      </div>
-      <div class="meta">
-        预算决定一次唤醒最多注入多少记忆（200~4000，默认 1600）；锚决定每轮固定注入的人设摘要长度（80~1200，默认 400）。
-        两者都会实时显示实际占用，超预算时按行截断（先丢「相关的回忆」，再丢「最近的记忆」）。
-        <span id="memUsageHint"></span>
-      </div>
-      <div class="row">
-        <button id="memConfigSave" class="small">保存记忆参数</button>
-        <span class="meta" id="memConfigMsg" role="status"></span>
+      <div class="meta" style="margin-top:12px">
+        <b>拟人记忆怎么工作</b>：唤醒提示里只告诉 AI「你有记忆、在哪、有多少、最近记了什么」，
+        正文不再塞进提示词。当话题牵扯到过去（某人提过的经历、约定、喜好），AI 会自己调用
+        <code>qq_memory_recall</code> 检索记忆文件再开口——像人回忆，而不是被灌一堆上下文。
       </div>
 
       <table style="margin-top:12px">
         <tr><th>指标</th><th>值</th></tr>
         <tr><td>已沉淀会话</td><td id="memStatSessions">—</td></tr>
-        <tr><td>记忆事件</td><td id="memStatEvents">—</td></tr>
+        <tr><td>记忆条目</td><td id="memStatEvents">—</td></tr>
         <tr><td>群友画像</td><td id="memStatProfiles">—</td></tr>
-        <tr><td>当前人设锚</td><td id="memStatAnchor">—</td></tr>
+        <tr><td>记忆文件</td><td id="memStatFile">—</td></tr>
       </table>
 
-      <details class="settings-group" style="margin-top:10px"><summary>按会话查看（事件数 / 画像数 / 最近事件）</summary><div class="settings-content">
+      <details class="settings-group" style="margin-top:10px" open><summary>按会话查看 / 读取记忆正文</summary><div class="settings-content">
         <table id="memSessions" style="margin-top:6px">
-          <tr><th>会话</th><th>事件</th><th>画像</th><th>最近事件</th></tr>
+          <tr><th>会话</th><th>条目</th><th>画像</th><th>最近记忆</th><th></th></tr>
         </table>
+        <div class="row" style="margin-top:8px">
+          <button id="memReadFile" class="small">查看选中会话的记忆</button>
+          <button id="memRebuildFile" class="small">从事件重建记忆文件</button>
+          <span class="meta" id="memFileMsg" role="status"></span>
+        </div>
+        <pre id="memFileBody" style="max-height:420px;overflow:auto;white-space:pre-wrap;margin-top:8px;font-size:12px"></pre>
       </div></details>
 
       <div class="row" style="margin-top:12px">
@@ -4497,7 +4493,7 @@ function renderMemorySessions(sessions) {
   if (!sessions.length) {
     const tr = document.createElement('tr');
     const td = document.createElement('td');
-    td.colSpan = 4;
+    td.colSpan = 5;
     td.className = 'meta';
     td.textContent = '还没有沉淀记忆（AI 遇到值得记的消息后会自动出现）';
     tr.append(td);
@@ -4506,6 +4502,7 @@ function renderMemorySessions(sessions) {
   }
   for (const item of sessions) {
     const tr = document.createElement('tr');
+    tr.dataset.key = item.key;
     const cells = [
       item.key,
       String(item.events ?? 0),
@@ -4517,8 +4514,36 @@ function renderMemorySessions(sessions) {
       td.textContent = value;
       tr.append(td);
     }
+    const action = document.createElement('td');
+    const pick = document.createElement('button');
+    pick.className = 'small';
+    pick.textContent = '读取';
+    pick.addEventListener('click', () => {
+      memorySelectedKey = item.key;
+      showMemoryFile(item.key);
+    });
+    action.append(pick);
+    tr.append(action);
     table.append(tr);
   }
+}
+let memorySelectedKey = '';
+function showMemoryFile(key) {
+  const body = document.getElementById('memFileBody');
+  const msg = document.getElementById('memFileMsg');
+  if (!key) { msg.textContent = '先选一个会话'; msg.className = 'meta err'; return; }
+  msg.textContent = '读取中…';
+  msg.className = 'meta';
+  api('/api/memory/file?key=' + encodeURIComponent(key)).then(r => {
+    if (!r || r.ok === false) throw new Error((r && r.error) || '读取失败');
+    body.textContent = r.content || '（记忆文件还是空的）';
+    msg.textContent = `✅ ${r.file}（${r.chars} 字符）`;
+    msg.className = 'meta ok';
+  }).catch(error => {
+    body.textContent = '';
+    msg.textContent = '❌ ' + (error && error.message ? error.message : '读取失败');
+    msg.className = 'meta err';
+  });
 }
 function loadMemory() {
   return api('/api/memory').then(r => {
@@ -4528,16 +4553,13 @@ function loadMemory() {
     toggle.checked = enabled;
     toggle.setAttribute('aria-checked', String(enabled));
     document.getElementById('memDir').textContent = r.dir || 'state/memory';
-    const c = r.config || {};
-    document.getElementById('memBudgetChars').value = c.budgetChars ?? 1600;
-    document.getElementById('memAnchorChars').value = c.anchorMaxChars ?? 400;
     const totals = r.totals || {};
     const sessions = Array.isArray(r.sessions) ? r.sessions : [];
     document.getElementById('memStatSessions').textContent = String(totals.sessions ?? sessions.length);
     document.getElementById('memStatEvents').textContent = String(totals.events ?? 0);
     document.getElementById('memStatProfiles').textContent = String(totals.profiles ?? 0);
-    const anchorChars = sessions.reduce((max, s) => Math.max(max, Number(s.anchorChars) || 0), 0);
-    document.getElementById('memStatAnchor').textContent = anchorChars ? (anchorChars + ' 字') : '—';
+    const totalChars = sessions.reduce((sum, s) => sum + (Number(s.memoryChars) || 0), 0);
+    document.getElementById('memStatFile').textContent = totalChars ? (totalChars + ' 字符') : '—';
     renderMemorySessions(sessions);
     const st = document.getElementById('memEnabledMsg');
     st.textContent = enabled ? '运行中' : '已关闭（回落到便签记忆）';
@@ -4565,18 +4587,15 @@ document.getElementById('memEnabled').addEventListener('change', async (event) =
     event.target.setAttribute('aria-checked', String(!enabled));
   }
 });
-document.getElementById('memConfigSave').addEventListener('click', async () => {
-  const r = await api('/api/memory/config', 'POST', {
-    budgetChars: Number(document.getElementById('memBudgetChars').value) || 1600,
-    anchorMaxChars: Number(document.getElementById('memAnchorChars').value) || 400
-  });
-  const msg = document.getElementById('memConfigMsg');
-  msg.textContent = r.ok ? '✅ 已保存' : ('❌ ' + (r.error || '失败'));
+document.getElementById('memReadFile').addEventListener('click', () => showMemoryFile(memorySelectedKey));
+document.getElementById('memRebuildFile').addEventListener('click', async () => {
+  if (!memorySelectedKey) { const m = document.getElementById('memFileMsg'); m.textContent = '先选一个会话'; m.className = 'meta err'; return; }
+  if (!confirm('用事件流重新生成 ' + memorySelectedKey + ' 的 MEMORY.md？（会覆盖现有正文，事件数据不受影响）')) return;
+  const r = await api('/api/memory/rebuild', 'POST', { key: memorySelectedKey });
+  const msg = document.getElementById('memFileMsg');
+  msg.textContent = r.ok ? `✅ 已重建（${r.chars} 字符 / ${r.entries} 条）` : ('❌ ' + (r.error || '失败'));
   msg.className = r.ok ? 'meta ok' : 'meta err';
-  // 服务端会把越界值夹回合法区间并回传，用回传值刷新输入框，避免界面显示一个没生效的数字。
-  if (r.ok && r.config) {
-    loadMemory();
-  }
+  if (r.ok) showMemoryFile(memorySelectedKey);
 });
 document.getElementById('memResetAll').addEventListener('click', async () => {
   if (!confirm('确定清空全部记忆？只删除 state/memory/ 下的文件，不可撤销。')) return;
