@@ -1444,20 +1444,25 @@ async function main() {
   const memoryRetentionTimer = setInterval(() => {
     if (!memoryPlugin.enabled) return;
     try {
-      let promoted = 0; let forgot = 0; let compressed = 0;
+      let promoted = 0; let forgot = 0; let compressed = 0; let merged = 0;
       for (const key of socialV2.conversations.keys()) {
+        // 先合并重复/相似记忆（主动整理），再按重要度保留/压缩/遗忘
+        const c = memoryPlugin.runConsolidate(key);
+        merged += c.merged || 0;
         const r = memoryPlugin.runRetention(key);
         promoted += r.promoted || 0;
         forgot += r.forgot || 0;
         compressed += r.compressed || 0;
       }
       // 总体记忆（跨会话共享层）单独整理一次
+      const cg = memoryPlugin.runConsolidateGlobal();
+      merged += cg.merged || 0;
       const g = memoryPlugin.runRetentionGlobal();
       promoted += g.promoted || 0;
       forgot += g.forgot || 0;
       compressed += g.compressed || 0;
-      if (promoted || forgot || compressed) {
-        log(`🧠 记忆整理：升长期 ${promoted}，压缩 ${compressed}，遗忘 ${forgot}`);
+      if (merged || promoted || forgot || compressed) {
+        log(`🧠 记忆整理：合并 ${merged}，升长期 ${promoted}，压缩 ${compressed}，遗忘 ${forgot}`);
       }
     } catch (error) {
       log(`⚠️ 记忆整理失败：${error?.message ?? error}`);
@@ -4308,7 +4313,7 @@ async function main() {
           sendJson({ ok: true, config: applied });
           return;
         }
-        // 手动执行「保留 / 压缩 / 遗忘」（也可由定时任务自动跑）
+        // 手动执行「整理 + 保留 / 压缩 / 遗忘」（也可由定时任务自动跑）
         if (req.method === 'POST' && url.pathname === '/api/memory/retention') {
           const body = await readBody();
           const key = String(body.key ?? '').trim();
@@ -4316,15 +4321,20 @@ async function main() {
           const keys = key ? [key] : [...socialV2.conversations.keys()];
           const results = [];
           for (const k of keys) {
-            try { results.push({ key: k, ...memoryPlugin.runRetention(k) }); } catch (error) { results.push({ key: k, error: String(error?.message ?? error) }); }
+            try {
+              // 先合并重复/相似记忆，再跑保留策略（顺序重要：先合并能减少后续要处理的分支）
+              const c = memoryPlugin.runConsolidate(k);
+              results.push({ key: k, merged: c.merged || 0, ...memoryPlugin.runRetention(k) });
+            } catch (error) { results.push({ key: k, error: String(error?.message ?? error) }); }
           }
           const total = results.reduce((acc, r) => ({
+            merged: acc.merged + (r.merged || 0),
             promoted: acc.promoted + (r.promoted || 0),
             forgot: acc.forgot + (r.forgot || 0),
             compressed: acc.compressed + (r.compressed || 0),
             kept: acc.kept + (r.kept || 0),
-          }), { promoted: 0, forgot: 0, compressed: 0, kept: 0 });
-          log(`控制台：记忆保留策略已执行（升长期 ${total.promoted}，压缩 ${total.compressed}，遗忘 ${total.forgot}）`);
+          }), { merged: 0, promoted: 0, forgot: 0, compressed: 0, kept: 0 });
+          log(`控制台：记忆整理完成（合并 ${total.merged}，升长期 ${total.promoted}，压缩 ${total.compressed}，遗忘 ${total.forgot}）`);
           sendJson({ ok: true, total, results });
           return;
         }
@@ -6975,22 +6985,51 @@ async function main() {
           if (req.headers['x-agent-token'] && !v2ToolEnabled('memory')) { sendJson({ ok: false, error: '工具未启用：qq_memory_save' }, 403); return; }
           // 与其它写接口一致：写入前脱敏，绝不把令牌/路径写进记忆
           const safeText = redactKnownTokensOnly(text).slice(0, 400);
+          const replaceId = String(body.replaceId ?? '').trim();
           const entry = memoryPlugin.saveMemory(key, {
             text: safeText,
             scope: body.scope,
             layer: body.layer,
             importance: body.importance,
             who: String(body.who ?? '').trim(),
+            replaceId,
           });
-          log(`记忆写入 ${key}：${safeText.slice(0, 60)}（${entry?.layer}/${entry?.scope}/${entry?.importance}★）`);
+          log(`记忆写入 ${key}：${safeText.slice(0, 60)}（${entry?.layer}/${entry?.scope}/${entry?.importance}★${entry?.merged ? `，已合并到 ${entry.mergedInto}${entry.replaced ? '（按模型指定覆盖）' : '（重复内容）'}` : ''}）`);
           sendJson({
             ok: true,
             entry,
-            hint: entry?.layer === 'global'
-              ? '已写入总体记忆（跨群/私聊共享，任何会话都查得到）。'
-              : entry?.scope === 'long'
-                ? '已作为本会话的长期记忆保存。'
-                : `已作为本会话的短期记忆保存（${memoryPlugin.config.retention?.shortTermDays ?? 3} 天内没被升为长期就自动遗忘）。`
+            merged: Boolean(entry?.merged),
+            hint: entry?.merged
+              ? entry.replaced
+                ? `已按你指定的 ${entry.mergedInto} 合并改写（没有新增重复条目）。`
+                : `内容和已有记忆 ${entry.mergedInto} 完全相同，没有重复新增（已计为再次确认）。`
+              : entry?.layer === 'global'
+                ? '已写入总体记忆（跨群/私聊共享，任何会话都查得到）。'
+                : entry?.scope === 'long'
+                  ? '已作为本会话的长期记忆保存。'
+                  : `已作为本会话的短期记忆保存（${memoryPlugin.config.retention?.shortTermDays ?? 3} 天内没被升为长期就自动遗忘）。`
+          });
+          return;
+        }
+        // 写记忆前先看候选（交给模型判断"新增还是合并"，服务端不自动合并）
+        if (req.method === 'GET' && url.pathname === '/api/socialV2/memory-candidates') {
+          const key = String(url.searchParams.get('key') ?? '').trim();
+          if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
+          if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2ToolEnabled('memory')) { sendJson({ ok: false, error: '工具未启用：qq_memory_candidates' }, 403); return; }
+          const who = String(url.searchParams.get('who') ?? '').trim();
+          const layer = String(url.searchParams.get('layer') ?? '').trim();
+          const limit = Number(url.searchParams.get('limit')) || 12;
+          const candidates = memoryPlugin.memoryCandidates(key, { who, layer, limit });
+          sendJson({
+            ok: true,
+            key,
+            count: candidates.length,
+            candidates,
+            hint: candidates.length
+              ? '如果其中有同一件事，用 qq_memory_save 的 replaceId 把那条改写成合并后的版本；否则正常新增。'
+              : '还没有相关记忆，可以正常新增。'
           });
           return;
         }

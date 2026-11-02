@@ -562,9 +562,71 @@ test('总体记忆：跨会话共享，本会话记忆不外泄', () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('写入合并：交给模型判断——重复内容不新增，replaceId 由模型指定合并', () => {
+  const dir = tmpDir();
+  const clock = { v: Date.now() };
+  const plugin = createMemoryPlugin({ stateDir: dir, config: {}, now: () => clock.v });
+
+  const a = plugin.saveMemory('private:950', { text: '载舟就是徐文杰', scope: 'long', importance: 3, who: '载舟', layer: 'global' });
+  assert.equal(a.merged, false, JSON.stringify(a));
+
+  // ① 完全相同 → 机械去重（防止工具重试/手滑），不新增
+  const b = plugin.saveMemory('private:950', { text: '载舟就是徐文杰', scope: 'long', importance: 3, who: '载舟', layer: 'global' });
+  assert.equal(b.merged, true, JSON.stringify(b));
+  assert.equal(b.id, a.id, '重复内容应复用旧 id');
+  assert.equal(b.reinforceCount, 2, JSON.stringify(b));
+
+  // ② 模型先看候选（决定"新增还是合并"的依据）
+  const candidates = plugin.memoryCandidates('private:950', { who: '载舟', layer: 'global' });
+  assert.ok(candidates.some((x) => x.id === a.id), JSON.stringify(candidates));
+  assert.ok(candidates[0].text.includes('载舟'), JSON.stringify(candidates));
+
+  // ③ 模型判断"这是同一条，补充信息" → 带 replaceId 改写合并（服务端不做相似度判断）
+  const c = plugin.saveMemory('private:950', {
+    text: '载舟就是徐文杰，男，24岁，INFJ人格', scope: 'long', importance: 4, who: '载舟', layer: 'global', replaceId: a.id,
+  });
+  assert.equal(c.merged, true, JSON.stringify(c));
+  assert.equal(c.replaced, true, JSON.stringify(c));
+  assert.equal(c.id, a.id, '合并应复用旧 id');
+  assert.ok(c.text.includes('INFJ'), '应写入模型合并后的版本：' + c.text);
+  assert.ok(c.importance >= 4, '重要度取高：' + c.importance);
+
+  // ④ 不同的事 → 新增（服务端不会因为"字面像"就合并）
+  const e = plugin.saveMemory('private:950', { text: '阿草在学吉他', scope: 'long', importance: 3, who: '阿草', layer: 'global' });
+  assert.equal(e.merged, false, JSON.stringify(e));
+
+  // 共享层最终 2 条（载舟合并成 1 条 + 阿草 1 条）
+  const store = JSON.parse(fs.readFileSync(path.join(dir, '_global', 'memories.json'), 'utf8'));
+  assert.equal(store.entries.length, 2, JSON.stringify(store.entries.map((x) => x.text)));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('主动整理：只清完全重复，不做规则相似合并', () => {
+  const dir = tmpDir();
+  const clock = { v: Date.now() };
+  const plugin = createMemoryPlugin({ stateDir: dir, config: {}, now: () => clock.v });
+  // 模拟历史遗留：两条一模一样的（工具重试造成）
+  const store = { version: 1, nextId: 4, entries: [
+    { id: 'm1', t: clock.v, text: '载舟就是徐文杰', scope: 'long', layer: 'global', importance: 3, who: '载舟', status: 'active' },
+    { id: 'm2', t: clock.v, text: '载舟就是徐文杰', scope: 'long', layer: 'global', importance: 4, who: '载舟', status: 'active' },
+    // 下面这条是"同一事实的补充细节"，但服务端不擅自合并（该由模型判断）
+    { id: 'm3', t: clock.v, text: '载舟就是徐文杰，男，24岁，INFJ人格', scope: 'long', layer: 'global', importance: 3, who: '载舟', status: 'active' },
+  ] };
+  fs.mkdirSync(path.join(dir, '_global'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '_global', 'memories.json'), JSON.stringify(store), 'utf8');
+
+  const r = plugin.runConsolidateGlobal();
+  assert.equal(r.merged, 1, JSON.stringify(r));
+  const after = JSON.parse(fs.readFileSync(path.join(dir, '_global', 'memories.json'), 'utf8'));
+  assert.equal(after.entries.length, 2, JSON.stringify(after.entries.map((x) => x.text)));
+  // 保留重要度更高的那条
+  assert.equal(after.entries.find((x) => x.id === 'm2').importance, 4, JSON.stringify(after.entries));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
 // ── 汇总 ──────────────────────────────────────────────────────────────────
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) {
   for (const { name, error } of failures) console.error(`\nFAILED: ${name}\n${error?.stack ?? error}`);
   process.exit(1);
 }
+

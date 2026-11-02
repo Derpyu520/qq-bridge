@@ -30,7 +30,7 @@ import {
 } from './markdown.js';
 import { recallMemory, describeMemory } from './recall.js';
 import {
-  addMemory, applyRetention, forgetMemory, loadMemories, touchMemory,
+  addMemory, applyRetention, consolidateMemories, forgetMemory, listCandidates, loadMemories, touchMemory,
 } from './memories.js';
 
 export const MEMORY_VERSION = 2;
@@ -465,11 +465,19 @@ export function createMemoryPlugin(opts = {}) {
   }
 
   /** 模型写记忆。scope=long/short，layer=global/session（总体/本会话），importance=1..5。 */
-  function saveMemory(key, { text, scope, importance, who, layer }) {
+  /** 模型写记忆。layer=global/session；给了 replaceId 就覆盖/合并那一条。 */
+  function saveMemory(key, { text, scope, importance, who, layer, replaceId }) {
     if (!enabled) return null;
     const target = String(layer ?? '').toLowerCase() === 'global' ? globalDir() : keyDir(key);
-    const entry = addMemory(target, { text, scope, importance, who, layer, source: 'model', now: now() });
+    const entry = addMemory(target, { text, scope, importance, who, layer, replaceId, source: 'model', now: now() });
     return entry;
+  }
+
+  /** 写入前先列出候选记忆，交给模型判断该新增还是合并（不做自动合并）。 */
+  function memoryCandidates(key, { who, layer, limit } = {}) {
+    if (!enabled) return [];
+    const target = String(layer ?? '').toLowerCase() === 'global' ? globalDir() : keyDir(key);
+    return listCandidates(target, { who, layer, limit });
   }
 
   /** 删除一条模型记忆（先查本会话，再查总体）。 */
@@ -486,6 +494,21 @@ export function createMemoryPlugin(opts = {}) {
   /** 整理总体记忆（跨会话共享层）。与会话层分开跑，避免每个会话重复处理同一份数据。 */
   function runRetentionGlobal() {
     return applyRetention(globalDir(), { now: now(), retention: cfg.retention });
+  }
+
+  /** 主动整理：把重复/高度相似的记忆合并（会话层 + 共享层）。 */
+  function runConsolidate(key) {
+    const a = consolidateMemories(keyDir(key), { now: now() });
+    const b = consolidateMemories(globalDir(), { now: now() });
+    return {
+      merged: (a.merged || 0) + (b.merged || 0),
+      kept: (a.kept || 0) + (b.kept || 0),
+    };
+  }
+
+  /** 只整理共享层（定时任务用）。 */
+  function runConsolidateGlobal() {
+    return consolidateMemories(globalDir(), { now: now() });
   }
 
   /** 注入提示词用的记忆索引（不含正文）。 */
@@ -698,9 +721,12 @@ export function createMemoryPlugin(opts = {}) {
     readGlobalFile,
     rebuildFile,
     saveMemory,
+    memoryCandidates,
     forgetMemoryById,
     runRetention,
     runRetentionGlobal,
+    runConsolidate,
+    runConsolidateGlobal,
     query,
     checkpoint,
     migrateFromSocialV2,
@@ -714,3 +740,6 @@ export function createMemoryPlugin(opts = {}) {
     resetAll,
   };
 }
+
+
+

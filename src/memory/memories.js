@@ -66,36 +66,141 @@ export function saveMemories(dir, store) {
   writeJsonAtomic(path.join(dir, MEMORY_FILE), store);
 }
 
-/** 模型写一条记忆。返回落库后的条目。 */
-export function addMemory(dir, { text, scope, importance, who, layer, source = 'model', now = Date.now() }) {
+/** 归一化：去空白/标点、统一全半角、去掉常见语气词，便于判重。 */
+function normalizeForCompare(text) {
+  return String(text ?? '')
+    .replace(/[\s\u3000]+/g, '')
+    .replace(/[，。！？、；：,.!?;:（）()【】\[\]"'“”‘’…—-]/g, '')
+    .toLowerCase();
+}
+
+/**
+ * 写入记忆。
+ *
+ * **合并/去重这类判断交给模型**，这里只做三件机械的事：
+ *   1) 完全相同文本 → 不新增（返回已有条目，防止工具重试/手滑重复）；
+ *   2) 模型显式给了 `replaceId` → 覆盖那一条（模型先 qq_memory_recall 看过、决定"合并进这条"）；
+ *   3) 否则新增。
+ *
+ * 为什么不在服务端算相似度：判断"两条记忆是不是同一件事、该并成什么措辞"需要语义理解，
+ * 字符串相似度既会误合（不同人的相似句式）也会漏合（同一事实换了个说法）。
+ * 模型每次写入前会先 recall 相关记忆（提示词与工具描述里都要求这么做），
+ * 看到已有条目后自己决定是新增、还是带 replaceId 合并改写。
+ */
+export function addMemory(dir, {
+  text, scope, importance, who, layer, replaceId, source = 'model', now = Date.now(),
+}) {
   const store = loadMemories(dir);
   const clean = String(text ?? '').replace(/\s+/g, ' ').trim();
   if (!clean) throw new Error('记忆内容不能为空');
+  const nowMs = Number(now) || Date.now();
+  const nextScope = normalizeScope(scope);
+  const nextLayer = normalizeLayer(layer);
+  const nextImportance = normalizeImportance(importance);
+  const nextWho = truncate(String(who ?? ''), 40);
+
+  // 1) 完全相同（归一化后）→ 视为重复提交，不新增
+  const targetId = String(replaceId ?? '').trim();
+  const dup = store.entries.find((e) => e.status === 'active'
+    && (e.id === targetId || (!targetId && normalizeForCompare(e.text) === normalizeForCompare(clean))));
+  if (dup) {
+    const isExplicit = Boolean(targetId);
+    if (isExplicit) {
+      // 模型明确说"并进这条"：按模型给的内容改写
+      dup.text = truncate(clean, 400);
+      dup.scope = nextScope;
+      dup.layer = nextLayer;
+      dup.importance = Math.max(Number(dup.importance) || 3, nextImportance);
+      dup.who = nextWho || dup.who;
+    }
+    // 无论哪种，都算"又被确认了一次"（重要度在反复确认后小幅上调）
+    dup.reinforceCount = (Number(dup.reinforceCount) || 1) + 1;
+    dup.lastReinforcedAt = nowMs;
+    dup.lastAccess = nowMs;
+    dup.accessCount = (Number(dup.accessCount) || 0) + 1;
+    if (dup.reinforceCount >= 3) dup.importance = Math.min(5, Number(dup.importance) + 1);
+    saveMemories(dir, store);
+    writeMemoryMarkdown(dir, store);
+    return { ...dup, merged: true, mergedInto: dup.id, replaced: isExplicit };
+  }
+
+  // 2) 新增
   const entry = {
     id: `m${store.nextId}`,
-    t: Number(now) || Date.now(),
+    t: nowMs,
     text: truncate(clean, 400),
-    scope: normalizeScope(scope),
-    layer: normalizeLayer(layer),
-    importance: normalizeImportance(importance),
-    who: truncate(String(who ?? ''), 40),
+    scope: nextScope,
+    layer: nextLayer,
+    importance: nextImportance,
+    who: nextWho,
     source: String(source ?? 'model').slice(0, 20),
     lastAccess: 0,
     accessCount: 0,
+    reinforceCount: 1,
     status: 'active',
   };
   store.nextId += 1;
   store.entries.push(entry);
-  // 容量护栏：长期+短期合计最多 400 条，超出先丢最不重要的陈旧条目
+  // 容量护栏：合计最多 400 条，超出先丢最不重要的陈旧条目
   if (store.entries.length > 400) {
     store.entries.sort((a, b) => (a.importance * 100 + (a.t / DAY_MS)) - (b.importance * 100 + (b.t / DAY_MS)));
     store.entries.splice(0, store.entries.length - 400);
   }
   saveMemories(dir, store);
   writeMemoryMarkdown(dir, store);
-  return entry;
+  return { ...entry, merged: false };
 }
 
+/**
+ * 列出候选记忆供模型判断是否该合并（**不自动合并**，只把候选交给模型看）。
+ * 用于"写入前先读"：模型拿到同一个人/同一层已有的记忆，自己决定新增还是带 replaceId 改写。
+ */
+export function listCandidates(dir, { who, layer, limit = 12 } = {}) {
+  const store = loadMemories(dir);
+  const targetLayer = normalizeLayer(layer);
+  const active = store.entries.filter((e) => e.status === 'active' && normalizeLayer(e.layer) === targetLayer);
+  const list = who
+    ? active.filter((e) => !e.who || e.who === String(who))
+    : active;
+  return list
+    .sort((a, b) => (Number(b.importance) || 3) - (Number(a.importance) || 3))
+    .slice(0, Math.max(1, Math.min(50, Number(limit) || 12)))
+    .map((e) => ({ id: e.id, text: e.text, scope: e.scope, layer: normalizeLayer(e.layer), importance: e.importance, who: e.who || '', t: e.t }));
+}
+/**
+ * 清理**完全重复**的条目（同一文本被重复写入，例如工具重试）。
+ *
+ * 刻意不做"相似合并"：两条记忆是不是同一件事、该并成什么措辞，交给模型判断
+ * （写入时带 replaceId 合并）。这里只处理机械性重复，且保留重要度最高/最常被确认的那条。
+ */
+export function consolidateMemories(dir, { now = Date.now() } = {}) {
+  const store = loadMemories(dir);
+  const stats = { merged: 0, kept: 0 };
+  const byKey = new Map();
+  const drop = new Set();
+  for (const entry of store.entries) {
+    if (entry.status !== 'active') continue;
+    const key = `${normalizeLayer(entry.layer)}|${entry.who || ''}|${normalizeForCompare(entry.text)}`;
+    const prev = byKey.get(key);
+    if (!prev) { byKey.set(key, entry); continue; }
+    // 重复：保留重要度更高的那条，把次数/访问量并过去
+    const [keep, gone] = (Number(prev.importance) || 3) >= (Number(entry.importance) || 3) ? [prev, entry] : [entry, prev];
+    keep.reinforceCount = (Number(keep.reinforceCount) || 1) + (Number(gone.reinforceCount) || 1);
+    keep.accessCount = (Number(keep.accessCount) || 0) + (Number(gone.accessCount) || 0);
+    keep.lastAccess = Math.max(Number(keep.lastAccess) || 0, Number(gone.lastAccess) || 0);
+    keep.lastReinforcedAt = Number(now) || Date.now();
+    byKey.set(key, keep);
+    drop.add(gone.id);
+    stats.merged += 1;
+  }
+  if (stats.merged) {
+    store.entries = store.entries.filter((e) => !drop.has(e.id));
+    saveMemories(dir, store);
+    writeMemoryMarkdown(dir, store);
+  }
+  stats.kept = store.entries.filter((e) => e.status === 'active').length;
+  return stats;
+}
 export function forgetMemory(dir, id) {
   const store = loadMemories(dir);
   const before = store.entries.length;
@@ -237,3 +342,6 @@ export function importanceLabel(n) {
 }
 
 export { normalizeScope, normalizeImportance, normalizeLayer };
+
+
+

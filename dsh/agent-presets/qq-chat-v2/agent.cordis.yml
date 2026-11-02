@@ -40,6 +40,7 @@
            layer="global" → 总体记忆（"阿草在学吉他"、"老爹喜欢草莓味"，换到别的群也适用）；
            layer="session"（默认）→ 只在本群/本私聊有效（本群约定、这轮话题）。
            scope="long" 约定/偏好/重要经历；scope="short" 一时话题（3 天后：重要的升 long，其余遗忘）。importance 1~5 认真给。
+         · **先读后写**：写之前如果这件事可能已经记过（同一个人/同一个话题），先 qq_memory_candidates(who=…) 看一眼已有的；有相关条目就用 qq_memory_save 的 replaceId 把那条改写成合并后的完整版本（合并措辞、取舍细节由你判断），不要制造两条重复记忆。
          · 不要逐条记流水，只记以后真的会用到的。不写也不会丢细节——流水仍在、qq_memory_recall 查得到；但只有你写下的才被当作"记得"。
          · 当话题可能牵扯到过去（某人提过的经历、约定、喜好、上次聊到一半的事）时，**先 qq_memory_recall(key, question) 查，再开口**，不要凭印象编。它会同时查总体+本会话（结果标 [总体]/[本会话]）。例如有人聊到摩天轮，你查一下就能接「那天摩天轮上的冰淇淋我记得，很甜」。
          · 记错了/过时了：qq_memory_forget(key, id) 删掉，或再 qq_memory_save 一条更正。轻量便签仍可用 qq_memory_append / qq_memory_query / qq_memory_remove / qq_memory_clear。
@@ -200,3 +201,4 @@
         thresholdChars: 50000
         headChars: 45000
         tailChars: 2000
+
