@@ -642,6 +642,64 @@ input[type=checkbox] {
   flex-shrink:0;
   cursor:pointer
 }
+/* 开关（switch）：给「启用记忆插件」这类总开关用。
+   结构 <label class="switch"><input type=checkbox><span class="switch-track"><span class="switch-knob"></span></span></label>
+   隐藏原生 checkbox 但保留它的 checked/change 语义与键盘可达性（focus-visible 有描边）。 */
+.switch {
+  display:inline-flex;
+  position:relative;
+  align-items:center;
+  flex:0 0 auto;
+  cursor:pointer;
+  user-select:none
+}
+.switch input {
+  position:absolute;
+  width:1px;
+  height:1px;
+  opacity:0;
+  margin:0;
+  pointer-events:none
+}
+.switch-track {
+  position:relative;
+  width:44px;
+  height:24px;
+  flex:0 0 auto;
+  border-radius:999px;
+  background:var(--border-strong);
+  border:1px solid var(--border);
+  transition:background .18s ease,border-color .18s ease
+}
+.switch-knob {
+  position:absolute;
+  top:2px;
+  left:2px;
+  width:18px;
+  height:18px;
+  border-radius:50%;
+  background:var(--surface);
+  box-shadow:0 1px 3px rgba(32,46,73,.28);
+  transition:transform .18s ease
+}
+.switch input:checked+.switch-track {
+  background:var(--accent);
+  border-color:var(--accent)
+}
+.switch input:checked+.switch-track .switch-knob {
+  transform:translateX(22px)
+}
+.switch input:focus-visible+.switch-track {
+  outline:2px solid var(--accent-border-focus);
+  outline-offset:2px
+}
+.switch:hover .switch-track {
+  border-color:var(--accent-border-hover)
+}
+.switch input:disabled+.switch-track {
+  opacity:.5;
+  cursor:not-allowed
+}
 input[type=number] {
   font-variant-numeric:tabular-nums
 }
@@ -2428,17 +2486,25 @@ button:active:not(:disabled) {
       </div>
 
       <div class="row" style="margin-top:10px">
-        <label style="flex:1">启用记忆插件</label>
-        <input type="checkbox" id="memEnabled" style="width:auto">
+        <label style="flex:1" for="memEnabled">启用记忆插件</label>
+        <label class="switch" title="开启 / 关闭记忆插件（写入 config.json，即时生效）">
+          <input type="checkbox" id="memEnabled" role="switch" aria-label="启用记忆插件">
+          <span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span>
+        </label>
         <span class="meta" id="memEnabledMsg" role="status"></span>
       </div>
       <div class="meta">开关写入 <code>config.json</code> 的 <code>memory.enabled</code>，即时生效、无需重启。关闭只停用注入与新事件写入，已有数据保留在磁盘上。</div>
 
       <div class="row" style="margin-top:10px">
         <label style="flex:1">记忆注入预算（字符）</label>
-        <input type="number" id="memBudgetChars" min="200" max="6000" style="width:90px">
+        <input type="number" id="memBudgetChars" min="200" max="4000" step="100" style="width:100px">
         <label style="flex:1;margin-left:12px">人设锚上限（字符）</label>
-        <input type="number" id="memAnchorChars" min="80" max="800" style="width:90px">
+        <input type="number" id="memAnchorChars" min="80" max="1200" step="50" style="width:100px">
+      </div>
+      <div class="meta">
+        预算决定一次唤醒最多注入多少记忆（200~4000，默认 1600）；锚决定每轮固定注入的人设摘要长度（80~1200，默认 400）。
+        两者都会实时显示实际占用，超预算时按行截断（先丢「相关的回忆」，再丢「最近的记忆」）。
+        <span id="memUsageHint"></span>
       </div>
       <div class="row">
         <button id="memConfigSave" class="small">保存记忆参数</button>
@@ -4458,10 +4524,12 @@ function loadMemory() {
   return api('/api/memory').then(r => {
     if (!r || r.ok === false) throw new Error((r && r.error) || '读取失败');
     const enabled = r.enabled !== false;
-    document.getElementById('memEnabled').checked = enabled;
+    const toggle = document.getElementById('memEnabled');
+    toggle.checked = enabled;
+    toggle.setAttribute('aria-checked', String(enabled));
     document.getElementById('memDir').textContent = r.dir || 'state/memory';
     const c = r.config || {};
-    document.getElementById('memBudgetChars').value = c.budgetChars ?? 1200;
+    document.getElementById('memBudgetChars').value = c.budgetChars ?? 1600;
     document.getElementById('memAnchorChars').value = c.anchorMaxChars ?? 400;
     const totals = r.totals || {};
     const sessions = Array.isArray(r.sessions) ? r.sessions : [];
@@ -4482,6 +4550,7 @@ function loadMemory() {
 }
 document.getElementById('memEnabled').addEventListener('change', async (event) => {
   const enabled = event.target.checked;
+  event.target.setAttribute('aria-checked', String(enabled));
   const r = await api('/api/memory/enabled', 'POST', { enabled });
   const st = document.getElementById('memEnabledMsg');
   if (r.ok) {
@@ -4491,17 +4560,23 @@ document.getElementById('memEnabled').addEventListener('change', async (event) =
   } else {
     st.textContent = '❌ ' + (r.error || '失败');
     st.className = 'meta err';
+    // 保存失败：把开关拨回去，别让界面显示一个没生效的状态
     event.target.checked = !enabled;
+    event.target.setAttribute('aria-checked', String(!enabled));
   }
 });
 document.getElementById('memConfigSave').addEventListener('click', async () => {
   const r = await api('/api/memory/config', 'POST', {
-    budgetChars: Number(document.getElementById('memBudgetChars').value) || 1200,
+    budgetChars: Number(document.getElementById('memBudgetChars').value) || 1600,
     anchorMaxChars: Number(document.getElementById('memAnchorChars').value) || 400
   });
   const msg = document.getElementById('memConfigMsg');
   msg.textContent = r.ok ? '✅ 已保存' : ('❌ ' + (r.error || '失败'));
   msg.className = r.ok ? 'meta ok' : 'meta err';
+  // 服务端会把越界值夹回合法区间并回传，用回传值刷新输入框，避免界面显示一个没生效的数字。
+  if (r.ok && r.config) {
+    loadMemory();
+  }
 });
 document.getElementById('memResetAll').addEventListener('click', async () => {
   if (!confirm('确定清空全部记忆？只删除 state/memory/ 下的文件，不可撤销。')) return;

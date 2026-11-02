@@ -888,8 +888,8 @@ function loadConfig() {
     memory: {
       enabled: true,
       dir: 'state/memory',
-      budgetChars: 1200,       // 一次注入的记忆文本预算（字符）
-      anchorMaxChars: 400,     // 人设锚长度上限
+      budgetChars: 1600,       // 一次注入的记忆文本预算（字符）；上限 4000（记忆块别挤掉工具协议）
+      anchorMaxChars: 400,     // 人设锚长度上限；上限 1200（锚每轮都注入，太大反而稀释重点）
       eventThreshold: 0.45,    // salience 达到该值才写入长期记忆
       recentDays: 7,           // “最近的记忆”回看窗口（天）
       recallMinW: 0.35,        // cue 检索时允许注入的最小权重
@@ -4238,9 +4238,10 @@ async function main() {
             return Math.round(Math.min(max, Math.max(min, n)));
           };
           const next = {};
-          const budget = pick(body.budgetChars, 200, 6000);
+          // 与 src/memory/index.js 的 MAX_BUDGET_CHARS / MAX_ANCHOR_CHARS 保持一致。
+          const budget = pick(body.budgetChars, 200, 4000);
           if (budget !== null) next.budgetChars = budget;
-          const anchor = pick(body.anchorMaxChars, 80, 800);
+          const anchor = pick(body.anchorMaxChars, 80, 1200);
           if (anchor !== null) next.anchorMaxChars = anchor;
           const threshold = Number(body.eventThreshold);
           if (Number.isFinite(threshold)) next.eventThreshold = Math.min(1, Math.max(0, Number(threshold.toFixed(3))));

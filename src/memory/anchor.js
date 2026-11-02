@@ -76,7 +76,16 @@ export function buildAnchor(selectedText, options = {}) {
   // 入参必须是调用方按模式选好的文本（bridge 用 selectRoleText(raw, 'v2')）。
   // 记忆模块不感知〔一代〕/〔二代〕标记，也就不依赖桥接的 role-card.js。
   const selected = String(selectedText ?? '');
-  if (!selected.trim()) return '';  const sections = splitSections(selected);
+  if (!selected.trim()) return '';
+
+  // 各段的额度随 maxChars 缩放：写死 240/110/80 时，把上限调到 1200 也不会多出内容。
+  // 比例：身份 ~55%、说话方式 ~28%、雷点 ~17%。
+  const identityQuota = Math.max(80, Math.round(maxChars * 0.55));
+  const styleQuota = Math.max(60, Math.round(maxChars * 0.28));
+  const riskQuota = Math.max(40, Math.round(maxChars * 0.17));
+  const styleBullets = maxChars >= 700 ? 4 : maxChars >= 400 ? 3 : 2;
+
+  const sections = splitSections(selected);
   const identity = sections.find((s) => /你是谁|身份|我是谁/.test(s.heading)) || sections[0];
   // 优先「说话方式」，没有才退到「说话铁律」：铁律是禁令，风格才像人设。
   const style = sections.find((s) => /说话方式|说话风格|语气/.test(s.heading))
@@ -100,21 +109,21 @@ export function buildAnchor(selectedText, options = {}) {
       // 老爹专属只在 owner 面前生效，放进常驻锚会把温顺语气带到群里。
       .filter((p) => !p.trim().startsWith('>') && !/本卡只写|仿真提示词|老爹专属|温顺小鲸鱼模式/.test(p));
     const first = inline.length > 10 ? inline : paras[0] || inline;
-    if (first) parts.push(cutAtSentence(first, Math.min(240, Math.max(120, maxChars - 120))));
+    if (first) parts.push(cutAtSentence(first, identityQuota));
   }
 
   if (style) {
     // 行尾的「。」先去掉再拼：否则会出现「…想补一句就让它成为下一条。；默认 1~10 字」这种双标点。
     const bullets = bulletLines(style.lines)
-      .slice(0, 2)
+      .slice(0, styleBullets)
       .map((line) => line.replace(/[。；;！!]+$/, '').trim())
       .filter(Boolean);
-    if (bullets.length) parts.push(cutAtSentence(bullets.join('；'), 110));
+    if (bullets.length) parts.push(cutAtSentence(bullets.join('；'), styleQuota));
   }
 
   const risk = /[^。\n]{0,30}雷点[^。\n]{0,70}/.exec(selected);
-  // 身份段里常自带「被叫大肥鱼是雷点」，别再重复一遍——锚只有 400 字，重复最浪费。
-  const riskText = risk ? cutAtSentence(risk[0].trim(), 80) : '';
+  // 身份段里常自带「被叫大肥鱼是雷点」，别再重复一遍——锚的额度很贵，重复最浪费。
+  const riskText = risk ? cutAtSentence(risk[0].trim(), riskQuota) : '';
   if (riskText && !parts.some((p) => p.includes(riskText.slice(0, 20)))) {
     parts.push(`雷点：${riskText}`);
   }

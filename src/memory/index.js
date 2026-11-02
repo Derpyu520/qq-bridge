@@ -27,9 +27,19 @@ import { salienceBreakdown, eventFromMessage, selfEventFromText, isForcedMemory,
 import { buildAnchor, ANCHOR_MAX_CHARS, ANCHOR_VERSION } from './anchor.js';
 
 export const MEMORY_VERSION = 1;
+
+// 上限说明：
+//   budgetChars —— 记忆块是唤醒 prompt 的一段，其余段落（角色/锚/状态/睡前规则）合计约 5~6k 字符，
+//                  4000 已是"记忆占四成"的合理天花板，再大就会把工具协议挤到模型注意力之外。
+//   anchorMaxChars —— 人设锚每轮都注入，且与角色卡内容重叠；1200 字足够容纳身份+说话方式+雷点，
+//                  再多会稀释重点（完整角色卡仍可用 qq_get_prompt 现拉）。
+export const MAX_BUDGET_CHARS = 4000;
+export const MIN_BUDGET_CHARS = 200;
+export const MAX_ANCHOR_CHARS = 1200;
+export const MIN_ANCHOR_CHARS = 80;
 export const DEFAULT_MEMORY_CONFIG = {
   enabled: true,
-  budgetChars: 1200,
+  budgetChars: 1600,
   anchorMaxChars: ANCHOR_MAX_CHARS,
   eventThreshold: 0.45,
   recentDays: 7,
@@ -56,8 +66,8 @@ export function normalizeMemoryConfig(input = {}) {
   return {
     ...DEFAULT_MEMORY_CONFIG,
     ...src,
-    budgetChars: clampInt(src.budgetChars, 200, 6000, DEFAULT_MEMORY_CONFIG.budgetChars),
-    anchorMaxChars: clampInt(src.anchorMaxChars, 80, 800, DEFAULT_MEMORY_CONFIG.anchorMaxChars),
+    budgetChars: clampInt(src.budgetChars, MIN_BUDGET_CHARS, MAX_BUDGET_CHARS, DEFAULT_MEMORY_CONFIG.budgetChars),
+    anchorMaxChars: clampInt(src.anchorMaxChars, MIN_ANCHOR_CHARS, MAX_ANCHOR_CHARS, DEFAULT_MEMORY_CONFIG.anchorMaxChars),
     eventThreshold: clampNum(src.eventThreshold, 0, 1, DEFAULT_MEMORY_CONFIG.eventThreshold),
     recentDays: clampInt(src.recentDays, 1, 30, DEFAULT_MEMORY_CONFIG.recentDays),
     recallMinW: clampNum(src.recallMinW, 0, 1, DEFAULT_MEMORY_CONFIG.recallMinW),
@@ -329,9 +339,9 @@ export function createMemoryPlugin(opts = {}) {
     }
     if (!info?.text) return '';
     const st = stateFor(key);
-    // stamp 里带 ANCHOR_VERSION：抽锚算法改了以后，旧的 anchor.json 缓存必须失效，
-    // 否则磁盘上会一直用老文案（改了 buildAnchor 却看不到效果）。
-    const stamp = `${String(info.stamp ?? info.name ?? '')}:a${ANCHOR_VERSION}`;
+    // stamp 里带 ANCHOR_VERSION 与 anchorMaxChars：抽锚算法改了、或控制台调了上限，
+    // 旧的 anchor.json 缓存都必须失效——否则磁盘上会一直用老文案/老长度（改了看不到效果）。
+    const stamp = `${String(info.stamp ?? info.name ?? '')}:a${ANCHOR_VERSION}:m${cfg.anchorMaxChars}`;
     if (st.anchor && st.anchor.stamp === stamp && st.anchor.text) return st.anchor.text;
     const text = buildAnchor(info.text, { maxChars: cfg.anchorMaxChars });
     if (!text) return '';
@@ -359,57 +369,68 @@ export function createMemoryPlugin(opts = {}) {
     if (options.socialSt) migrateFromSocialV2(key, options.socialSt);
     const st = stateFor(key);
     const nowMs = now();
-    const budget = clampInt(options.budgetChars, 200, 6000, cfg.budgetChars);
+    const budget = clampInt(options.budgetChars, MIN_BUDGET_CHARS, MAX_BUDGET_CHARS, cfg.budgetChars);
     const recentCutoff = nowMs - cfg.recentDays * DAY_MS;
     const cue = String(options.cue ?? '').trim();
 
     const scored = st.events.map((ev) => ({ ev, w: scoreEvent(ev, st, nowMs) }));
 
-    // 1) 最近的记忆：近 N 天里权重最高的 3 条
+    // 每段的候选上限。真正进不进去由 budgetChars 决定（下面的贪心装配），
+    // 所以调大预算时能自动多塞几条，而不是被写死的 3 条卡住。
+    // 上限按预算缩放：预算 4000 时最多各取 24 条，够填满；预算小时也够用。
+    const slotCap = Math.max(3, Math.min(24, Math.ceil(budget / 150)));
+    const MAX_RECENT = slotCap;
+    const MAX_RECALL = slotCap;
+    const MAX_PROFILES = Math.max(3, Math.min(12, Math.ceil(budget / 250)));
+
+    // 1) 最近的记忆：近 N 天里权重最高的若干条
     const recentTop = scored
       .filter((entry) => Number(entry.ev.t) >= recentCutoff && entry.w >= W_TIERS.weak)
       .sort((a, b) => b.w - a.w)
-      .slice(0, 3);
-    for (const entry of recentTop) entry.ev.accessCount = (Number(entry.ev.accessCount) || 0) + 1;
+      .slice(0, MAX_RECENT);
 
     // 2) 相关回忆：cue 命中的、不在"最近"里的旧事
     const recentSet = new Set(recentTop.map((entry) => entry.ev));
     const recall = [];
     if (cue) {
       for (const hit of bm25Scores(st.events, cue, (ev) => ev.text)) {
-        if (recall.length >= 3) break;
+        if (recall.length >= MAX_RECALL) break;
         if (recentSet.has(hit.item)) continue;
         const w = scoreEvent(hit.item, st, nowMs);
         if (w < cfg.recallMinW) continue;
         recall.push({ ev: hit.item, w, score: hit.score });
       }
-      for (const entry of recall) entry.ev.accessCount = (Number(entry.ev.accessCount) || 0) + 1;
     }
 
-    // 3) 关于他们：按亲密度取前 3
+    // 3) 关于他们：按亲密度取前若干
     const profiles = Object.values(st.profiles ?? {})
       .filter((p) => p && p.name)
       .map((p) => ({ profile: p, rapport: profileRapport(p, nowMs, cfg.forgetting) }))
       .filter((entry) => entry.rapport > 0.05)
       .sort((a, b) => b.rapport - a.rapport)
-      .slice(0, 3);
+      .slice(0, MAX_PROFILES);
 
+    // 每节带 items（对应的记忆对象）：只有**真正注入**的行才算「被回忆一次」，
+    // 间隔效应的强化只给读到的记忆，而不是候选池里的全部。
     const sections = [];
     if (recentTop.length) {
       sections.push({
         title: '【最近的记忆】',
+        items: recentTop.map(({ ev }) => ev),
         lines: recentTop.map(({ ev }) => `- ${ageLabel(ev.t, nowMs)} ${ev.isSelf ? '我' : oneLine(ev.sender, 20)}：${oneLine(ev.text)}`),
       });
     }
     if (recall.length) {
       sections.push({
         title: '【相关的回忆】',
+        items: recall.map(({ ev }) => ev),
         lines: recall.map(({ ev }) => `- ${ageLabel(ev.t, nowMs)} ${oneLine(ev.sender, 20)}：${oneLine(ev.text)}`),
       });
     }
     if (profiles.length) {
       sections.push({
         title: '【关于他们】',
+        items: profiles.map(({ profile }) => ({ profile })),
         lines: profiles.map(({ profile }) => {
           const ago = ageLabel(profile.lastSeen, nowMs);
           const last = profile.lastText ? `，上次说「${oneLine(profile.lastText, 24)}」` : '';
@@ -422,17 +443,25 @@ export function createMemoryPlugin(opts = {}) {
       return '';
     }
 
-    // 按预算裁：标题必留，行从后往前丢，保证不超 budgetChars。
+    // 按预算逐行装配：标题在预算够时必留；某一行放不下就停在那一行，
+    // 而不是「整段放不下就整段丢掉」——后者会让预算调大后依然只吐一个标题。
     let out = '';
+    outer:
     for (const section of sections) {
-      const block = `${section.title}\n${section.lines.join('\n')}`;
-      const next = out ? `${out}\n${block}` : block;
-      if (next.length > budget) break;
-      out = next;
+      const header = out ? `\n${section.title}` : section.title;
+      if (header.length > budget - out.length) break;
+      out += header;
+      for (let i = 0; i < section.lines.length; i += 1) {
+        const piece = `\n${section.lines[i]}`;
+        if (piece.length > budget - out.length) break outer;
+        out += piece;
+        const item = section.items?.[i];
+        if (item?.ev) item.ev.accessCount = (Number(item.ev.accessCount) || 0) + 1;
+      }
     }
-    if (!out) out = truncate(sections[0].title, budget);
+    const text = out.trim();
     saveStructured(key, st);
-    return out;
+    return text;
   }
 
   /** 检索接口（调试 / 未来的 MCP 工具共用）：返回相关旧事。 */

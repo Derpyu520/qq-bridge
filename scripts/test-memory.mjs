@@ -12,7 +12,7 @@ import { tokenize, jaccard, bm25Scores } from '../src/memory/tokenize.js';
 import { retention, computeW, wTier, DEFAULT_FORGETTING } from '../src/memory/weights.js';
 import { salienceBreakdown, isAddressedToBot, isSelfEventWorthKeeping } from '../src/memory/encoder.js';
 import { buildAnchor, ANCHOR_VERSION } from '../src/memory/anchor.js';
-import { createMemoryPlugin } from '../src/memory/index.js';
+import { createMemoryPlugin, MAX_BUDGET_CHARS, MIN_BUDGET_CHARS, MAX_ANCHOR_CHARS, MIN_ANCHOR_CHARS } from '../src/memory/index.js';
 import { selectRoleText } from '../src/role-card.js';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -274,9 +274,15 @@ test('插件：updateConfig 热更新预算与人设锚上限', () => {
   assert.equal(applied.budgetChars, 300);
   assert.equal(applied.anchorMaxChars, 150);
   assert.equal(plugin.config.budgetChars, 300);
-  // 越界值被夹回合法区间
+  // 越界值被夹回合法区间（上限常量与 bridge 路由 / 控制台 input 的 max 保持一致）
   const clamped = plugin.updateConfig({ budgetChars: 99999 });
-  assert.equal(clamped.budgetChars, 6000);
+  assert.equal(clamped.budgetChars, MAX_BUDGET_CHARS);
+  assert.equal(clamped.budgetChars, 4000);
+  const clampedAnchor = plugin.updateConfig({ anchorMaxChars: 99999 });
+  assert.equal(clampedAnchor.anchorMaxChars, MAX_ANCHOR_CHARS);
+  assert.equal(clampedAnchor.anchorMaxChars, 1200);
+  // 下界同样夹取
+  assert.equal(plugin.updateConfig({ budgetChars: 1 }).budgetChars, MIN_BUDGET_CHARS);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -352,7 +358,23 @@ test('人设锚：不出现「。；」双标点，且缓存带算法版本', ()
   plugin.renderAnchor('private:901');
   const cached = JSON.parse(fs.readFileSync(path.join(dir, 'private-901', 'anchor.json'), 'utf8'));
   assert.ok(String(cached.stamp).includes(`:a${ANCHOR_VERSION}`), `缓存 stamp 缺版本号：${cached.stamp}`);
+  // 上限也必须进 stamp：否则控制台把 400 调到 800 后，缓存命中 → 长度永远不变（真踩过）
+  assert.ok(String(cached.stamp).includes(':m400'), `缓存 stamp 缺 anchorMaxChars：${cached.stamp}`);
+
+  // 调大上限后必须重算（用一张更长的卡验证长度确实变长）
+  const longRole = {
+    name: '测试角色',
+    stamp: 'a:1:100',
+    text: `## 一、你是谁\n${'你是一只会吐槽的鲸鱼，嘴硬心软，偶尔摆烂。'.repeat(8)}\n\n## 三、说话方式\n- 短句，别写小作文。\n- 少用客服腔。\n`,
+  };
+  const dir2 = tmpDir();
+  const small = createMemoryPlugin({ stateDir: dir2, config: { anchorMaxChars: 200 }, now: () => clock.v, getRoleInfo: () => longRole });
+  const smallAnchor = small.renderAnchor('private:902');
+  const big = createMemoryPlugin({ stateDir: dir2, config: { anchorMaxChars: 900 }, now: () => clock.v, getRoleInfo: () => longRole });
+  const bigAnchor = big.renderAnchor('private:902');
+  assert.ok(bigAnchor.length > smallAnchor.length, `调大上限没生效：${smallAnchor.length} → ${bigAnchor.length}`);
   fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(dir2, { recursive: true, force: true });
 });
 
 test('历史脏画像「私聊」在加载时被清掉', () => {
