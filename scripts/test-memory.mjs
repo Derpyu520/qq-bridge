@@ -355,6 +355,24 @@ test('人设锚：不出现「。；」双标点，且缓存带算法版本', ()
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('历史脏画像「私聊」在加载时被清掉', () => {
+  const dir = tmpDir();
+  const clock = { v: Date.now() };
+  // 先按老格式写一份 profiles.json（旧版本把私聊发送者写成字面量「私聊」）
+  const keyDir = path.join(dir, 'private-777');
+  fs.mkdirSync(keyDir, { recursive: true });
+  fs.writeFileSync(path.join(keyDir, 'profiles.json'), JSON.stringify({
+    '私聊': { name: '私聊', count: 42, lastSeen: clock.v, lastText: 'hello' },
+    '未知': { name: '未知', count: 1, lastSeen: clock.v },
+    '真·群友': { name: '真·群友', count: 5, lastSeen: clock.v, lastText: '在吗' },
+  }), 'utf8');
+
+  const plugin = createMemoryPlugin({ stateDir: dir, config: {}, now: () => clock.v });
+  const names = Object.keys(plugin.stateFor('private:777').profiles).sort();
+  assert.deepEqual(names, ['真·群友'], `脏画像未清理：${names.join(',')}`);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 // ── 汇总 ──────────────────────────────────────────────────────────────────
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) {
