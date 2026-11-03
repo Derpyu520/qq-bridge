@@ -322,7 +322,7 @@ function ensureLocalModeFile() {
 function autoInstallProfileBundles() {
   if (process.env.QQ_BRIDGE_SKIP_DSH_INSTALL === '1') {
     log('auto-install skipped: QQ_BRIDGE_SKIP_DSH_INSTALL=1');
-    return;
+    return { status: 'skipped' };
   }
   const windows = process.platform === 'win32';
   // Node cannot spawn npm's .cmd shim directly. Keep the shell command constant;
@@ -341,14 +341,14 @@ function autoInstallProfileBundles() {
   });
   if (r.error) {
     log(`auto-install failed to start/complete（${r.error.code || r.error.message}）。`);
-    log(`若 DSH 启动报“cannot resolve profile bundle”，请手动执行：dsh plugin --profile ${PROFILE} install`);
-    return;
+    return { status: 'incomplete', reason: r.error.code || 'process error' };
   }
   if (r.status === 0) {
     log(`dsh plugin --profile ${PROFILE} install: OK`);
-  } else {
-    log(`dsh plugin --profile ${PROFILE} install 返回退出码 ${r.status}（若 DSH 启动报 bundle 解析失败，请手动重跑该命令）`);
+    return { status: 'installed' };
   }
+  log(`dsh plugin --profile ${PROFILE} install 返回退出码 ${r.status}`);
+  return { status: 'incomplete', reason: r.signal ? `signal ${r.signal}` : `exit code ${r.status}` };
 }
 
 // Validate the existing YAML before changing any presets or configuration.
@@ -360,5 +360,16 @@ for (const name of BUNDLE_NAMES) links[name] = ensureBundle(name);
 patchProfilePackage(links);
 reportLegacyPresetDir();
 ensureLocalModeFile();
-autoInstallProfileBundles();
-log('Done. Restart DSH (or reload the profile) so the new presets/MCP take effect.');
+const installation = autoInstallProfileBundles();
+if (installation.status === 'installed') {
+  log('Done. Restart DSH (or reload the profile) so the new presets/MCP take effect.');
+} else {
+  // 配置已写入不等于依赖已装好；保留非阻断退出，但结尾必须明确说明状态。
+  if (installation.status === 'skipped') {
+    log('Configuration prepared. Dependency installation skipped (QQ_BRIDGE_SKIP_DSH_INSTALL=1).');
+  } else {
+    log(`Configuration prepared. Dependency installation incomplete (${installation.reason}).`);
+  }
+  log(`Next: dsh plugin --profile "${PROFILE}" install`);
+  log('Complete dependency installation before restarting DSH (or reloading the profile).');
+}
