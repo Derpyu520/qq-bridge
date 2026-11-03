@@ -1,0 +1,11 @@
+__pycache__/
+# tmp section: discussion / proposal pages, local only. Gitignored pages stay out of the
+# committed assets/nav.json and search-index.json (they go to the *.local.json twins).
+pages/dev/tmp/
+# Local nav / search twins: they include the gitignored pages above
+assets/*.local.json
+# Dev server: settings incl. the LAN password, and its log
+.site.json
+.site.json.tmp
+.auth
+server.log

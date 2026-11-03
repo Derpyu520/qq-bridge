@@ -1,7 +1,7 @@
 blank_issues_enabled: true
 contact_links:
   - name: 📖 先查文档（安装 / 配置 / 排障）
-    url: https://github.com/Derpyu520/qq-bridge/blob/main/docs/README.md
+    url: https://github.com/Derpyu520/qq-bridge/blob/main/docs/index.html
     about: 文档索引：每篇一句话说明 + 是否仍然有效。很多问题是配置或版本不匹配，这里能直接解决。
   - name: 🔒 报告安全漏洞（私密）
     url: https://github.com/Derpyu520/qq-bridge/security/advisories/new

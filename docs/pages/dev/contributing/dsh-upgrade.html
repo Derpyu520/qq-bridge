@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DSH 升级清单 — qq-bridge</title>
+<meta name="description" content="沿用 DSH_020_ADAPTATION.md §10 ，本轮补充三条：">
+<meta property="og:title" content="DSH 升级清单 — qq-bridge">
+<meta property="og:description" content="沿用 DSH_020_ADAPTATION.md §10 ，本轮补充三条：">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../../assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="../../../" data-tab="Developer Guide" data-page-rel="pages/dev/contributing/dsh-upgrade.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../../../index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout has-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body guide">
+  <div class="topbar">
+  <div class="crumbs">
+    <a href="../../../index.html">qq-bridge</a>
+    <span class="sep">/</span>
+    Pages
+    <span class="sep">/</span>
+    Developer Guide
+    <span class="sep">/</span>
+    Contributing
+    <span class="sep">/</span>
+    <span class="here">DSH 升级清单</span>
+  </div>
+</div>
+  <h1>DSH 升级清单</h1>
+<!-- moved verbatim from pages/records/index.html [h2:6] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="6-下次-dsh-升级的增量清单">6. 下次 DSH 升级的增量清单</h2>
+<p>沿用 <a href="../../records/adaptation/dsh-0.2.0.html#10-下次-dsh-升级的操作清单可复用">DSH_020_ADAPTATION.md §10</a>，本轮补充三条：</p>
+<ol>
+<li><strong><code>verify:adaptation</code> 必须有"真跑一回合"</strong>：静态断言看不出提示词变量被删。
+本轮之前它只查"preset 里有没有 <code>{{cwd}}</code>"，而 <code>{{cwd}}</code> 恰恰是坏的那个。</li>
+<li><strong>先看 <code>state/tool-restrict.log</code> 的 <code>known global tools</code></strong>——它是"全局层到底有什么"的第一手证据，
+新增名字基本等于 1 个必须补的守卫条目。别只看 <code>restrict ok=</code> 的分子：大部分名字是 scoped 工具，
+restrict 对它们本来就抛错，要看的是<strong>失败样例里有没有全局工具</strong>。</li>
+<li><strong>升级后立刻跑一次 <code>node scripts/probe-tools.mjs qq-chat-v2</code></strong>：它同时覆盖
+persona 装配、工具面、MCP 调用三条链路，是全仓库最便宜的一次端到端体检。</li>
+</ol>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+<aside class="sidebar-right" aria-label="On this page">
+  <div class="sidebar-inner">
+    <span class="toc-label">On this page</span>
+    <nav class="toc-list">
+      <a class="toc-h2" href="#6-下次-dsh-升级的增量清单">6. 下次 DSH 升级的增量清单</a>
+    </nav>
+  </div>
+</aside>
+
+</div>
+
+<script src="../../../assets/nav.js"></script>
+
+</body>
+</html>

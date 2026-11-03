@@ -144,7 +144,7 @@ SnowLuma 采用源码可见的非商业许可（[LICENSE](https://github.com/Sno
 据此，本软件不安装、不复制、不打包、不自动部署 SnowLuma 及其原生组件，亦不以程序化方式启动或
 结束其进程；仅进行端口探测与状态查询，缺失时提示使用者自行经官方渠道获取并启动。
 
-该约束已作为设计不变量 L6 记录于本项目的[安全基线](docs/guides/SECURITY_BASELINE.md)。
+该约束已作为设计不变量 L6 记录于本项目的[安全基线](docs/pages/dev/security/baseline.html)。
 原 `start_snowluma` / `stop_snowluma` 工具与 `snowluma.allowProcessControl` 配置项已于 v0.1.5 移除，
 并有回归断言（`scripts/test-audit-setup-guards.mjs`）防止回退。
 

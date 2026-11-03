@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>常见问题 — qq-bridge</title>
+<meta name="description" content="桥接自身不包含原生注入组件，也不启动或控制 SnowLuma / QQ；遇到上游接入失败应先检查 SnowLuma 日志，而不是直接归因于桥接。">
+<meta property="og:title" content="常见问题 — qq-bridge">
+<meta property="og:description" content="桥接自身不包含原生注入组件，也不启动或控制 SnowLuma / QQ；遇到上游接入失败应先检查 SnowLuma 日志，而不是直接归因于桥接。">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="../../" data-tab="使用指南" data-page-rel="pages/use/faq.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../../index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout has-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body guide">
+  <div class="topbar">
+  <div class="crumbs">
+    <a href="../../index.html">qq-bridge</a>
+    <span class="sep">/</span>
+    Pages
+    <span class="sep">/</span>
+    <a href="index.html">使用指南</a>
+    <span class="sep">/</span>
+    <span class="here">常见问题</span>
+  </div>
+</div>
+  <h1>常见问题</h1>
+<!-- moved verbatim from pages/ops/dsh-setup.html [h2:常见问题] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="常见问题">常见问题</h2>
+<ul>
+<li><strong>启动时先出现「连接断开（1006）」随后恢复</strong>：部分 SnowLuma 部署会为 HTTP 与 WS 使用不同令牌，而 <code>config.json</code> 的 <code>snowluma.accessToken</code> 只显式保存一个值。首次 WS 连接可能因此失败，再由桥接从 <code>snowluma.homeDir</code> 的 <code>config/onebot_&lt;QQ号&gt;.json</code> 发现对应令牌并重连。仅在这条自愈链路成功时，短暂 1006 属于预期现象；如果持续失败或收不到消息，则需检查令牌和 <code>homeDir</code>，不能一概视为正常。</li>
+<li><strong>QQ 上毫无反应，但桥接日志说「SnowLuma 已连接」</strong>：已连接只表示 WebSocket 建立，不能证明 QQ 数据链路正常，可能是上游接入层（SnowLuma 的 <code>[Hook]</code>）未收到数据，也可能是桥接配置或会话路由问题，应按以下顺序排查。
+<ol>
+<li>打开控制台「运行总览」，看 <strong><code>SnowLuma 上游</code></strong> 卡片：<code>已连接 · 未接收</code> 表示连接存在但未收到上游数据；「访问与安全」页会有对应告警条与处置建议。<code>GET /api/status</code> 的 <code>snowluma</code> 字段（<code>degraded</code> / <code>good</code> / <code>hint</code>）给的是同一份判断。</li>
+<li>去看 <strong>SnowLuma 自己的接入日志</strong> <code>logs/snowluma-*.log</code>，搜 <code>[Hook]</code>（以下均为 SnowLuma 日志字段）：
+<ul>
+<li><code>receive path stale: … reporting good=false</code> —— 日志：收不到数据（会自愈，也可能不自愈）</li>
+<li><code>process enumeration timed out after 4000ms</code> —— 日志：连 QQ 进程都枚举不到</li>
+<li>正常应有 <code>login detected: PID=…</code> + <code>pipe connected: PID=…</code> —— 日志字段</li>
+</ul></li>
+<li>再核对白名单、DSH 会话与桥接日志，排除本项目的配置问题。是否升级 SnowLuma 应根据其发布说明判断；本项目只读取本机接入配置与上游健康状态，不部署、不修改上游本体。历史核验仅证明 <strong>1.14.9 与 1.14.20</strong> 的原生组件相同，因此那次版本升级不能修复原生 hook 挂载问题，不能推广为所有版本的结论（见 <a href="../records/adaptation/dsh-0.2.0.html">DSH 0.2.0 适配记录</a>）。</li>
+<li>顺带确认 QQ 客户端本身是登录状态、没有被顶号；SnowLuma <strong>1.14.20</strong> 已验证会通过 <code>bot_status</code> 事件报告账号上下线，桥接日志会记录「QQ 账号会话已离线」。</li>
+</ol>
+<blockquote>
+<p>桥接自身不包含原生注入组件，也不启动或控制 SnowLuma / QQ；遇到上游接入失败应先检查 SnowLuma 日志，而不是直接归因于桥接。</p>
+</blockquote></li>
+<li><strong>看不到 <code>qq-mode</code> 设置卡片</strong>：这是<strong>已知限制</strong>，不是配置错误。DSH 的 <code>settings.plugin.item</code> 槽位只渲染「host 已注册的命名空间 ∩ 声明了该 key 的卡片」，而卡片必须由插件的<strong>浏览器半</strong>（<code>package.json</code> 的 <code>dsh.client</code> + <code>lib/client.js</code>）注册；<code>plugins/qq-mode-console</code> 目前只有 host 半。反复重跑 <code>setup-dsh.mjs</code> 或重启 DSH 都不会让卡片出现。要真正修好需补一个 <code>lib/client.js</code>。</li>
+<li><strong>改了模式却不生效 / 5 秒后被改回去</strong>：<strong>此问题已在 <code>src/bridge.js</code> 修复</strong>（桥接需重启后生效）。历史成因：<code>refreshMode()</code> 每 5 秒被 <code>checkDsh</code> 调用一次，先读 DSH 的 <code>qq-mode</code> 命名空间，只要有合法值就<strong>直接 return，完全忽略本地 <code>state/mode.json</code></strong>；而命名空间的默认值始终存在，所以 DSH 侧永远有值 —— 于是控制台写本地文件会在下一次轮询被覆盖回滚。现在 <code>POST /api/mode</code> 会<strong>写穿到 DSH 设置</strong>（<code>api.settings.update({ ns: &#x27;qq-mode&#x27;, patch: { mode } })</code>），响应里新增 <code>dshSynced</code> 字段；若写穿失败（DSH 未运行等）会记日志并保留本地值。注意 <code>settings/update</code> 在 0.2.0 是<strong>多参数</strong> RPC：args 是 <code>{ ns, patch, expectedRevision }</code> 平铺，<strong>不是</strong> <code>{ request: {...} }</code>（传 request 会被网关拒为 <code>gateway/arguments-invalid</code>）。同源问题：<code>closedAgentPreset</code> 在 DSH schema 里不存在，原先也因这个提前 return 而失效，现已改为始终以本地 <code>state/mode.json</code> 为准。若仍看到回滚，检查桥接日志里是否有「写穿 DSH 设置失败」。</li>
+<li><strong>MCP 工具没有出现</strong>：确认 <code>cordis.patch.yml</code> 中三个 MCP 条目的路径指向当前仓库，并重启 DSH。</li>
+<li><strong>preset 没有出现</strong>：DSH 0.1.7 起 preset <strong>不再</strong>是 <code>~/.dsh/.agent-presets/&lt;名&gt;/</code> 目录（该目录完全不被读取）。preset 现在是 profile 里的一条 <code>@deepseek-ai/dsh-agent-preset</code> 行，由 <code>plugins/qq-agent-presets</code> 这个 bundle 提供。检查 profile 的 <code>package.json</code> 的 <code>dsh.profile.bundles</code> 是否含 <code>qq-agent-presets</code>、<code>dependencies</code> 是否有对应的 <code>link:</code>，以及 <code>~/.dsh/profiles/web/node_modules/qq-agent-presets</code> 链接是否存在；缺了就重跑 <code>node scripts/setup-dsh.mjs</code> 再重启 DSH。桥接里可用 <code>npm run probe:protocol</code> / <code>npm run verify:adaptation</code> 确认 <code>agentPresets/list</code> 里能看到 <code>qq-chat</code>、<code>qq-chat-v2</code>。</li>
+<li><strong>安装完成但 RPC 看不到预设或设置</strong>：先对照安装脚本与运行中的 DSH/桥接是否使用相同用户、<code>DSH_HOME</code> 和 profile。终端里的 <code>--dump-config</code> 只证明该终端所用配置已合成，不证明后台进程使用同一份配置。<a href="https://github.com/Derpyu520/qq-bridge/issues/77">#77 的最终讨论</a>已将该次故障定位为运行用户不一致。若同一进程的插件注册表能看到预设，而 RPC 仍看不到，需保留安装形态和最小诊断继续定位 DSH 作用域问题（<a href="https://github.com/Derpyu520/qq-bridge/issues/97">#97</a>）；不能回退到完整工具预设绕过检查。</li>
+<li><strong><code>Cannot find package &#x27;js-yaml&#x27;</code> 等依赖缺失</strong>：Release 源码包不包含 <code>node_modules</code>。在解压后的仓库根目录运行 <code>npm install</code>，确认成功后再启动；不要跳过 <code>postinstall</code>。<code>package.json</code> 和锁文件已声明 <code>js-yaml</code>（<a href="https://github.com/Derpyu520/qq-bridge/issues/91">#91</a>）。</li>
+<li><strong>网页、搜索或图片因 fake-ip 被拦截</strong>：Clash/mihomo 的 fake-ip 可能把域名映射到 <code>198.18.0.0/15</code>，该段仍属于禁止访问的保留地址。可按 <a href="https://wiki.metacubex.one/config/dns/">mihomo DNS 官方文档</a>切换 <code>enhanced-mode: redir-host</code>，或在 <code>fake-ip-filter-mode: blacklist</code> 时让受影响的公网域名命中 <code>fake-ip-filter</code>，使其返回真实地址；修改后清理代理及系统 DNS 缓存再试。桥接仍会校验真实解析结果，不提供跳过私有地址检查的开关（<a href="https://github.com/Derpyu520/qq-bridge/issues/40">#40</a>、<a href="https://github.com/Derpyu520/qq-bridge/issues/111">#111</a>）。</li>
+<li><strong>启动 DSH 报 <code>failed to parse overlay cordis.patch.yml: YAMLException</code></strong>：多为历史版脚本残留的空数组 <code>[]</code> 引发。重新运行最新版脚本（会自动剥离）即可，或手动删除该文件里独立成行的 <code>[]</code> 后重启 DSH。</li>
+<li><strong>启动 DSH 报 <code>cannot resolve profile bundle &quot;qq-mode-console&quot;</code></strong>：profile 的 bundle 依赖尚未安装。运行 <code>dsh plugin --profile web install</code>（<code>web</code> 换成你的实际 profile 名）后重启 DSH；新版脚本会尝试自动执行这一步。</li>
+<li><strong>启动 DSH 报 <code>failed to apply loader entry persona (@deepseek-ai/dsh-persona): invalid config: $.prefix missing required value</code></strong>：preset 的 persona 段缺少 <code>prefix</code>。DSH 0.1.5 起 <code>dsh-persona</code> 只接受 <code>prefix</code> / <code>suffix</code> / <code>complete</code> / <code>includeRuntimeContext</code>，而旧写法用的是 <code>text</code> —— schemastery 的 <code>z.object</code> 非 strict，未知键会被<strong>静默忽略</strong>，于是真正报出来的是「缺 <code>prefix</code>」（<strong>不是</strong>「<code>text</code> 这个键被拒绝」）。重新运行 <code>node scripts/setup-dsh.mjs</code>（本仓库 preset 已改为 <code>prefix</code>），或手动把 preset 里的 <code>text:</code> 改成 <code>prefix:</code>。可用 <code>node scripts/verify-persona-config.mjs</code> 提前自检。</li>
+<li><strong>profile 的 bundle 条目被重置</strong>：升级 DSH 可能重置 <code>~/.dsh/profiles/web/package.json</code>，把 <code>qq-mode-console</code> 的依赖与 bundle 条目删掉（症状是启动报 <code>cannot resolve profile bundle</code>，或桥接读不到 <code>qq-mode</code> 设置值）。重新运行 <code>node scripts/setup-dsh.mjs</code>，再跑 <code>dsh plugin --profile web install</code> 并重启 DSH。</li>
+<li><strong>QQ preset 挂载失败，群里 AI 完全没反应</strong>：<code>chat</code> / <code>reserved</code> / <code>reserved2</code>（会话可能属于 QQ 群）<strong>必须</strong>挂上 <code>qq-chat</code> / <code>qq-chat-v2</code>，否则桥接<strong>直接拒绝建会话</strong>并打日志 <code>⛔ 群聊/仿真会话缺少 preset …</code>——QQ 上表现为「发了消息没人回」，而桥接日志里能查到原因。这是有意的 fail-closed 设计：<strong>「无 preset 会话」= DSH 默认 preset（通常 <code>standard</code>，含 bash/文件读写）</strong>，降级过去等于把本地工具暴露给群里的任何人。<code>closed-agent</code> 模式（仅 owner 私聊）是唯一例外，那里本就使用完整工具面，允许回落。修复：确认 <code>plugins/qq-agent-presets</code> bundle 已注册进 profile（<code>bundles</code> + <code>link:</code> 依赖 + <code>node_modules</code> junction 三者齐备，跑 <code>node scripts/setup-dsh.mjs</code> 可自动补齐）并重启 DSH；若手改过 <code>config.json</code> 的 <code>agentPreset</code>，确认该名字确实在 DSH 的 preset 清单里。</li>
+<li><strong>发送消息报 <code>unauthorized</code> / HTTP 401</strong>：先分别核对 SnowLuma HTTP 与 WebSocket 的令牌、地址和实际使用账号。HTTP 与 WS 可以使用不同令牌，不要求强制设为相同；确保 <code>snowluma.accessToken</code> 与 HTTP API 匹配，并确认 <code>snowluma.homeDir</code> 能让桥接发现 WS 所需的对应令牌，然后重启桥接。</li>
+<li><strong>DSH 侧 401/鉴权失败</strong>：DSH 0.1.7 起进程启动 token 是<strong>每进程现生成、只存在内存</strong>的随机数（不落盘、不可推导），旧版「从 <code>~/.dsh/guard/logs/server-*.out.log</code> 里读 token」的办法已经失效（读到的是上一个进程的陈旧 token，换 Cookie 只会 401）。桥接现在<strong>默认离线铸造 Cookie</strong>：读 <code>~/.dsh/.credentials.yaml</code> 里持久化的 <code>client-connection/browser-session</code> 签名密钥自签一个会话 Cookie，不依赖任何进程期状态。<code>config.json</code> 的 <code>dsh.authToken</code> 一般应留空；只有显式填了才会优先走 token 交换。若报鉴权失败，先确认 <code>DSH_HOME</code> 指向真正的 <code>.dsh</code> 目录、且该文件里有 <code>client-connection/browser-session</code> 记录。<code>npm run test:dsh-auth</code>（17 项断言）与 <code>npm run self-test</code> 可快速定位。</li>
+<li><strong>发送消息报 HTTP 426（Upgrade Required）</strong>：说明 <code>config.json</code> 里的 <code>snowluma.httpUrl</code> 指向了 <strong>WebSocket 端口</strong>。<code>httpUrl</code> 必须是 OneBot 的 <strong>HTTP API 地址</strong>（例如 <code>http://127.0.0.1:3000</code>），而 <code>wsUrl</code> 才是 WebSocket 地址（例如 <code>ws://127.0.0.1:3001</code>）。请在 SnowLuma WebUI 的 OneBot 配置里分别确认 HTTP 和 WebSocket 的端口。也可以运行诊断脚本：
+<pre><code class="language-bash">node scripts/check-onebot-status.mjs</code></pre></li>
+</ul>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+<aside class="sidebar-right" aria-label="On this page">
+  <div class="sidebar-inner">
+    <span class="toc-label">On this page</span>
+    <nav class="toc-list">
+      <a class="toc-h2" href="#常见问题">常见问题</a>
+    </nav>
+  </div>
+</aside>
+
+</div>
+
+<script src="../../assets/nav.js"></script>
+
+</body>
+</html>

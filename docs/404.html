@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>404 — Page not found</title>
+<meta name="robots" content="noindex">
+<!-- Self-contained on purpose: GitHub Pages serves this file for any unknown
+     path at any depth, so it can't rely on relative ../assets/ links. Styles
+     are inline and theme-aware via prefers-color-scheme. -->
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: #fafaf7;
+    color: #1a1a1a;
+    text-align: center;
+    padding: 2rem;
+  }
+  .mark {
+    width: 56px; height: 56px;
+    border-radius: 13px;
+    background: #2d6a4f;
+    margin: 0 auto 1.4rem;
+  }
+  .mark svg { width: 100%; height: 100%; }
+  h1 { font-size: 4rem; margin: 0; letter-spacing: -.02em; }
+  p { font-size: 1.05rem; color: #6b6b6b; margin: .4rem 0 1.6rem; }
+  a.home {
+    display: inline-block;
+    padding: .6rem 1.2rem;
+    border-radius: 7px;
+    background: #2d6a4f;
+    color: #fff;
+    text-decoration: none;
+    font-weight: 600;
+  }
+  a.home:hover { background: #245a42; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #1a1a1c; color: #e8e8e6; }
+    p { color: #8a8a86; }
+  }
+</style>
+</head>
+<body>
+  <main>
+    <div class="mark">
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <g fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round">
+          <path d="M9 9.5h14"/><path d="M9 16h14"/><path d="M9 22.5h9"/>
+        </g>
+      </svg>
+    </div>
+    <h1>404</h1>
+    <p>That page wandered off. Let's get you back.</p>
+    <a class="home" href="/" id="home">Go to homepage</a>
+  </main>
+  <script>
+    // Point "home" at the site root. For a GitHub project page
+    // (you.github.io/repo/…) that's the first path segment; custom-domain or
+    // user-page sites can just leave the default "/".
+    (function () {
+      var parts = location.pathname.split('/').filter(Boolean);
+      if (location.hostname.endsWith('github.io') && parts.length > 0) {
+        document.getElementById('home').href = '/' + parts[0] + '/';
+      }
+    })();
+  </script>
+</body>
+</html>

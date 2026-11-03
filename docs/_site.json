@@ -1,0 +1,7 @@
+{
+  "site_name": "qq-bridge",
+  "tagline": "SnowLuma（OneBot v11）与 DeepSeek Harness 之间的本地消息桥接",
+  "footer": "qq-bridge docs",
+  "logo_href": "index.html",
+  "base_url": ""
+}

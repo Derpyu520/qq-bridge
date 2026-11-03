@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>模式与权限 — qq-bridge</title>
+<meta name="description" content="模式由 桥接控制台 （默认 http://127.0.0.1:3100 ）顶部的模式按钮切换，也可直接改 DSH 设置的 qq-mode 命名空间； 控制台会 同时 写穿到 DSH 设置与本地 qq-bridge/state/mode.json ，两者保持一致。 （DSH 设置页目前 没有 qq-mode 卡片：该插件只有 host 半，未实现浏览器半。详见 安装与首次运行 。） 桥接每 5…">
+<meta property="og:title" content="模式与权限 — qq-bridge">
+<meta property="og:description" content="模式由 桥接控制台 （默认 http://127.0.0.1:3100 ）顶部的模式按钮切换，也可直接改 DSH 设置的 qq-mode 命名空间； 控制台会 同时 写穿到 DSH 设置与本地 qq-bridge/state/mode.json ，两者保持一致。 （DSH 设置页目前 没有 qq-mode 卡片：该插件只有 host 半，未实现浏览器半。详见 安装与首次运行 。） 桥接每 5…">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="../../" data-tab="使用指南" data-page-rel="pages/use/modes.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../../index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout has-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body guide">
+  <div class="topbar">
+  <div class="crumbs">
+    <a href="../../index.html">qq-bridge</a>
+    <span class="sep">/</span>
+    Pages
+    <span class="sep">/</span>
+    <a href="index.html">使用指南</a>
+    <span class="sep">/</span>
+    <span class="here">模式与权限</span>
+  </div>
+</div>
+  <h1>模式与权限</h1>
+<!-- moved verbatim from RULES.md [pre] on 2026-11-03 (docs reorg step 2) -->
+
+<!-- moved verbatim from RULES.md [h2:运行模式] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="运行模式qq-桥接四模式">运行模式（QQ 桥接四模式）</h2>
+<p>模式由<strong>桥接控制台</strong>（默认 <code>http://127.0.0.1:3100</code>）顶部的模式按钮切换，也可直接改 DSH 设置的 <code>qq-mode</code> 命名空间；
+控制台会<strong>同时</strong>写穿到 DSH 设置与本地 <code>qq-bridge/state/mode.json</code>，两者保持一致。
+（DSH 设置页目前<strong>没有</strong> <code>qq-mode</code> 卡片：该插件只有 host 半，未实现浏览器半。详见<a href="install.html">安装与首次运行</a>。）
+桥接每 5 秒读取一次；控制台切换立即应用。会话持久化记录创建时的模式、preset 和管理员边界，权限变化时自动撤销旧会话映射和二代 token，并在下次消息到达时重建，避免继续使用旧的高权限 preset。升级前没有这些权限元数据的旧会话也会重建一次，历史仍保留在 DSH。
+全新安装运行 <code>scripts/setup-dsh.mjs</code> 后，DSH 设置与本地兜底默认均为 <code>reserved2</code>；若已存在 <code>state/mode.json</code> 或 DSH 设置旧值，脚本不会覆盖。</p>
+<table>
+<thead><tr><th>模式</th><th>允许通道</th><th>agent preset</th><th>用途</th></tr></thead>
+<tbody>
+<tr><td><code>chat</code></td><td>白名单群 + 白名单私聊</td><td>qq-chat（安全聊天）</td><td>日常聊天</td></tr>
+<tr><td><code>closed-agent</code></td><td><strong>仅</strong> 私聊 ownerQQ</td><td>DSH 默认 preset（通常 <code>standard</code>，完整工具）</td><td>你在 QQ 私聊里操控 DSH</td></tr>
+<tr><td><code>reserved</code>（一代仿真）</td><td>暂同 chat</td><td>qq-chat</td><td>仿真群友：观望/活跃/试探/退场状态机，选择性参与并主动收尾</td></tr>
+<tr><td><code>reserved2</code>（二代仿真，运行 <code>setup-dsh.mjs</code> 后默认）</td><td>暂同 chat</td><td>qq-chat-v2</td><td>文本不自动转发，AI 通过工具自主看消息/发言/等待/设置唤醒与潜水</td></tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <code>closed-agent</code> 模式下 owner 私聊 agent 拥有<strong>完整本地工具</strong>（DSH 默认 preset，通常是 <code>standard</code>），
+这是有意为之（QQ 远程操控 DSH）。该模式只放行 owner 私聊，群友完全无法触达；
+切换回 <code>chat</code> 后，owner 私聊也回到 qq-chat 安全预设。</p>
+<p>注：DSH 0.1.5 已不存在 <code>router-standard</code> preset。桥接现在留空表示「用 DSH 默认 preset」，
+并在启动时读取 <code>agentPresets/list</code> 校验；填了不存在的 preset 名会回退到默认值并打警告，
+绝不会创建出「无 preset」会话（那会被 DSH 套上 <code>standard</code>，对 QQ 群是安全回归）。</p>
+</blockquote>
+
+<!-- moved verbatim from RULES.md [h2:权限分层] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="权限分层">权限分层</h2>
+<table>
+<thead><tr><th>主体</th><th>通道</th><th>权限</th></tr></thead>
+<tbody>
+<tr><td><strong>管理员（ownerQQ，可通过桥接控制台、<code>config.json</code> 或 DSH <code>qq-mode</code> 设置命名空间 / RPC 配置）</strong></td><td>QQ 群/私聊</td><td>正常聊天 + <strong>管理命令由桥接硬执行</strong>（不经过模型）：<code>/role &lt;角色名&gt;</code> 切人格、<code>/role off</code> 清除、<code>/silent</code> 静默、<code>/active</code> 恢复、<code>/reset</code>、<code>/status</code>；消息自动带【管理员】标记</td></tr>
+<tr><td><strong>群友</strong></td><td>QQ 群</td><td><strong>仅正常聊天</strong>。控制词、<code>/</code> 管理命令被桥接拦截；静默模式下消息不投递给 agent</td></tr>
+<tr><td><strong>管理员</strong></td><td><strong>桥接控制台</strong>（<code>http://127.0.0.1:3100</code>）</td><td><strong>最高权限</strong>：控制模式（控制台顶部模式按钮）、控制角色/静默（写 <code>state/current-role.json</code>）、完整 DSH 工具（含本地操作）、查看 QQ 活动日志（<code>state/qq-activity.log</code>）、直接打开「QQ 聊天」工作区会话对话</td></tr>
+<tr><td><strong>QQ 会话 agent（chat 模式）</strong></td><td>—</td><td>最低权限面（见下）</td></tr>
+</tbody>
+</table>
+
+<!-- moved verbatim from RULES.md [h2:QQ 会话 agent 的硬边界] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="qq-会话-agent-的硬边界">QQ 会话 agent 的硬边界</h2>
+<ol>
+<li><strong>无本地工具</strong>：qq-chat / qq-chat-v2 预设不挂载 bash/pwsh、文件读写、子代理、工作流——群友无论如何诱导，agent 物理上无法操作本机。</li>
+<li><strong>QQ 动作安全子集</strong>：只允许 <code>mcp__snowluma__*</code>、<code>mcp__snowluma-host__*</code>、<code>mcp__web-search-safe__*</code> 三个命名空间下的工具，以及 <code>ask_user_question</code> / <code>todo_write</code>；其他工具（含 <code>dev_*</code> 开发/管理工具）在执行期会被 <code>qq-tool-restrict.mjs</code> 拒绝。QQ 动作无禁言、踢人、文件上传下载等管理操作。</li>
+<li><strong>只读联网搜索</strong>：<code>qq-chat</code> / <code>qq-chat-v2</code> 预设已关闭 DSH 内置 <code>tool-web</code> 的 <code>search</code> / <code>fetch</code>，联网统一走 <code>src/mcp-web-search-safe.js</code> 提供的 <code>mcp__web-search-safe__web_search/web_fetch</code>。不暴露本地文件、命令执行、写操作。
+<ul>
+<li>✅ <code>mcp__web-search-safe__web_fetch</code> 已做 SSRF 加固：仅 http/https、禁止 localhost/私有 IP/链路本地/CGNAT/带凭据 URL、DNS 解析结果全量校验、每跳重定向重新校验、响应体限量读取。</li>
+</ul></li>
+<li><strong>发送强制白名单</strong>：所有发送类工具（<code>qq_send_group_message</code> / <code>qq_send_private_message</code> / <code>qq_send_message</code> / <code>qq_send_burst</code> / <code>qq_reply</code> / <code>qq_send_poke</code> / <code>qq_send_sticker</code> / <code>qq_send_voice</code> 等）的目标必须命中 <code>config.json</code> 的 <code>allow.groups</code> / <code>allow.private</code>，否则拒绝执行。
+<ul>
+<li><strong>语音额外收紧</strong>：<code>qq_send_voice</code> 只能发<strong>语音库</strong>（<code>socialV2.voice.dir</code>，默认 <code>qq-bridge/audio/</code>）里的文件，不能发任意本地路径、URL 或 base64（防 prompt injection 拿本机文件当语音外发）；另有独立的时长/体积/频率上限（<code>socialV2.voice.*</code>），额度与文本发送分开计数。详见 <code>docs/guides/VOICE.md</code>（本地文档，未入库）。</li>
+</ul></li>
+<li><strong>发送禁令（模型层）</strong>：persona 明确规定只有「管理端明确指示」或「【管理员】标记的明确要求」才可使用发送工具；禁止写"我已回复/消息已发送（message_id）"类汇报。</li>
+<li><strong>回复审计（桥接层硬拦截）</strong>：agent 回复文本若包含本机路径（<code>C:\</code>、<code>/home/</code> 等）或凭据特征（token/password/secret/api key 等）→ <strong>整条拦截不发送</strong>，并告知"被安全策略拦截"。</li>
+<li><strong>人格由桥接注入</strong>：角色设定来自 <code>state/current-role.json</code> + <code>roles/&lt;角色&gt;.md</code>，桥接注入到消息；群友口头要求改角色无效（桥接直接拦截），agent 也无文件工具自行更改。</li>
+<li><strong>静默模式</strong>：<code>current-role.json</code> 的 <code>mode: &quot;silent&quot;</code> 时，群友消息不再投递给 agent（仅记录日志），只有管理员消息可对话。</li>
+<li><strong>执行期会话绑定（SELF_KEY）</strong>：凡<strong>参数表里声明了 <code>key</code></strong> 的 QQ 工具，调用前都会比对「这次调用所属的 DSH 会话」。
+<ul>
+<li>支持 <code>target</code> 作为 <code>key</code> 别名的工具同样校验可信会话；缺少目标、别名冲突或跨会话目标一律拒绝。旧发送工具按实际 <code>groupId</code> / <code>userId</code> 校验，不能通过省略 <code>key</code> 跳过绑定。</li>
+<li>桥接建会话时预分配 <code>qqb-&lt;g|p&gt;-&lt;群号&gt;-&lt;随机后缀&gt;</code> 形式的 sessionId（模型看不到也改不了）；
+preset 的 <code>qq-tool-restrict</code> 守卫从 <code>exec.agent.id</code> 解出可信身份，再与模型给的 <code>key</code> 比对。</li>
+<li>不一致或解不出身份 ⇒ 一律返回同一句「该会话不可用」（不可区分，避免变成群号枚举 oracle）。</li>
+<li>升级后旧的 <code>session-*</code> 映射会在首次使用时退役重建，不会出现「升级后工具全废」。</li>
+<li>在 DSH 里<strong>手工新建</strong>的 qq-chat 会话不属于任何 QQ 会话，解不出身份 ⇒ 它的 QQ 工具会被拒绝。这是有意的：
+想操作 QQ 请从控制台打开桥接建的那个会话（id 形如 <code>qqb-…</code>），不要新建。</li>
+</ul></li>
+</ol>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+<aside class="sidebar-right" aria-label="On this page">
+  <div class="sidebar-inner">
+    <span class="toc-label">On this page</span>
+    <nav class="toc-list">
+      <a class="toc-h2" href="#运行模式qq-桥接四模式">运行模式（QQ 桥接四模式）</a>
+      <a class="toc-h2" href="#权限分层">权限分层</a>
+      <a class="toc-h2" href="#qq-会话-agent-的硬边界">QQ 会话 agent 的硬边界</a>
+    </nav>
+  </div>
+</aside>
+
+</div>
+
+<script src="../../assets/nav.js"></script>
+
+</body>
+</html>

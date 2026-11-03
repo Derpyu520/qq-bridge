@@ -1,0 +1,68 @@
+{
+  "label": "Developer Guide",
+  "key": "dev",
+  "landing": "core/codebase-map.html",
+  "order_priority": 20,
+  "sections": [
+    {
+      "label": "Core",
+      "dir": "core",
+      "key": "dev",
+      "order": [
+        "blueprint",
+        "architecture",
+        "codebase-map",
+        "glossary"
+      ]
+    },
+    {
+      "label": "Design docs",
+      "dir": "design-docs",
+      "key": "dev",
+      "order": [
+        "dsh-session",
+        "snowluma-link",
+        "prompts",
+        "tool-surface",
+        "web-fetch",
+        "outbound",
+        "media",
+        "slang-learner",
+        "token-ledger",
+        "state"
+      ]
+    },
+    {
+      "label": "Security",
+      "dir": "security",
+      "key": "dev",
+      "order": [
+        "threat-model",
+        "baseline",
+        "privacy-scan",
+        "release-checks",
+        "reporting"
+      ]
+    },
+    {
+      "label": "Contributing",
+      "dir": "contributing",
+      "key": "dev",
+      "order": [
+        "setup",
+        "testing",
+        "pull-requests",
+        "dsh-upgrade"
+      ]
+    },
+    {
+      "label": "tmp",
+      "dir": "tmp",
+      "key": "dev",
+      "order": [
+        "11-03-engine-features",
+        "11-03-ia"
+      ]
+    }
+  ]
+}

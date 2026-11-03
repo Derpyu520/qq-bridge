@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>黑话学习 — qq-bridge</title>
+<meta name="description" content="SnowLuma（OneBot v11）与 DeepSeek Harness 之间的本地消息桥接">
+<meta property="og:title" content="黑话学习 — qq-bridge">
+<meta property="og:description" content="SnowLuma（OneBot v11）与 DeepSeek Harness 之间的本地消息桥接">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="../../" data-tab="使用指南" data-page-rel="pages/use/slang.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../../index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout has-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body guide">
+  <div class="topbar">
+  <div class="crumbs">
+    <a href="../../index.html">qq-bridge</a>
+    <span class="sep">/</span>
+    Pages
+    <span class="sep">/</span>
+    <a href="index.html">使用指南</a>
+    <span class="sep">/</span>
+    <span class="here">黑话学习</span>
+  </div>
+</div>
+  <h1>黑话学习</h1>
+<!-- moved verbatim from RULES.md [h2:黑话] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="黑话--网络用语学习与迭代">黑话 / 网络用语学习与迭代</h2>
+<ul>
+<li>桥接会把普通群聊消息放入滚动窗口（<code>state/slang.json</code> 的候选来源），攒够 <code>slang.extractMinMessages</code> 条后交给独立 DSH 学习会话提取“疑似黑话”。</li>
+<li>候选默认 <strong>不自动转正</strong>：DSH 可联网搜索生成含义/用法/示例，但最终必须由管理员在控制台「黑话词库」里 <strong>确认 / 拒绝 / 编辑 / 删除</strong>。</li>
+<li>只有 <code>status: confirmed</code> 且含义非空的词条会被注入 QQ 聊天 agent 的 prompt（<code>【群聊黑话表】</code>），且按出现次数排序、最多 <code>slang.injectMax</code> 条。</li>
+<li>学习会话与 QQ 会话隔离：学习任务的输出不会发到 QQ；它只读消息文本，不执行本地操作。</li>
+<li>学习会话不会向用户提问/请求审批，桥接会自动跳过这类请求，避免阻塞学习任务。</li>
+<li><code>web_search</code> 工具返回的搜索摘要仅作为候选解释，不视为权威；控制台可随时修改或拒绝。</li>
+<li>敏感信息/路径/凭据仍走统一审计；黑话库仅存白名单群内消息的文本证据，控制台可删除。</li>
+</ul>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+<aside class="sidebar-right" aria-label="On this page">
+  <div class="sidebar-inner">
+    <span class="toc-label">On this page</span>
+    <nav class="toc-list">
+      <a class="toc-h2" href="#黑话--网络用语学习与迭代">黑话 / 网络用语学习与迭代</a>
+    </nav>
+  </div>
+</aside>
+
+</div>
+
+<script src="../../assets/nav.js"></script>
+
+</body>
+</html>

@@ -4,7 +4,7 @@ cd /d "%~dp0"
 rem Harden state/ ACLs (Windows needs WRITE_DAC; the directory owner normally has it,
 rem so no UAC prompt in the usual case). This NEVER blocks startup: if it cannot get
 rem permission it prints a copy-pasteable command and exits 0.
-rem See docs/guides/SECURITY_BASELINE.md ("secrets at rest").
+rem See docs/pages/dev/security/baseline.html ("secrets at rest").
 node scripts\harden-state-acl.mjs --quiet
 :loop
 node "%~dp0src\bridge.js"
