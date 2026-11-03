@@ -35,7 +35,7 @@ function call(port, pathname, { method = 'GET', headers = {}, body, connectHost 
         res.on('end', () => {
           let parsed = null;
           try { parsed = JSON.parse(data); } catch {}
-          resolve({ status: res.statusCode, body: parsed, text: data });
+          resolve({ status: res.statusCode, body: parsed, text: data, setCookie: [].concat(res.headers['set-cookie'] ?? []), location: res.headers.location });
         });
       },
     );
@@ -215,14 +215,46 @@ console.log('## /api/console/access');
     const loginMissing = await call(port, '/');
     ok(loginMissing.status === 401 && /需要控制台令牌/.test(loginMissing.text || ''), 'GET / 无令牌 → 登录页（需要令牌）', `HTTP ${loginMissing.status}`);
     ok(/name="token"/.test(loginMissing.text || ''), '登录页是令牌表单', '');
+    ok(/\/api\/console\/login/.test(loginMissing.text || ''), '登录页把令牌 POST 给 /api/console/login（不进 URL）', '');
     const loginInvalid = await call(port, '/?token=definitely-wrong-token');
     ok(loginInvalid.status === 401 && /控制台令牌错误/.test(loginInvalid.text || ''), 'GET / 令牌错误 → 登录页（令牌错误）', `HTTP ${loginInvalid.status}`);
     ok(!/definitely-wrong-token/.test(loginInvalid.text || ''), '登录页不回显用户输入的令牌', '');
+    ok(!loginInvalid.setCookie.some((c) => /qq_bridge_console=[^;]/.test(c)), '令牌错误不下发 cookie', JSON.stringify(loginInvalid.setCookie));
 
-    // 通过 ?token= 引导进入时不再被鉴权层拦下（夹具没有 public/console.html，所以只断言
-    // 「不是登录页」；真实页面内容由 test-console-static / test-console 覆盖）。
+    // ── 登录 → cookie → 免令牌访问 ─────────────────────────────────────────
+    // 这是这次改动的核心：凭证放在脚本读不到的 HttpOnly cookie 里。
+    let r2 = await call(port, '/api/console/login', { method: 'POST', body: { token: 'wrong-token-wrong-token' } });
+    ok(r2.status === 401 && r2.body?.code === 'console-token-invalid', '登录失败 → 401 console-token-invalid', `HTTP ${r2.status}`);
+    ok(r2.setCookie.length === 0, '登录失败不下发 cookie');
+
+    r2 = await call(port, '/api/console/login', { method: 'POST', body: { token: 'fixture-console-token' } });
+    ok(r2.status === 200 && r2.body?.ok === true, '正确令牌 → 登录成功', `HTTP ${r2.status}`);
+    const setCookie = r2.setCookie[0] || '';
+    ok(/^qq_bridge_console=fixture-console-token/.test(setCookie), 'Set-Cookie 带令牌', setCookie);
+    ok(/HttpOnly/i.test(setCookie), 'cookie 是 HttpOnly（脚本读不到）', setCookie);
+    ok(/SameSite=Strict/i.test(setCookie), 'cookie 是 SameSite=Strict（跨站请求不带）', setCookie);
+    ok(/Path=\//.test(setCookie), 'cookie 的 Path=/', setCookie);
+    const cookieHeader = setCookie.split(';')[0];
+
+    // 只带 cookie、不带任何令牌头，就能读管理端点。
+    r2 = await call(port, '/api/console/access', { headers: { cookie: cookieHeader } });
+    ok(r2.status === 200 && r2.body?.ok === true, '仅凭 cookie 可通过鉴权', `HTTP ${r2.status}`);
+
+    // 令牌头仍然可用（脚本 / CLI），并且会顺手把 cookie 刷成当前值。
+    r2 = await call(port, '/api/console/access', { headers: { 'x-console-token': 'fixture-console-token' } });
+    ok(r2.status === 200 && r2.setCookie.some((c) => /qq_bridge_console=fixture-console-token/.test(c)), '令牌头仍可用，并顺手下发 cookie', `HTTP ${r2.status}`);
+
+    // 退出登录：Max-Age=0 让浏览器丢弃 cookie。
+    r2 = await call(port, '/api/console/logout', { method: 'POST', body: {} });
+    ok(r2.status === 200 && /Max-Age=0/.test(r2.setCookie[0] || ''), '登出下发 Max-Age=0 的 cookie', JSON.stringify(r2.setCookie));
+
+    // 通过 ?token= 引导进入时：303 到不带参数的路径，并直接种 cookie（令牌不进历史记录）。
     const loginOk = await call(port, '/?token=fixture-console-token');
-    ok(loginOk.status === 200 && !/需要控制台令牌|控制台令牌错误/.test(loginOk.text || ''), '正确令牌 → 不再返回登录页', `HTTP ${loginOk.status}`);
+    ok(loginOk.status === 303 && loginOk.location === '/', '正确令牌 → 303 到 /（URL 里不留令牌）', `HTTP ${loginOk.status} → ${loginOk.location}`);
+    ok(/HttpOnly/i.test(loginOk.setCookie[0] || ''), '引导链接也直接种 HttpOnly cookie', JSON.stringify(loginOk.setCookie));
+    // 夹具没有 public/console.html，所以带 cookie 访问只断言「不是登录页」。
+    const withCookie = await call(port, '/', { headers: { cookie: cookieHeader } });
+    ok(withCookie.status === 200 && !/需要控制台令牌|控制台令牌错误/.test(withCookie.text || ''), '带 cookie 打开 → 不再返回登录页', `HTTP ${withCookie.status}`);
 
     r = await call(port, '/api/console/access', { method: 'POST', headers: ADMIN, body: { consoleHost: '' } });
     ok(r.status === 200 && r.body.consoleHost === '', '清除（留空 = 只监听回环）成功', JSON.stringify(r.body));
