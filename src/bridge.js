@@ -57,6 +57,7 @@ import {
 // 模拟人类记忆的记忆插件（P1 JSON 后端）：事件流 + 遗忘曲线 + 权重 + 人设锚。
 // 它只负责"记什么、记多久、怎么取"，何时 encode/render/checkpoint 由本文件决定。
 import { createMemoryPlugin } from './memory/index.js';
+import { createNameResolver } from './name-resolver.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -1438,37 +1439,58 @@ async function main() {
   });
   if (memoryPlugin.enabled) log(`🧠 记忆插件已启用：${path.resolve(ROOT, String(cfg.memory?.dir || 'state/memory'))}`);
 
+  // 会话显示名：把 group:123 / private:456 解析成「群名 / 好友昵称」。
+  // 只读 SnowLuma 的 get_group_list / get_friend_list，结果缓存到 state/names.json（6 小时过期）。
+  const nameResolver = createNameResolver({
+    cacheFile: path.join(STATE_DIR, 'names.json'),
+    log,
+    fetch: async () => {
+      const pick = (v) => (Array.isArray(v) ? v : (v?.data ?? []));
+      const [groups, friends] = await Promise.all([
+        bot.request('get_group_list', {}).catch(() => []),
+        bot.request('get_friend_list', {}).catch(() => []),
+      ]);
+      return { groups: pick(groups), friends: pick(friends) };
+    },
+  });
+  // 首次拉取要等 bot 连上网关：此处 bot 还没初始化完成，直接调会报
+  // "Cannot access 'bot' before initialization"。改成延迟到状态轮询时再触发。
+  setTimeout(() => { void nameResolver.refresh(); }, 8000);
+
   // 记忆保留策略：每小时跑一次「短期到期→升长期/遗忘、长期陈旧→压缩/遗忘」。
   // 纯规则、不调模型；控制台也能手动触发（/api/memory/retention）。
-  const MEMORY_RETENTION_TICK_MS = 60 * 60 * 1000;
-  const memoryRetentionTimer = setInterval(() => {
-    if (!memoryPlugin.enabled) return;
+  // 「睡眠」：每小时检查一次，有到期记忆就**让模型自己整理**（代码只负责触发，不做合并/删除判断）。
+  // 每天最多自动睡一次，避免反复烧模型调用；控制台可随时手动触发。
+  const MEMORY_SLEEP_TICK_MS = 60 * 60 * 1000;
+  const MEMORY_SLEEP_MIN_GAP_MS = 20 * 60 * 60 * 1000;
+  let lastSleepAt = 0;
+  const memorySleepTimer = setInterval(() => {
+    if (!memoryPlugin.enabled || !dshReady) return;
+    if (Date.now() - lastSleepAt < MEMORY_SLEEP_MIN_GAP_MS) return;
     try {
-      let flagged = 0; let merged = 0; let purged = 0; let trimmed = 0;
+      // 只标记到期（不删除），有到期的才叫模型来整理
+      let flagged = 0;
       for (const key of socialV2.conversations.keys()) {
-        // 机械兜底：清完全重复 + 容量超限；到期条目只标记待复核，不自动删
-        const c = memoryPlugin.runConsolidate(key);
-        merged += c.merged || 0;
         const r = memoryPlugin.runRetention(key);
         flagged += r.flagged || 0;
-        purged += r.purged || 0;
-        trimmed += r.trimmed || 0;
       }
-      // 共享记忆（跨会话共享层）单独整理一次
-      const cg = memoryPlugin.runConsolidateGlobal();
-      merged += cg.merged || 0;
       const g = memoryPlugin.runRetentionGlobal();
       flagged += g.flagged || 0;
-      purged += g.purged || 0;
-      trimmed += g.trimmed || 0;
-      if (merged || flagged || purged || trimmed) {
-        log(`🧠 记忆整理：合并 ${merged}，待复核 ${flagged}，清理 ${purged + trimmed}`);
+      if (!flagged) return;
+      lastSleepAt = Date.now();
+      log(`🧠 记忆睡眠：${flagged} 条到期，交给模型整理`);
+      const { sessions } = memoryPlugin.overview();
+      for (const s of sessions) {
+        if (s.isGlobal || !(Number(s.memories) || 0)) continue;
+        void deliverPrompt(s.key, buildSleepPromptV2(s.key), { silent: true }).catch((error) => {
+          log(`⚠️ 睡眠整理投递失败 ${s.key}：${error?.message ?? error}`);
+        });
       }
     } catch (error) {
-      log(`⚠️ 记忆整理失败：${error?.message ?? error}`);
+      log(`⚠️ 记忆睡眠检查失败：${error?.message ?? error}`);
     }
-  }, MEMORY_RETENTION_TICK_MS);
-  memoryRetentionTimer.unref?.();
+  }, MEMORY_SLEEP_TICK_MS);
+  memorySleepTimer.unref?.();
 
   // ── 群聊黑话/网络用语学习（slang） ──────────────────────────────────────
   let slangEntries = [];
@@ -4233,6 +4255,18 @@ async function main() {
         // 删除 src/memory/ 目录 + 本组接口即可完全移除该功能。
         if (req.method === 'GET' && url.pathname === '/api/memory') {
           const { sessions, totals } = memoryPlugin.overview();
+          // 补上人类可读的会话方信息：群名 / 好友昵称（缓存过期时后台刷新，不阻塞本次返回）
+          nameResolver.refreshIfStale();
+          const enriched = sessions.map((s) => {
+            const info = nameResolver.resolve(s.key);
+            return {
+              ...s,
+              kind: info.kind,
+              displayName: info.display,
+              name: info.name,
+              id: info.id,
+            };
+          });
           sendJson({
             ok: true,
             enabled: memoryPlugin.enabled,
@@ -4245,7 +4279,7 @@ async function main() {
               recallMinW: memoryPlugin.config.recallMinW,
             },
             totals,
-            sessions
+            sessions: enriched
           });
           return;
         }
@@ -4314,6 +4348,46 @@ async function main() {
           return;
         }
         // 手动执行「整理」（合并完全重复 + 标记到期条目；不自动遗忘，由 AI 复核）
+        // 「睡眠」：记忆整理巩固——**主动调用大模型**去整理记忆，代码侧不做任何整理判断。
+        // 模型收到整理指令后自己用 qq_memory_review 看队列、逐条决定留/忘/压缩/合并。
+        if (req.method === 'POST' && url.pathname === '/api/memory/sleep') {
+          const body = await readBody();
+          const key = String(body.key ?? '').trim();
+          if (req.headers['x-agent-token']) { sendJson({ ok: false, error: '该接口仅控制台可用' }, 403); return; }
+          if (!dshReady) { sendJson({ ok: false, error: 'DSH 未就绪，无法调用模型整理' }, 503); return; }
+          if (!memoryPlugin.enabled) { sendJson({ ok: false, error: '记忆未启用' }, 400); return; }
+
+          // 只跑有记忆的会话，避免给空会话白烧一次模型调用
+          const { sessions } = memoryPlugin.overview();
+          const targets = key
+            ? [key]
+            : sessions.filter((s) => !s.isGlobal && (Number(s.memories) || 0) > 0).map((s) => s.key);
+
+          const results = [];
+          for (const k of targets) {
+            try {
+              const prompt = buildSleepPromptV2(k);
+              // silent:true —— 整理是"睡觉时做的事"，不该往 QQ 里发消息
+              const r = await deliverPrompt(k, prompt, { silent: true });
+              results.push({ key: k, ok: Boolean(r?.ok), skipped: Boolean(r?.skipped), queued: Boolean(r?.queued) });
+            } catch (error) {
+              results.push({ key: k, ok: false, error: String(error?.message ?? error) });
+            }
+          }
+          const okCount = results.filter((r) => r.ok).length;
+          log(`控制台：睡眠整理已触发（${okCount}/${results.length} 个会话已投递模型）`);
+          sendJson({
+            ok: true,
+            triggered: results.length,
+            delivered: okCount,
+            results,
+            hint: results.length
+              ? '已让 AI 进入"睡眠整理"：它会自己看待复核队列、合并重复、删过时内容。整理是静默的，不会发消息到 QQ。'
+              : '没有需要整理的会话（都没记忆）。',
+          });
+          return;
+        }
+        // 兼容旧路径：保留但只做"到期标记"，不再自动合并/删除
         if (req.method === 'POST' && url.pathname === '/api/memory/retention') {
           const body = await readBody();
           const key = String(body.key ?? '').trim();
@@ -4321,34 +4395,15 @@ async function main() {
           const keys = key ? [key] : [...socialV2.conversations.keys()];
           const results = [];
           for (const k of keys) {
-            try {
-              // 先清完全重复（机械兜底），再标记到期条目（不做自动遗忘）
-              const c = memoryPlugin.runConsolidate(k);
-              results.push({ key: k, merged: c.merged || 0, ...memoryPlugin.runRetention(k) });
-            } catch (error) { results.push({ key: k, error: String(error?.message ?? error) }); }
+            try { results.push({ key: k, ...memoryPlugin.runRetention(k) }); } catch (error) { results.push({ key: k, error: String(error?.message ?? error) }); }
           }
-          // 共享层单独整理一次
-          try {
-            const cg = memoryPlugin.runConsolidateGlobal();
-            const rg = memoryPlugin.runRetentionGlobal();
-            results.push({ key: '共享记忆', merged: cg.merged || 0, ...rg });
-          } catch (error) { results.push({ key: '共享记忆', error: String(error?.message ?? error) }); }
+          try { results.push({ key: '共享记忆', ...memoryPlugin.runRetentionGlobal() }); } catch (error) { results.push({ key: '共享记忆', error: String(error?.message ?? error) }); }
           const total = results.reduce((acc, r) => ({
-            merged: acc.merged + (r.merged || 0),
             flagged: acc.flagged + (r.flagged || 0),
             purged: acc.purged + (r.purged || 0),
-            trimmed: acc.trimmed + (r.trimmed || 0),
             kept: acc.kept + (r.kept || 0),
-          }), { merged: 0, flagged: 0, purged: 0, trimmed: 0, kept: 0 });
-          log(`控制台：记忆整理完成（合并 ${total.merged}，待复核 ${total.flagged}，清理 ${total.purged + total.trimmed}）`);
-          sendJson({
-            ok: true,
-            total,
-            results,
-            hint: total.flagged
-              ? `有 ${total.flagged} 条记忆到期，已进入待复核队列——由 AI 自己判断留还是忘（不是规则自动删）。`
-              : '没有新的到期条目。',
-          });
+          }), { flagged: 0, purged: 0, kept: 0 });
+          sendJson({ ok: true, total, results, hint: '只标记到期条目，整理交给「睡眠」。' });
           return;
         }
         if (req.method === 'POST' && url.pathname === '/api/memory/reset') {
@@ -10667,6 +10722,40 @@ async function main() {
     return `【你的身份】你在 QQ 上的昵称是${label}${idText}。${callBits}；群名片可能与昵称不同，at/引用段里带${id ? ` ${id} ` : '你的 QQ 号'}就是在叫你。\n\n`;
   }
 
+  /**
+   * 「睡眠整理」指令：让模型自己做记忆巩固（不往 QQ 发消息）。
+   *
+   * 与唤醒 prompt 的区别：这是**维护任务**而不是聊天，所以只给它整理规则和工具入口，
+   * 不注入未读消息、不要求回复。真正的判断全在模型侧——代码不替它决定留/忘/合并。
+   */
+  function buildSleepPromptV2(key) {
+    const info = nameResolver.resolve(key);
+    const where = info.kind === 'group' ? `群「${info.display}」` : info.kind === 'private' ? `和「${info.display}」的私聊` : key;
+    const lines = [];
+    lines.push('【睡眠整理】现在没有新消息，是你自己的记忆整理时间。');
+    lines.push(`这里是${where}（key=${key}）。`);
+    lines.push('');
+    lines.push('请按顺序做这几件事：');
+    lines.push('1) 调 qq_memory_review(key) 看待复核队列（短期满 3 天、长期 90 天没被想起的条目会在这里）。');
+    lines.push('2) 逐条自己判断，用 qq_memory_review(key, id, action) 处理：');
+    lines.push('   · 事实/约定/长期偏好 → keep（或 promote 升长期）——**不要因为"旧"就删事实**，某人的身份、长期喜好不会过期；');
+    lines.push('   · 一时话题、已过时的事 → forget；');
+    lines.push('   · 啰嗦但还有价值 → compress；');
+    lines.push('   · 内容需要更正、或几条讲的是同一件事 → update(text=合并后的完整版本)，并把多余的 forget 掉。');
+    lines.push('3) 调 qq_memory_candidates(key, layer="global") 逐条检查共享记忆：');
+    lines.push('   · 有没有**几条在讲同一件事**（例如都写"载舟是徐文杰"）？挑信息最全的那条做底，');
+    lines.push('     用 qq_memory_save(replaceId=它的 id, text=合并后的完整版本) 改写成一条，再把其余重复的 forget 掉；');
+    lines.push('   · 有没有**互相矛盾**的说法？保留更可信的（主人明确说过的优先），把另一条标成"未确认"或删掉；');
+    lines.push('   · 只留信息，别留重复。整理完，同一件事应该只有一条记忆。');
+    lines.push('4) 顺手补一句：这段时间有什么值得长期记住的事，用 qq_memory_save 记下来（没有就不用硬编）。');
+    lines.push('');
+    lines.push('注意：');
+    lines.push('· 这是静默维护，不会有人看到你的回复，**不要发 QQ 消息**，也不要输出长篇总结；做完直接结束。');
+    lines.push('· 拿不准的就 keep，宁可留着也别把有用的细节删掉。');
+    lines.push('· id 用队列返回的 ref（如 session:m1 / shared:m1），别用裸 id。');
+    return lines.join('\n');
+  }
+
   function buildWakePromptV2(key, reason) {
     const roleState = readRoleState();
     const roleLine = roleState.role ? `【当前角色】${roleState.role}（完整角色卡请调用 qq_get_prompt 查看）\n\n` : '';
@@ -12464,4 +12553,6 @@ main().catch((error) => {
   console.error('[bridge] 启动失败:', error);
   process.exit(1);
 });
+
+
 

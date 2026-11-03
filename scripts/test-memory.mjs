@@ -377,7 +377,7 @@ test('控制台页面：已挂载记忆页与开关（静态检查）', () => {
   for (const needle of ['section-memory', 'data-view="memory"', 'id="memEnabled"', 'id="memReadFile"', 'id="memFileBody"', 'id="memResetAll"', "loadMemory()"]) {
     assert.ok(html.includes(needle), `控制台缺少 ${needle}`);
   }
-  assert.ok(html.includes("memory: ['记忆'"), 'consolePages 缺少 memory 条目');
+  assert.ok(html.includes("memory: ['拟人记忆'"), 'consolePages 缺少 memory 条目');
   // 预算/锚上限已移除（记忆正文改为 AI 主动查，不再靠注入长度调节）
   assert.ok(!html.includes('id="memBudgetChars"'), '不该再有注入预算输入框');
   assert.ok(!html.includes('id="memAnchorChars"'), '不该再有人设锚上限输入框');
@@ -552,39 +552,6 @@ test('遗忘：规则只标记"该复核"，由模型决定去留', () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('遗忘兜底：完全重复自动清、容量超限丢尾部、遗忘条目宽限期后物理删除', () => {
-  const dir = tmpDir();
-  let clock = { v: Date.now() };
-  const plugin = createMemoryPlugin({ stateDir: dir, config: { retention: { capacityPerSession: 5, forgottenGraceDays: 7 } }, now: () => clock.v });
-
-  // 完全重复 → 整理时自动合并（机械兜底，不需要模型判断）
-  // 这里直接塞 store，模拟"历史遗留的重复"（正常写入路径已去重）
-  fs.mkdirSync(path.join(dir, 'group-920'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'group-920', 'memories.json'), JSON.stringify({ version: 1, nextId: 3, entries: [
-    { id: 'm1', t: clock.v, text: '载舟就是徐文杰', scope: 'long', layer: 'session', importance: 3, who: '载舟', status: 'active' },
-    { id: 'm2', t: clock.v, text: '载舟就是徐文杰', scope: 'long', layer: 'session', importance: 3, who: '载舟', status: 'active' },
-  ] }), 'utf8');
-  const c = plugin.runConsolidate('group:920');
-  assert.equal(c.merged, 1, JSON.stringify(c));
-
-  // 容量超限：超过 5 条时丢最不重要/最旧的
-  for (let i = 0; i < 8; i += 1) {
-    plugin.saveMemory('group:920', { text: `琐事${i}`, scope: 'short', importance: 1 });
-  }
-  const r = plugin.runRetention('group:920');
-  assert.ok(r.trimmed >= 1, '超容量应丢尾部：' + JSON.stringify(r));
-  const store = JSON.parse(fs.readFileSync(path.join(dir, 'group-920', 'memories.json'), 'utf8'));
-  assert.ok(store.entries.filter((e) => e.status === 'active').length <= 5, JSON.stringify(store.entries.length));
-
-  // 已遗忘条目：宽限期内还在（可追溯），过了就物理删除
-  plugin.reviewMemoryEntry('group:920', 'm1', 'forget');
-  let s1 = JSON.parse(fs.readFileSync(path.join(dir, 'group-920', 'memories.json'), 'utf8'));
-  assert.ok(s1.entries.some((e) => e.status === 'forgotten'), '遗忘后应先保留可追溯');
-  clock.v += 10 * DAY;
-  const r2 = plugin.runRetention('group:920');
-  assert.ok(r2.purged >= 1, '超过宽限期应物理删除：' + JSON.stringify(r2));
-  fs.rmSync(dir, { recursive: true, force: true });
-});
 test('共享记忆：跨会话共享，本会话记忆不外泄', () => {
   const dir = tmpDir();
   const clock = { v: Date.now() };
@@ -659,34 +626,14 @@ test('写入合并：交给模型判断——重复内容不新增，replaceId �
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('主动整理：只清完全重复，不做规则相似合并', () => {
-  const dir = tmpDir();
-  const clock = { v: Date.now() };
-  const plugin = createMemoryPlugin({ stateDir: dir, config: {}, now: () => clock.v });
-  // 模拟历史遗留：两条一模一样的（工具重试造成）
-  const store = { version: 1, nextId: 4, entries: [
-    { id: 'm1', t: clock.v, text: '载舟就是徐文杰', scope: 'long', layer: 'global', importance: 3, who: '载舟', status: 'active' },
-    { id: 'm2', t: clock.v, text: '载舟就是徐文杰', scope: 'long', layer: 'global', importance: 4, who: '载舟', status: 'active' },
-    // 下面这条是"同一事实的补充细节"，但服务端不擅自合并（该由模型判断）
-    { id: 'm3', t: clock.v, text: '载舟就是徐文杰，男，24岁，INFJ人格', scope: 'long', layer: 'global', importance: 3, who: '载舟', status: 'active' },
-  ] };
-  fs.mkdirSync(path.join(dir, '_global'), { recursive: true });
-  fs.writeFileSync(path.join(dir, '_global', 'memories.json'), JSON.stringify(store), 'utf8');
-
-  const r = plugin.runConsolidateGlobal();
-  assert.equal(r.merged, 1, JSON.stringify(r));
-  const after = JSON.parse(fs.readFileSync(path.join(dir, '_global', 'memories.json'), 'utf8'));
-  assert.equal(after.entries.length, 2, JSON.stringify(after.entries.map((x) => x.text)));
-  // 保留重要度更高的那条
-  assert.equal(after.entries.find((x) => x.id === 'm2').importance, 4, JSON.stringify(after.entries));
-  fs.rmSync(dir, { recursive: true, force: true });
-});
 // ── 汇总 ──────────────────────────────────────────────────────────────────
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) {
   for (const { name, error } of failures) console.error(`\nFAILED: ${name}\n${error?.stack ?? error}`);
   process.exit(1);
 }
+
+
 
 
 

@@ -30,7 +30,7 @@ import {
 } from './markdown.js';
 import { recallMemory, describeMemory } from './recall.js';
 import {
-  addMemory, applyRetention, consolidateMemories, forgetMemory, listCandidates, listReviewQueue, loadMemories, reviewMemory, touchMemory,
+  addMemory, applyRetention, forgetMemory, listCandidates, listReviewQueue, loadMemories, reviewMemory, touchMemory,
 } from './memories.js';
 
 export const MEMORY_VERSION = 2;
@@ -532,20 +532,6 @@ export function createMemoryPlugin(opts = {}) {
     return null;
   }
 
-  /** 主动整理：把重复/高度相似的记忆合并（会话层 + 共享层）。 */
-  function runConsolidate(key) {
-    const a = consolidateMemories(keyDir(key), { now: now() });
-    const b = consolidateMemories(globalDir(), { now: now() });
-    return {
-      merged: (a.merged || 0) + (b.merged || 0),
-      kept: (a.kept || 0) + (b.kept || 0),
-    };
-  }
-
-  /** 只整理共享层（定时任务用）。 */
-  function runConsolidateGlobal() {
-    return consolidateMemories(globalDir(), { now: now() });
-  }
 
   /** 注入提示词用的记忆索引（不含正文）。 */
   function describe(key) {
@@ -769,8 +755,7 @@ export function createMemoryPlugin(opts = {}) {
     runRetentionGlobal,
     reviewQueue,
     reviewMemoryEntry,
-    runConsolidate,
-    runConsolidateGlobal,
+
     query,
     checkpoint,
     migrateFromSocialV2,
@@ -784,6 +769,7 @@ export function createMemoryPlugin(opts = {}) {
     resetAll,
   };
 }
+
 
 
 

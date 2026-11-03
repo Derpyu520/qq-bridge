@@ -24,7 +24,7 @@ export const LAYER = { GLOBAL: 'global', SESSION: 'session' };
 export const DEFAULT_RETENTION = {
   shortTermDays: 3,        // 短期记忆 3 天后进入复核队列
   longStaleDays: 90,       // 长期记忆 90 天没被想起 → 进入复核队列
-  capacityPerSession: 400, // 单会话硬上限（超出时按 ★+新旧丢尾部，这是纯机械兜底）
+  capacityPerSession: 400, // 单会话容量告警线（超出时标记待复核，由模型决定删哪些）
   forgottenGraceDays: 7,   // 已遗忘条目保留几天便于追溯
 };
 
@@ -167,40 +167,6 @@ export function listCandidates(dir, { who, layer, limit = 12 } = {}) {
     .slice(0, Math.max(1, Math.min(50, Number(limit) || 12)))
     .map((e) => ({ id: e.id, text: e.text, scope: e.scope, layer: normalizeLayer(e.layer), importance: e.importance, who: e.who || '', t: e.t }));
 }
-/**
- * 清理**完全重复**的条目（同一文本被重复写入，例如工具重试）。
- *
- * 刻意不做"相似合并"：两条记忆是不是同一件事、该并成什么措辞，交给模型判断
- * （写入时带 replaceId 合并）。这里只处理机械性重复，且保留重要度最高/最常被确认的那条。
- */
-export function consolidateMemories(dir, { now = Date.now() } = {}) {
-  const store = loadMemories(dir);
-  const stats = { merged: 0, kept: 0 };
-  const byKey = new Map();
-  const drop = new Set();
-  for (const entry of store.entries) {
-    if (entry.status !== 'active') continue;
-    const key = `${normalizeLayer(entry.layer)}|${entry.who || ''}|${normalizeForCompare(entry.text)}`;
-    const prev = byKey.get(key);
-    if (!prev) { byKey.set(key, entry); continue; }
-    // 重复：保留重要度更高的那条，把次数/访问量并过去
-    const [keep, gone] = (Number(prev.importance) || 3) >= (Number(entry.importance) || 3) ? [prev, entry] : [entry, prev];
-    keep.reinforceCount = (Number(keep.reinforceCount) || 1) + (Number(gone.reinforceCount) || 1);
-    keep.accessCount = (Number(keep.accessCount) || 0) + (Number(gone.accessCount) || 0);
-    keep.lastAccess = Math.max(Number(keep.lastAccess) || 0, Number(gone.lastAccess) || 0);
-    keep.lastReinforcedAt = Number(now) || Date.now();
-    byKey.set(key, keep);
-    drop.add(gone.id);
-    stats.merged += 1;
-  }
-  if (stats.merged) {
-    store.entries = store.entries.filter((e) => !drop.has(e.id));
-    saveMemories(dir, store);
-    writeMemoryMarkdown(dir, store);
-  }
-  stats.kept = store.entries.filter((e) => e.status === 'active').length;
-  return stats;
-}
 export function forgetMemory(dir, id) {
   const store = loadMemories(dir);
   const before = store.entries.length;
@@ -264,15 +230,21 @@ export function applyRetention(dir, { now = Date.now(), retention = DEFAULT_RETE
   store.entries = store.entries.filter((e) => !(e.status === 'forgotten' && Number(e.forgottenAt) < cutoff));
   stats.purged = before - store.entries.length;
 
-  // 机械兜底 2：容量上限（按 ★ + 新旧排，丢最不重要且最旧的）
+  // 容量告警（**不删**）：超过上限时把最不重要且最旧的若干条标记为待复核，
+  // 让模型在下次「睡眠」时自己决定删哪些——代码不替它做删除决定。
   const cap = Math.max(1, Number(r.capacityPerSession) || 400);
   const activeCount = store.entries.filter((e) => e.status === 'active').length;
   if (activeCount > cap) {
-    const active = store.entries.filter((e) => e.status === 'active');
-    active.sort((a, b) => (a.importance * 100 + (a.t / DAY_MS)) - (b.importance * 100 + (b.t / DAY_MS)));
-    const drop = new Set(active.slice(0, activeCount - cap).map((e) => e.id));
-    store.entries = store.entries.filter((e) => !drop.has(e.id));
-    stats.trimmed = drop.size;
+    const candidates = store.entries
+      .filter((e) => e.status === 'active' && !e.needsReview)
+      .sort((a, b) => (a.importance * 100 + (a.t / DAY_MS)) - (b.importance * 100 + (b.t / DAY_MS)));
+    for (const e of candidates.slice(0, activeCount - cap)) {
+      e.needsReview = true;
+      e.reviewFlaggedAt = nowMs;
+      e.reviewReason = '容量超限';
+      stats.flagged += 1;
+    }
+    stats.overCapacity = activeCount - cap;
   }
 
   saveMemories(dir, store);
@@ -424,6 +396,8 @@ export function importanceLabel(n) {
 }
 
 export { normalizeScope, normalizeImportance, normalizeLayer };
+
+
 
 
 

@@ -1829,7 +1829,7 @@ button:active:not(:disabled) {
       <button data-view="social-v2" class="nav-item"><span class="nav-icon" aria-hidden="true">◈</span>二代仿真<span class="nav-note">V2</span></button>
       <button data-view="social-v1" class="nav-item"><span class="nav-icon" aria-hidden="true">◇</span>一代仿真<span class="nav-note">V1</span></button>
       <button data-view="slang" class="nav-item"><span class="nav-icon" aria-hidden="true">▤</span>黑话词库</button>
-      <button data-view="memory" class="nav-item"><span class="nav-icon" aria-hidden="true">◎</span>记忆<span class="nav-note">实验</span></button>
+      <button data-view="memory" class="nav-item"><span class="nav-icon" aria-hidden="true">◎</span>拟人记忆<span class="nav-note">实验</span></button>
       <div class="nav-label">管理</div>
       <button data-view="usage" class="nav-item"><span class="nav-icon" aria-hidden="true">◧</span>令牌与花费</button>
       <button data-view="access" class="nav-item"><span class="nav-icon" aria-hidden="true">⊙</span>访问与安全</button>
@@ -2478,7 +2478,7 @@ button:active:not(:disabled) {
       </details>
     </section>
 <section id="section-memory" data-page="memory" class="card span-all">
-      <h2>记忆</h2>
+      <h2>拟人记忆</h2>
       <div class="meta">
         记忆独立存放于 <code id="memDir">state/memory</code>：每个会话一份 <code>MEMORY.md</code>，另有跨会话共享的共享记忆。
         关闭后唤醒提示回落到旧便签，已有数据保留。
@@ -2504,7 +2504,7 @@ button:active:not(:disabled) {
       </table>
 
       <div class="row" style="margin-top:12px">
-        <button id="memRetentionBtn" class="small">整理记忆（标记到期）</button>
+        <button id="memRetentionBtn" class="small">睡眠（记忆整理巩固）</button>
         <span class="meta" id="memRetentionMsg" role="status"></span>
       </div>
 
@@ -4479,7 +4479,7 @@ function renderMemorySessions(sessions) {
   const table = document.getElementById('memSessions');
   table.replaceChildren();
   const head = document.createElement('tr');
-  for (const label of ['会话', '条目', '画像', '最近记忆', '']) {
+  for (const label of ['会话方', '类型', '条目', '画像', '最近记忆', '']) {
     const th = document.createElement('th');
     th.textContent = label;
     head.append(th);
@@ -4488,7 +4488,7 @@ function renderMemorySessions(sessions) {
   if (!sessions.length) {
     const tr = document.createElement('tr');
     const td = document.createElement('td');
-    td.colSpan = 5;
+    td.colSpan = 6;
     td.className = 'meta';
     td.textContent = '还没有记忆';
     tr.append(td);
@@ -4499,8 +4499,11 @@ function renderMemorySessions(sessions) {
     const tr = document.createElement('tr');
     // 共享记忆那一行（_global）用不同底色区分，且不参与"会话"计数
     if (item.isGlobal) tr.style.background = 'rgba(120,140,255,0.07)';
+    // 会话方：群名 / 好友昵称（服务端已解析好，拿不到就退回「群 123456」）
+    const kindLabel = item.isGlobal ? '共享' : (item.kind === 'group' ? '群' : item.kind === 'private' ? '私聊' : '—');
     const cells = [
-      item.isGlobal ? '共享记忆' : item.key,
+      item.isGlobal ? '共享记忆' : (item.displayName || item.key),
+      kindLabel,
       String(item.memories ?? 0),
       String(item.profiles ?? 0),
       item.lastEventAt ? new Date(Number(item.lastEventAt)).toLocaleString('zh-CN', { hour12: false }) : '—'
@@ -4601,13 +4604,12 @@ document.getElementById('memRebuildFile').addEventListener('click', async () => 
 });
 document.getElementById('memRetentionBtn').addEventListener('click', async () => {
   const msg = document.getElementById('memRetentionMsg');
-  msg.textContent = '执行中…'; msg.className = 'meta';
-  const r = await api('/api/memory/retention', 'POST', {});
+  msg.textContent = '正在让 AI 进入睡眠整理…'; msg.className = 'meta';
+  const r = await api('/api/memory/sleep', 'POST', {});
   if (r.ok) {
-    const t = r.total || {};
-    msg.textContent = `✅ 合并 ${t.merged || 0}，升长期 ${t.promoted || 0}，压缩 ${t.compressed || 0}，遗忘 ${t.forgot || 0}，保留 ${t.kept || 0}`;
+    msg.textContent = `✅ 已触发 ${r.delivered}/${r.triggered} 个会话的模型整理`;
     msg.className = 'meta ok';
-    loadMemory();
+    if (r.hint) msg.textContent += `（${r.hint}）`;
   } else {
     msg.textContent = '❌ ' + (r.error || '失败');
     msg.className = 'meta err';
@@ -4686,7 +4688,7 @@ const consolePages = {
   'social-v2': ['二代仿真', '自主参与，恰到好处。', '管理 AI 的工具、唤醒与发言节奏。展开需要调整的分组，修改后保存参数。'],
   'social-v1': ['一代仿真', '为自然对话，设定合适的节奏。', '调整参与概率、活跃周期和分条发送；所有配置项完整保留。'],
   slang: ['黑话词库', '读懂群聊里的，言外之意。', '从候选到确认，让 AI 逐渐熟悉大家的表达习惯。'],
-  memory: ['记忆', '让每一次相遇，都留得下来。', 'AI 自己决定记什么、记多久；可随时开关，不影响其它功能。'],
+  memory: ['拟人记忆', '让每一次相遇，都留得下来。', 'AI 自己决定记什么、记多久；可随时开关，不影响其它功能。'],
   usage: ['令牌与花费', '每一次思考，都算得清楚。', '实时查看 AI 的 token 消耗与花费，可下钻到每个群、每个好友、每一轮对话。'],
   access: ['访问与安全', '明确边界，安心连接。', '管理允许对话的对象、管理员权限与控制台访问凭证。'],
   operations: ['调试与运维', '让桥接，始终井然有序。', '测试消息、引导 AI，或维护桥接进程与会话工作区。'],
@@ -5338,6 +5340,9 @@ setInterval(() => { if (currentConsolePage !== 'usage') return; refreshUsage(); 
 </script>
 </body>
 </html>
+
+
+
 
 
 
