@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>隐私扫描存档 — qq-bridge</title>
+<meta name="description" content="当时发现的主要问题包括：控制台中的真实群号、本地文档中的 QQ 号与本机路径，以及测试夹具和 配置键名造成的误报。当时的处理方向是替换真实占位内容、区分误报，并限制本地文档进入公开仓库。 这些结论只用于追溯，不代表当前文件清单或当前扫描结果。">
+<meta property="og:title" content="隐私扫描存档 — qq-bridge">
+<meta property="og:description" content="当时发现的主要问题包括：控制台中的真实群号、本地文档中的 QQ 号与本机路径，以及测试夹具和 配置键名造成的误报。当时的处理方向是替换真实占位内容、区分误报，并限制本地文档进入公开仓库。 这些结论只用于追溯，不代表当前文件清单或当前扫描结果。">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../../assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="../../../" data-tab="记录" data-page-rel="pages/records/reviews/privacy-scans.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../../../index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout has-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body research">
+  <div class="topbar">
+  <div class="crumbs">
+    <a href="../../../index.html">qq-bridge</a>
+    <span class="sep">/</span>
+    Pages
+    <span class="sep">/</span>
+    <a href="../index.html">记录</a>
+    <span class="sep">/</span>
+    核查
+    <span class="sep">/</span>
+    <span class="here">隐私扫描存档</span>
+  </div>
+</div>
+  <h1>隐私扫描存档</h1>
+<!-- moved verbatim from pages/ops/privacy.html [h2:六] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="六历史扫描存档">六、历史扫描存档</h2>
+<h3 id="2026-09-20-首次扫描">2026-09-20 首次扫描</h3>
+<p>当时发现的主要问题包括：控制台中的真实群号、本地文档中的 QQ 号与本机路径，以及测试夹具和
+配置键名造成的误报。当时的处理方向是替换真实占位内容、区分误报，并限制本地文档进入公开仓库。
+这些结论只用于追溯，不代表当前文件清单或当前扫描结果。</p>
+<h3 id="2026-10-31-发布前复核">2026-10-31 发布前复核</h3>
+<p>历史扫描报告 15 处旧提交中的本机路径；当前工作树未命中。本次未改写公开历史。
+后续如需清理，应另行评估凭据轮换、协作者通知和已有克隆 / fork 的影响。</p>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+<aside class="sidebar-right" aria-label="On this page">
+  <div class="sidebar-inner">
+    <span class="toc-label">On this page</span>
+    <nav class="toc-list">
+      <a class="toc-h2" href="#六历史扫描存档">六、历史扫描存档</a>
+      <a class="toc-h3" href="#2026-09-20-首次扫描">2026-09-20 首次扫描</a>
+      <a class="toc-h3" href="#2026-10-31-发布前复核">2026-10-31 发布前复核</a>
+    </nav>
+  </div>
+</aside>
+
+</div>
+
+<script src="../../../assets/nav.js"></script>
+
+</body>
+</html>

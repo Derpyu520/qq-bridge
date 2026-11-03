@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>漏洞报告 — qq-bridge</title>
+<meta name="description" content="qq-bridge 会接触本机 OneBot 接入令牌、DSH 会话 Cookie 与控制台令牌， 并把群聊内容交给大模型处理。 请按&quot;能读你账号&quot;的标准对待本程序的任何权限缺口。">
+<meta property="og:title" content="漏洞报告 — qq-bridge">
+<meta property="og:description" content="qq-bridge 会接触本机 OneBot 接入令牌、DSH 会话 Cookie 与控制台令牌， 并把群聊内容交给大模型处理。 请按&quot;能读你账号&quot;的标准对待本程序的任何权限缺口。">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../../assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="../../../" data-tab="Developer Guide" data-page-rel="pages/dev/security/reporting.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../../../index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout has-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body decisions">
+  <div class="topbar">
+  <div class="crumbs">
+    <a href="../../../index.html">qq-bridge</a>
+    <span class="sep">/</span>
+    Pages
+    <span class="sep">/</span>
+    <a href="../index.html">Developer Guide</a>
+    <span class="sep">/</span>
+    Security
+    <span class="sep">/</span>
+    <span class="here">漏洞报告</span>
+  </div>
+</div>
+  <h1>漏洞报告</h1>
+<!-- moved verbatim from SECURITY.md [all] on 2026-11-03 (docs reorg step 2) -->
+<p>qq-bridge 会接触本机 OneBot 接入令牌、DSH 会话 Cookie 与控制台令牌，
+并把群聊内容交给大模型处理。<strong>请按"能读你账号"的标准对待本程序的任何权限缺口。</strong></p>
+<hr>
+<h2 id="报告漏洞">报告漏洞</h2>
+<p><strong>不要在本仓库公开 issue 里贴漏洞细节、可用 PoC、token 或真实 QQ 号/群号。</strong></p>
+<p>请用 GitHub 的私密漏洞上报：</p>
+<blockquote>
+<p><a href="https://github.com/Derpyu520/qq-bridge/security/advisories/new">https://github.com/Derpyu520/qq-bridge/security/advisories/new</a></p>
+</blockquote>
+<p>在这个页面里写清楚：影响版本、复现步骤、影响面（能读到什么/能做什么）、以及你建议的修法（如果有）。
+不要求你先写好补丁。</p>
+<p>如果你不确定某个问题算不算漏洞，<strong>也走这个渠道问</strong>，比开公开 issue 好。</p>
+<h2 id="响应方式据实说明">响应方式（据实说明）</h2>
+<p>这是一个单人维护的项目。<strong>没有 SLA、没有 72 小时承诺</strong>。承诺只有一条：
+只要报告有效，修完之后会在 release notes 里写明，并在 advisory 里登记你的贡献（除非你要求匿名）。</p>
+<ul>
+<li>受支持版本：<strong>最新一个 release 线</strong>（当前 <code>v0.2.1-rN</code>）。更早的版本只做"是否受影响"的确认，不单独发补丁。</li>
+<li>已公开讨论过、上游已有 CVE 的依赖问题：走 Dependabot，不必单独上报。</li>
+</ul>
+<hr>
+<h2 id="明确在范围内in-scope">明确在范围内（In scope）</h2>
+<table>
+<thead><tr><th>类别</th><th>例子</th></tr></thead>
+<tbody>
+<tr><td><strong>凭据泄漏</strong></td><td>token / Cookie / 签名密钥出现在日志、错误信息、模型上下文、控制台响应或返回值里（CWE-532）</td></tr>
+<tr><td><strong>权限提升</strong></td><td>未带 <code>x-agent-token</code> 的假智能体调用被当成管理端全权（confused deputy）；控制台鉴权 fail-open</td></tr>
+<tr><td><strong>SSRF / 内网探测</strong></td><td><code>web_fetch</code>、<code>safe-fetch</code>、<code>web_search</code> 能访问私网/回环/云元数据地址，或跟随重定向绕过校验</td></tr>
+<tr><td><strong>铁律 L7 被突破</strong></td><td>QQ 会话的 agent 拿到了本地执行能力（shell / 文件读写 / 插件装载 / 子进程），见 <a href="../../use/modes.html">RULES.md</a></td></tr>
+<tr><td><strong>越权访问会话</strong></td><td>一个群/私聊能读到另一个会话的消息、记忆或状态；<code>/api/status</code> 之类把 ownerQQ、白名单、其它群活动回给模型</td></tr>
+<tr><td><strong>路径穿越 / 任意写</strong></td><td>语音库、上传、控制台静态资源、<code>state/</code> 写入相关的路径处理</td></tr>
+<tr><td><strong>提示注入导致的真实副作用</strong></td><td>群友一句话就能让 agent 改配置、绕过白名单、往外发消息或读本机文件</td></tr>
+<tr><td><strong>依赖供应链</strong></td><td>依赖本身被投毒，或 <code>postinstall</code> 补丁被利用（见 <a href="../../use/license.html">NOTICE.md</a>）</td></tr>
+</tbody>
+</table>
+<h2 id="不在范围内out-of-scope">不在范围内（Out of scope）</h2>
+<ul>
+<li><strong>SnowLuma / QQ 客户端本身的问题</strong>（注入失败、闪退、账号风控）——那是上游项目，请报给 <a href="https://github.com/SnowLuma/SnowLuma">SnowLuma</a>。</li>
+<li><strong>错误配置白名单，或显式启用 <code>allowAllWhenEmpty</code></strong> 导致的不安全开放——这是配置问题，见 <a href="../../use/modes.html">RULES.md</a>。</li>
+<li>需要"攻击者已经能改本机文件/已有管理员权限"才能触发的场景。</li>
+<li>缺少安全响应头、缺少 HTTPS、没有 <code>helmet</code> 之类的加固建议（本程序默认只监听 <code>127.0.0.1</code>）。</li>
+<li>已由 Dependabot 登记、且<strong>未被本程序实际调用路径触达</strong>的依赖告警——欢迎说明为什么可达，那会升级为有效报告。</li>
+</ul>
+<hr>
+<h2 id="部署侧的硬要求这些不满足就不是漏洞是误配">部署侧的硬要求（这些不满足就不是"漏洞"，是误配）</h2>
+<ol>
+<li>控制台令牌、<code>config.json</code>、<code>state/</code> <strong>不要</strong>放到对 <code>BUILTIN\Users</code> 可读的位置（本程序启动时会尝试收紧 ACL，见 <code>src/state-acl.mjs</code>）。</li>
+<li><strong>白名单必配</strong>。默认空白名单拒绝所有会话；只有显式设置 <code>allowAllWhenEmpty: true</code> 才会在空白名单时开放，该配置应谨慎使用。</li>
+<li>不要把 DSH 的控制台或桥接端口暴露到公网。</li>
+</ol>
+<hr>
+<h2 id="english-summary">English summary</h2>
+<p>This project handles local OneBot access tokens and DSH session cookies. Please
+report security issues <strong>privately</strong> via
+<a href="https://github.com/Derpyu520/qq-bridge/security/advisories/new">GitHub Security Advisories</a> —
+never in a public issue, and never with live tokens or real QQ numbers.</p>
+<p>In scope: credential leakage, privilege escalation (confused deputy / auth bypass), SSRF, breaking the
+"no local execution in QQ sessions" invariant (L7), cross-session data access, path traversal, and
+prompt-injection with real side effects. Out of scope: upstream SnowLuma/QQ client bugs, and unsafe
+operator configuration such as enabling <code>allowAllWhenEmpty</code> or exposing local services publicly.</p>
+<p>This is a single-maintainer project: <strong>no SLA</strong>. Valid reports are fixed and credited in release notes.</p>
+<!-- moved verbatim from CONTRIBUTING.md [h2:7] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="7-安全">7. 安全</h2>
+<p><strong>不要用公开 issue 报漏洞。</strong> 走 <a href="#">SECURITY.md</a> 里的私密上报渠道。</p>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+<aside class="sidebar-right" aria-label="On this page">
+  <div class="sidebar-inner">
+    <span class="toc-label">On this page</span>
+    <nav class="toc-list">
+      <a class="toc-h2" href="#报告漏洞">报告漏洞</a>
+      <a class="toc-h2" href="#响应方式据实说明">响应方式（据实说明）</a>
+      <a class="toc-h2" href="#明确在范围内in-scope">明确在范围内（In scope）</a>
+      <a class="toc-h2" href="#不在范围内out-of-scope">不在范围内（Out of scope）</a>
+      <a class="toc-h2" href="#部署侧的硬要求这些不满足就不是漏洞是误配">部署侧的硬要求（这些不满足就不是"漏洞"，是误配）</a>
+      <a class="toc-h2" href="#english-summary">English summary</a>
+      <a class="toc-h2" href="#7-安全">7. 安全</a>
+    </nav>
+  </div>
+</aside>
+
+</div>
+
+<script src="../../../assets/nav.js"></script>
+
+</body>
+</html>

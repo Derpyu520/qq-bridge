@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>提交 PR — qq-bridge</title>
+<meta name="description" content="一个 PR 只做一件事。 把 12 个不相关的修复塞进一个 PR，评审成本会高到没人看得完。 PR 的目标分支是 dev （见第 5 节的分支模型）； main 只在发布时从 dev 合并。">
+<meta property="og:title" content="提交 PR — qq-bridge">
+<meta property="og:description" content="一个 PR 只做一件事。 把 12 个不相关的修复塞进一个 PR，评审成本会高到没人看得完。 PR 的目标分支是 dev （见第 5 节的分支模型）； main 只在发布时从 dev 合并。">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../../assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="../../../" data-tab="Developer Guide" data-page-rel="pages/dev/contributing/pull-requests.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../../../index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout has-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body guide">
+  <div class="topbar">
+  <div class="crumbs">
+    <a href="../../../index.html">qq-bridge</a>
+    <span class="sep">/</span>
+    Pages
+    <span class="sep">/</span>
+    <a href="../index.html">Developer Guide</a>
+    <span class="sep">/</span>
+    Contributing
+    <span class="sep">/</span>
+    <span class="here">提交 PR</span>
+  </div>
+</div>
+  <h1>提交 PR</h1>
+<!-- moved verbatim from CONTRIBUTING.md [h2:4] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="4-提交-pr">4. 提交 PR</h2>
+<p><strong>一个 PR 只做一件事。</strong> 把 12 个不相关的修复塞进一个 PR，评审成本会高到没人看得完。
+<strong>PR 的目标分支是 <code>dev</code></strong>（见第 5 节的分支模型）；<code>main</code> 只在发布时从 <code>dev</code> 合并。</p>
+<p>PR 里请写清楚：</p>
+<ol>
+<li><strong>改了什么、为什么</strong>（贴 issue 号更好）；</li>
+<li><strong>怎么验证的</strong>——贴 <code>npm run test:audit</code> 最后那行 <code>Audit suite: N/N scripts passed.</code>；</li>
+<li>有没有<strong>行为变更</strong>（配置项、工具名、端点、默认值）；有的话同步改 README / <code>docs/</code>。</li>
+</ol>
+<p>新增行为请带回归脚本，并把它加进 <code>scripts/test-audit.mjs</code> 的清单——<strong>不加进去的测试等于不存在</strong>，
+因为没人会记得手动跑它。</p>
+<p><strong>不要提交</strong>：真实 QQ 号 / 群号 / 昵称、任何 token 或密钥、本机绝对路径、<code>state/</code>、<code>node_modules/</code>。
+<code>privacy-scan</code> 会拦一部分，但它不是万能网。</p>
+
+<!-- moved verbatim from CONTRIBUTING.md [h2:5] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="5-维护者的合并方式据实说明">5. 维护者的合并方式（据实说明）</h2>
+<p>本仓库分两条线：<code>main</code> 是<strong>正式发布线</strong>，只收经过验证的版本；<code>dev</code> 是<strong>测试 / 开发线</strong>，
+持续更新、随时提交，正常状态下<strong>领先</strong> <code>main</code>。发布时才把 <code>dev</code> 合入 <code>main</code>，所以两条线可能
+短暂同步，但 <code>dev</code> 不应落后于 <code>main</code>。由此：</p>
+<ul>
+<li>维护者的日常改动<strong>直接提交到 <code>dev</code></strong>；</li>
+<li><strong>外部贡献者的 PR 一律以 <code>dev</code> 为目标分支</strong>（提向 <code>main</code> 的 PR 会被改指向 <code>dev</code>）；</li>
+<li>你的 PR <strong>可能直接合并</strong>，也可能被<strong>参考后重新实现</strong>，还可能在 <code>dev</code> 里已经修好了；</li>
+<li>以上三种情况都会在 PR 里回复说明，不会让你干等；</li>
+<li>如果 <code>dev</code> 里已包含等价修复，维护者会指出对应的提交并关闭 PR——<strong>这不代表你的工作没价值</strong>，
+通常只是两条线同时撞上了同一个问题。</li>
+</ul>
+<p>想用正式发布版就待在 <code>main</code>（<code>git clone</code> 默认拿到的就是它）；想跟最新改动就切到 <code>dev</code>
+（测试线，<strong>不保证稳定</strong>）。</p>
+
+<!-- moved verbatim from CONTRIBUTING.md [h2:6] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="6-许可">6. 许可</h2>
+<p>提交 PR 即表示你同意你的贡献按本仓库的
+<a href="https://github.com/Derpyu520/qq-bridge/blob/main/LICENSE">PolyForm Noncommercial 1.0.0</a> 发布（许可范围与第三方组件声明见 <a href="../../use/license.html">NOTICE.md</a>）。</p>
+<p>如果你不能接受这一点（例如你的雇主对该代码有 CLA 或再许可要求），<strong>请先开 issue 讨论</strong>，
+不要直接提 PR。</p>
+
+<!-- moved verbatim from pages/ops/security-baseline.html [h2:五] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="五改动检查单每个-pr-自问">五、改动检查单（每个 PR 自问）</h2>
+<ol>
+<li>这次改动有没有让某个"不确定"变成"放行"？（违反 fail-closed 即阻断）</li>
+<li>有没有新增一个<strong>只有控制台该用</strong>的端点却没进 agent 白名单的默认拒绝？</li>
+<li>有没有新增读写文件的路径参数？它是否做了包含性校验与 realpath？</li>
+<li>有没有把外部数据（QQ 内容、文件名、配置值）直接插进 HTML / 日志 / 提示词？</li>
+<li>新增的定时器、Map/Set、监听器，在会话退役与进程退出路径上都清理了吗？</li>
+<li>是否更新了对应的测试与本文档？</li>
+</ol>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+<aside class="sidebar-right" aria-label="On this page">
+  <div class="sidebar-inner">
+    <span class="toc-label">On this page</span>
+    <nav class="toc-list">
+      <a class="toc-h2" href="#4-提交-pr">4. 提交 PR</a>
+      <a class="toc-h2" href="#5-维护者的合并方式据实说明">5. 维护者的合并方式（据实说明）</a>
+      <a class="toc-h2" href="#6-许可">6. 许可</a>
+      <a class="toc-h2" href="#五改动检查单每个-pr-自问">五、改动检查单（每个 PR 自问）</a>
+    </nav>
+  </div>
+</aside>
+
+</div>
+
+<script src="../../../assets/nav.js"></script>
+
+</body>
+</html>

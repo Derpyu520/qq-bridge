@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>威胁模型 — qq-bridge</title>
+<meta name="description" content="本文把项目里 已经实现的 安全边界、 已知的 残余风险、以及 每次发布必须回归 的 检查项集中到一处。与之配套的承诺性文档是 ../../RULES.md （面向使用者的 权限说明）；本文偏工程实现，供改动代码前后对照。">
+<meta property="og:title" content="威胁模型 — qq-bridge">
+<meta property="og:description" content="本文把项目里 已经实现的 安全边界、 已知的 残余风险、以及 每次发布必须回归 的 检查项集中到一处。与之配套的承诺性文档是 ../../RULES.md （面向使用者的 权限说明）；本文偏工程实现，供改动代码前后对照。">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../../assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="../../../" data-tab="Developer Guide" data-page-rel="pages/dev/security/threat-model.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../../../index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout has-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body decisions">
+  <div class="topbar">
+  <div class="crumbs">
+    <a href="../../../index.html">qq-bridge</a>
+    <span class="sep">/</span>
+    Pages
+    <span class="sep">/</span>
+    <a href="../index.html">Developer Guide</a>
+    <span class="sep">/</span>
+    Security
+    <span class="sep">/</span>
+    <span class="here">威胁模型</span>
+  </div>
+</div>
+  <h1>威胁模型</h1>
+<!-- moved verbatim from pages/ops/security-baseline.html [pre] on 2026-11-03 (docs reorg step 2) -->
+<blockquote>
+<p>本文把项目里<strong>已经实现的</strong>安全边界、<strong>已知的</strong>残余风险、以及<strong>每次发布必须回归</strong>的
+检查项集中到一处。与之配套的承诺性文档是 <a href="../../use/modes.html">../../RULES.md</a>（面向使用者的
+权限说明）；本文偏工程实现，供改动代码前后对照。</p>
+<p>维护规则：任何改动如果改变了下面任一条目，<strong>必须在同一个 PR 里更新本文</strong>。</p>
+</blockquote>
+<hr>
+
+<!-- moved verbatim from pages/ops/security-baseline.html [h2:一] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="一威胁模型我们要防谁防什么">一、威胁模型（我们要防谁、防什么）</h2>
+<table>
+<thead><tr><th>威胁主体</th><th>能力假设</th><th>我们不防的</th></tr></thead>
+<tbody>
+<tr><td><strong>QQ 群友 / 陌生人</strong></td><td>能给机器人发任意文本、图片、表情、拍一拍；能尝试提示注入</td><td>他们能看到的公开信息</td></tr>
+<tr><td><strong>被注入的模型</strong></td><td>会尝试调用任意工具名、传任意参数、尝试外发本机内容</td><td>——</td></tr>
+<tr><td><strong>本机其他用户</strong></td><td>能登录同一台机器，能读文件系统</td><td>已取得管理员/root 的主体</td></tr>
+<tr><td><strong>本机其他进程 / 浏览器页面</strong></td><td>能访问 <code>127.0.0.1</code>，能构造任意 HTTP 请求</td><td>已能读写本项目 <code>state/</code> 的主体</td></tr>
+<tr><td><strong>DSH 侧 agent（QQ 会话）</strong></td><td>拥有 MCP 工具面，但<strong>没有</strong>本地工具</td><td>——</td></tr>
+</tbody>
+</table>
+<p><strong>不在此模型的范围内</strong>：QQ 账号本身被盗、SnowLuma 网关被攻陷、DSH 本体漏洞、
+操作系统级攻击者。这些情况下本项目无法提供额外保护，README 中已声明。</p>
+<hr>
+
+<!-- moved verbatim from pages/ops/security-baseline.html [h2:三] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="三已知残余风险明确不修--修不了必须让用户知道">三、已知残余风险（明确不修 / 修不了，必须让用户知道）</h2>
+<table>
+<thead><tr><th>#</th><th>风险</th><th>现状与缓解</th><th>为什么不修</th></tr></thead>
+<tbody>
+<tr><td>R1</td><td><strong>敏感信息审计是启发式的</strong></td><td>能抓"带赋值关系的凭据"和本机路径；抓不到任意形态的秘密</td><td>通用秘密检测无法在没有密钥的情况下做对；硬边界在白名单与工具面，审计是兜底</td></tr>
+<tr><td>R2</td><td><strong><code>state/</code> 里的令牌是明文</strong></td><td>当前支持的 Windows 部署通过 ACL 收紧访问权限</td><td>引入凭据库或 DPAPI 会增加部署与迁移复杂度；是否采用需结合本项目后续凭据保护设计评估</td></tr>
+<tr><td>R3</td><td><strong>贴纸账号库仍共享，AI 备注仅保留一个归属版本</strong></td><td>私有认知已在 API、搜索和注入路径按 scope 隔离；其他会话更新认知会替换旧归属并清空旧私有字段</td><td>QQ 收藏本来是全局资源；每会话多版本备注属于后续存储设计</td></tr>
+<tr><td>R4</td><td><strong>远程停止不是原子的</strong></td><td><code>session/control</code> + <code>updateQueue</code> + <code>cancel</code> 是尽力而为，已执行的工具副作用无法回滚</td><td>DSH 协议没有事务语义</td></tr>
+<tr><td>R5</td><td><strong>离线队列不保证送达</strong></td><td>每会话最多 50 条，进程退出即丢</td><td>一致性代价过高；README 已写明</td></tr>
+<tr><td>R6</td><td><strong>预设不变量检查是子串存在性</strong></td><td>防误删，不防恶意</td><td>能改这个文件的人本来就是管理员，真正的硬边界在工具守卫与白名单</td></tr>
+<tr><td>R7</td><td><strong><code>self-test.js</code> 只证明链路通</strong></td><td>不做断言</td><td>它是连通性探针，不是回归套件（回归在 <code>npm run test:audit</code>）</td></tr>
+<tr><td>R8</td><td><strong>单人维护、无外部安全审计</strong></td><td>有离线回归 + 本文档</td><td>内部审查不能替代独立的外部或对抗式安全评估</td></tr>
+<tr><td>R9</td><td><strong><code>state/</code> 的 ACL 收紧可能失败</strong>（未提权且目录属主权限被策略收走时）</td><td><code>scripts/harden-state-acl.mjs</code> 会自动提权重试一次；仍失败则明确告警 + 给出可复制命令 + 控制台告警条</td><td>改 ACL 属于需要特权的操作；<strong>降级为"明确告警"而不是"阻断启动"</strong>是刻意的取舍（否则用户会为了能启动而关掉整条安全链路）。其他凭据保护方案需在后续设计中单独评估，不能视为已经实现</td></tr>
+<tr><td>R10</td><td><strong>收紧 <code>state/</code> 后，DSH 沙箱会话写不进 <code>state/</code></strong>（见 §2.6）</td><td>有意取舍，非缺陷；诊断见 <code>npm run diagnose:acl</code></td><td>在当前 Windows 实现中，能力 SID 依赖继承下发，而切断继承是本项目阻止本机其他用户读取令牌的直接手段。<strong>代价已被接受并写进文档</strong>，项目自己的测试夹具/探针据此改用系统临时目录</td></tr>
+<tr><td>R11</td><td><strong><code>plugins/**</code> 内容被意外切断继承，沙箱里改不动 L7 守卫</strong></td><td>来源不明（本仓库无此脚本）；<code>npm run diagnose:acl</code> 会列出并打印恢复命令</td><td>该处不含凭据，恢复继承无泄密风险；但若不恢复，被沙箱约束的 DSH agent 就无法维护工具守卫 —— 需要人工在无沙箱终端改</td></tr>
+<tr><td>R12</td><td><strong>旧版本 AI 黑话可能已错误标成 <code>global</code>，或混入多群证据</strong></td><td>新写入与所有读取路径已按 scope 隔离，但现有 <code>global</code> 条目继续按全局语义可见；升级后需管理员复核、删除或重新指定归属</td><td>错误保存时已丢失可靠归属，无法自动区分有意共享与历史污染，也不能可靠拆分混合解释</td></tr>
+</tbody>
+</table>
+<hr>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+<aside class="sidebar-right" aria-label="On this page">
+  <div class="sidebar-inner">
+    <span class="toc-label">On this page</span>
+    <nav class="toc-list">
+      <a class="toc-h2" href="#一威胁模型我们要防谁防什么">一、威胁模型（我们要防谁、防什么）</a>
+      <a class="toc-h2" href="#三已知残余风险明确不修--修不了必须让用户知道">三、已知残余风险（明确不修 / 修不了，必须让用户知道）</a>
+    </nav>
+  </div>
+</aside>
+
+</div>
+
+<script src="../../../assets/nav.js"></script>
+
+</body>
+</html>

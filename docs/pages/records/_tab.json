@@ -1,0 +1,28 @@
+{
+  "label": "记录",
+  "key": "records",
+  "landing": "index.html",
+  "order_priority": 30,
+  "sections": [
+    {
+      "label": "版本适配",
+      "dir": "adaptation",
+      "key": "records",
+      "order": [
+        "dsh-0.2.1",
+        "dsh-0.2.0"
+      ]
+    },
+    {
+      "label": "核查",
+      "dir": "reviews",
+      "key": "records",
+      "order": [
+        "2026-10-31-audit",
+        "2026-10-31-issues",
+        "2026-10-31-code-scanning",
+        "privacy-scans"
+      ]
+    }
+  ]
+}

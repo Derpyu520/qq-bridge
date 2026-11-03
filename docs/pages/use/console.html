@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>控制台 — qq-bridge</title>
+<meta name="description" content="控制台新增 令牌与花费 页（左侧「管理」分组下），实时显示 AI 的 token 消耗与折算金额，可下钻到 每个群 / 每个好友 / 每一轮对话 。">
+<meta property="og:title" content="控制台 — qq-bridge">
+<meta property="og:description" content="控制台新增 令牌与花费 页（左侧「管理」分组下），实时显示 AI 的 token 消耗与折算金额，可下钻到 每个群 / 每个好友 / 每一轮对话 。">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="../../" data-tab="使用指南" data-page-rel="pages/use/console.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../../index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout has-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body guide">
+  <div class="topbar">
+  <div class="crumbs">
+    <a href="../../index.html">qq-bridge</a>
+    <span class="sep">/</span>
+    Pages
+    <span class="sep">/</span>
+    <a href="index.html">使用指南</a>
+    <span class="sep">/</span>
+    <span class="here">控制台</span>
+  </div>
+</div>
+  <h1>控制台</h1>
+<!-- moved verbatim from pages/ops/token-usage.html [pre] on 2026-11-03 (docs reorg step 2) -->
+<blockquote>
+<p>控制台新增 <strong>令牌与花费</strong> 页（左侧「管理」分组下），实时显示 AI 的 token 消耗与折算金额，可下钻到 <strong>每个群 / 每个好友 / 每一轮对话</strong>。</p>
+</blockquote>
+
+<!-- moved verbatim from pages/ops/token-usage.html [h2:一] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="一它回答的问题">一、它回答的问题</h2>
+<table>
+<thead><tr><th>问题</th><th>看哪里</th></tr></thead>
+<tbody>
+<tr><td>一共烧了多少钱？现在这一刻是高峰还是空闲价？</td><td>顶部四个指标：<strong>总花费 / 累计 token / 缓存命中率 / 平均每轮</strong></td></tr>
+<tr><td><strong>什么时候消耗得最凶？哪几个小时贵？</strong></td><td>「<strong>消耗走势</strong>」柱状图（可选 24 小时 / 3 天 / 7 天 / 30 天；纵轴可切花费或 token）</td></tr>
+<tr><td>钱主要花在哪个群？</td><td>「按会话」表：每个群 / 私聊 / 内部会话一行，含轮数、步数、命中/未命中输入、输出、花费、占比</td></tr>
+<tr><td>这个群具体是哪几轮贵？</td><td>点会话行（或下拉框选择）→「逐轮花费」表：每轮的步数、四类 token、命中率、花费、峰谷时段</td></tr>
+<tr><td>刚才那一轮花了多少？</td><td>「最近调用流水」折叠区：最新 40 条采样，实时刷新</td></tr>
+<tr><td>单价是多少、怎么算高峰？</td><td>「当前生效的价目表」折叠区</td></tr>
+</tbody>
+</table>
+<p>页面每 3 秒自动同步一次（与其它页面同一节奏）；<strong>只在切到本页时轮询</strong>，其它页面不会为此多打接口。</p>
+
+<!-- moved verbatim from pages/ops/token-usage.html [h2:二] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="二走势图怎么读">二、走势图怎么读</h2>
+<ul>
+<li><p><strong>柱子的颜色就是价签</strong>：空闲时段是蓝色，高峰时段（单价 ×2）是金色，横跨峰谷边界的粗桶是第三种颜色。
+所以「哪天几点开始变贵」不用查表，看图就知道 —— 工作日的金色带就是 9:00–12:00 与 14:00–18:00。</p></li>
+<li><p><strong>没有调用的时段也会画出来</strong>（高度为 0 的空白格），所以"那几个小时很安静"是看得见的，
+不会因为跳过空档而让两段用量贴在一起、显得一直在烧钱。</p></li>
+<li><p><strong>鼠标悬停任意一格</strong>（包括高度为 0 的空格）都会显示该格的花费、四类 token、步数/轮次、峰谷时段与涉及的会话。</p></li>
+<li><p><strong>换范围会自动换粒度</strong>，桶数始终 ≤ 48，不会因为选 30 天就画 720 根柱子：</p>
+<table>
+<thead><tr><th>范围</th><th>每格</th><th>格数</th></tr></thead>
+<tbody>
+<tr><td>近 24 小时</td><td>30 分钟</td><td>48</td></tr>
+<tr><td>近 3 天</td><td>2 小时</td><td>36</td></tr>
+<tr><td>近 7 天</td><td>6 小时</td><td>28</td></tr>
+<tr><td>近 30 天</td><td>24 小时</td><td>30</td></tr>
+</tbody>
+</table></li>
+</ul>
+<ul>
+<li>图上方的合计与「最贵一格」是<strong>当前所选范围</strong>的，不一定是全部历史；
+若还有更早的历史只有累计值（没有逐时明细），图下方会明确写出金额，
+避免出现「图上加起来 ≠ 总花费」却又没有解释的情况。</li>
+</ul>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+<aside class="sidebar-right" aria-label="On this page">
+  <div class="sidebar-inner">
+    <span class="toc-label">On this page</span>
+    <nav class="toc-list">
+      <a class="toc-h2" href="#一它回答的问题">一、它回答的问题</a>
+      <a class="toc-h2" href="#二走势图怎么读">二、走势图怎么读</a>
+    </nav>
+  </div>
+</aside>
+
+</div>
+
+<script src="../../assets/nav.js"></script>
+
+</body>
+</html>

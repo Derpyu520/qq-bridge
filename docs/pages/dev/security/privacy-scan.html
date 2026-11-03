@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>隐私扫描 — qq-bridge</title>
+<meta name="description" content="本项目会接触真实 QQ 号、群号、本机路径、令牌和聊天内容。误提交后，敏感信息可能长期保留在 公开 Git 历史及已有克隆、fork 中。发布前扫描是必要步骤，扫描结果仍需人工判读，不能机械忽略。">
+<meta property="og:title" content="隐私扫描 — qq-bridge">
+<meta property="og:description" content="本项目会接触真实 QQ 号、群号、本机路径、令牌和聊天内容。误提交后，敏感信息可能长期保留在 公开 Git 历史及已有克隆、fork 中。发布前扫描是必要步骤，扫描结果仍需人工判读，不能机械忽略。">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../../assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="../../../" data-tab="Developer Guide" data-page-rel="pages/dev/security/privacy-scan.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../../../index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout has-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body decisions">
+  <div class="topbar">
+  <div class="crumbs">
+    <a href="../../../index.html">qq-bridge</a>
+    <span class="sep">/</span>
+    Pages
+    <span class="sep">/</span>
+    <a href="../index.html">Developer Guide</a>
+    <span class="sep">/</span>
+    Security
+    <span class="sep">/</span>
+    <span class="here">隐私扫描</span>
+  </div>
+</div>
+  <h1>隐私扫描</h1>
+<!-- moved verbatim from pages/ops/privacy.html [pre] on 2026-11-03 (docs reorg step 2) -->
+<blockquote>
+<p>本项目会接触真实 QQ 号、群号、本机路径、令牌和聊天内容。误提交后，敏感信息可能长期保留在
+公开 Git 历史及已有克隆、fork 中。发布前扫描是必要步骤，扫描结果仍需人工判读，不能机械忽略。</p>
+</blockquote>
+
+<!-- moved verbatim from pages/ops/privacy.html [h2:一] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="一运行扫描">一、运行扫描</h2>
+<pre><code class="language-bash">node scripts/privacy-scan.mjs                # 扫描已跟踪文件和未忽略的新文件（推荐）
+node scripts/privacy-scan.mjs --tracked-only # 只扫描 Git 已跟踪文件
+node scripts/privacy-scan.mjs --history      # 追加扫描全部 Git 历史（发布前运行）
+node scripts/privacy-scan.mjs --json         # 机读输出</code></pre>
+<p>也可以使用：</p>
+<pre><code class="language-bash">npm run privacy-scan
+npm run privacy-scan:history</code></pre>
+<ul>
+<li><code>--history</code> 需要完整克隆；浅克隆可先运行 <code>git fetch --unshallow</code>。</li>
+<li>历史扫描按历史 blob 检查，同一内容不会因出现在多个提交中而重复报告。</li>
+<li>当前已知历史问题为 <strong>15 处旧提交中的本机路径</strong>；具体文件和提交以扫描输出为准，
+不再只是早期某一篇文档。</li>
+<li>当前工作树扫描通过不代表历史干净，普通修复提交也不会消除历史命中。</li>
+</ul>
+<p>退出码：<code>0</code> = 未发现命中，<code>1</code> = 有命中，<code>2</code> = 规则或扫描目录等执行错误。</p>
+<p>扫描器通常读取 <code>git ls-files</code> 和未被忽略的未跟踪文件；Git 不可用时退化为目录遍历，
+并跳过 junction / symlink，避免递归进入仓库外目录。</p>
+
+<!-- moved verbatim from pages/ops/privacy.html [h2:二] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="二内置规则">二、内置规则</h2>
+<table>
+<thead><tr><th>规则</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>本机绝对路径</td><td>例如 Windows 用户目录和其他工作盘路径</td></tr>
+<tr><td>QQ 号 / 群号</td><td>识别常见真实账号长度；文档占位符与测试夹具按规则排除</td></tr>
+<tr><td>高熵串</td><td>检查疑似令牌，同时降低 Git SHA、环境变量名和文件名等误报</td></tr>
+<tr><td>凭据赋值</td><td>检查 <code>accessToken</code> 等字段后的实际值，不把空值或键名当作泄漏</td></tr>
+<tr><td>私钥与带凭据 URL</td><td>检查私钥头和 <code>https://user:pass@host</code> 等形式</td></tr>
+<tr><td>不应入库的文件</td><td>包括 <code>config.json</code>、<code>state/</code>、<code>audio/</code>、日志和备份文件</td></tr>
+</tbody>
+</table>
+
+<!-- moved verbatim from pages/ops/privacy.html [h2:三] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="三命中后怎么处理">三、命中后怎么处理</h2>
+<table>
+<thead><tr><th>情况</th><th>处理</th></tr></thead>
+<tbody>
+<tr><td>真实账号、路径、令牌或聊天内容</td><td>删除或替换为占位符；凭据应立即轮换，不能只改显示文本</td></tr>
+<tr><td>文件本就不应入库</td><td>从版本控制移除并加入 <code>.gitignore</code>；已经提交过的，继续评估历史处置</td></tr>
+<tr><td>脱敏模板、测试夹具或文档示例的误报</td><td>先核实内容，再添加精确豁免，不要直接关闭整条规则</td></tr>
+</tbody>
+</table>
+<h3 id="本地规则文件">本地规则文件</h3>
+<p>模板为 <a href="https://github.com/Derpyu520/qq-bridge/blob/main/scripts/privacy-rules.example.json"><code>privacy-rules.example.json</code></a>。复制为
+<code>scripts/privacy-rules.json</code> 后填写本机真实标识；该文件必须保持被 <code>.gitignore</code> 排除。
+本地规则会与内置默认规则一起使用。</p>
+<pre><code class="language-jsonc">{
+  &quot;deny&quot;: [
+    { &quot;name&quot;: &quot;我的真实群号&quot;, &quot;pattern&quot;: &quot;1001[0-9]{6}&quot;, &quot;flags&quot;: &quot;&quot; }
+  ],
+  &quot;denyFiles&quot;: [&quot;notes/&quot;, &quot;*.private.md&quot;],
+  &quot;allowPaths&quot;: [&quot;docs/guides/VOICE.md&quot;, &quot;scripts/console-ui-&quot;]
+}</code></pre>
+<p><code>allowPaths</code> 支持前缀或 <code>*</code> 通配。它是已核实内容的误报豁免，不表示该文件以后无需检查。</p>
+
+<!-- moved verbatim from pages/ops/privacy.html [h2:四] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="四敏感信息已经提交或公开">四、敏感信息已经提交或公开</h2>
+<table>
+<thead><tr><th>情况</th><th>建议</th></tr></thead>
+<tbody>
+<tr><td>尚未提交</td><td>从工作区和暂存区移除敏感内容，再重新检查</td></tr>
+<tr><td>已提交但未推送</td><td>回退相应提交并清理内容；保留需要的非敏感修改</td></tr>
+<tr><td>已推送或可能已被克隆 / fork</td><td>先轮换全部相关凭据，再评估历史清理、协作者通知和必要的重新发布方案</td></tr>
+</tbody>
+</table>
+<p>历史重写会影响所有已有克隆、分支和 fork，需要单独制定协调方案。不要认为删除最新提交、
+重发 release 或简单 force push 就能撤销已经发生的泄露。</p>
+
+<!-- moved verbatim from pages/ops/privacy.html [h2:五] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="五ci-用法">五、CI 用法</h2>
+<pre><code class="language-yaml">- name: Privacy scan
+  run: node scripts/privacy-scan.mjs --tracked-only</code></pre>
+<p>CI 只扫描当前 checkout 的已跟踪文件。历史扫描需要完整克隆且耗时更长，作为发布前人工检查，
+不替代工作树扫描，也不要求通过改写历史来“刷绿”。</p>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+<aside class="sidebar-right" aria-label="On this page">
+  <div class="sidebar-inner">
+    <span class="toc-label">On this page</span>
+    <nav class="toc-list">
+      <a class="toc-h2" href="#一运行扫描">一、运行扫描</a>
+      <a class="toc-h2" href="#二内置规则">二、内置规则</a>
+      <a class="toc-h2" href="#三命中后怎么处理">三、命中后怎么处理</a>
+      <a class="toc-h3" href="#本地规则文件">本地规则文件</a>
+      <a class="toc-h2" href="#四敏感信息已经提交或公开">四、敏感信息已经提交或公开</a>
+      <a class="toc-h2" href="#五ci-用法">五、CI 用法</a>
+    </nav>
+  </div>
+</aside>
+
+</div>
+
+<script src="../../../assets/nav.js"></script>
+
+</body>
+</html>

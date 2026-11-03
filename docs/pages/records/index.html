@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>记录 — qq-bridge</title>
+<meta name="description" content="记某个日期或版本当时状态的页，写完就冻结、只用来追溯，不代表当前实现。判定：写完以后还会跟着代码更新的，不放这里；记录里仍然有效的结论，抽到 使用指南 或 Developer Guide 。">
+<meta property="og:title" content="记录 — qq-bridge">
+<meta property="og:description" content="记某个日期或版本当时状态的页，写完就冻结、只用来追溯，不代表当前实现。判定：写完以后还会跟着代码更新的，不放这里；记录里仍然有效的结论，抽到 使用指南 或 Developer Guide 。">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="../../" data-tab="记录" data-page-rel="pages/records/index.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../../index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout has-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body research">
+  <div class="topbar">
+  <div class="crumbs">
+    <a href="../../index.html">qq-bridge</a>
+    <span class="sep">/</span>
+    Pages
+    <span class="sep">/</span>
+    <span class="here">记录</span>
+  </div>
+</div>
+  <h1>记录</h1>
+<p>记某个日期或版本当时状态的页，写完就冻结、只用来追溯，不代表当前实现。判定：写完以后还会跟着代码更新的，不放这里；记录里仍然有效的结论，抽到<a href="../use/index.html">使用指南</a>或 <a href="../dev/index.html">Developer Guide</a>。</p>
+
+<h2 id="sections">两个 section</h2>
+<table>
+<thead><tr><th>Section</th><th>放什么</th><th>页</th></tr></thead>
+<tbody>
+<tr><td>版本适配</td><td>qq-bridge 跟随某个 DSH 版本做的改动与验证</td><td><a href="adaptation/dsh-0.2.1.html">DSH 0.2.1</a> · <a href="adaptation/dsh-0.2.0.html">DSH 0.2.0</a></td></tr>
+<tr><td>核查</td><td>某一天对仓库状态的核查结果</td><td><a href="reviews/2026-10-31-audit.html">10-31 仓库体检</a> · <a href="reviews/2026-10-31-issues.html">10-31 issues 核查</a> · <a href="reviews/2026-10-31-code-scanning.html">10-31 Code scanning 核查</a> · <a href="reviews/privacy-scans.html">隐私扫描存档</a></td></tr>
+</tbody>
+</table>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+<aside class="sidebar-right" aria-label="On this page">
+  <div class="sidebar-inner">
+    <span class="toc-label">On this page</span>
+    <nav class="toc-list">
+      <a class="toc-h2" href="#sections">两个 section</a>
+    </nav>
+  </div>
+</aside>
+
+</div>
+
+<script src="../../assets/nav.js"></script>
+
+</body>
+</html>

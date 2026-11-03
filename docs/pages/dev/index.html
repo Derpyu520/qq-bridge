@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Developer Guide — qq-bridge</title>
+<meta name="description" content="给改代码、审代码的人看的部分。判定：只有改代码或审代码时才需要的页放这里；部署、运营 bot 的人不改代码也要知道的，放 使用指南 ；记某个日期或版本当时状态的，放 记录 。">
+<meta property="og:title" content="Developer Guide — qq-bridge">
+<meta property="og:description" content="给改代码、审代码的人看的部分。判定：只有改代码或审代码时才需要的页放这里；部署、运营 bot 的人不改代码也要知道的，放 使用指南 ；记某个日期或版本当时状态的，放 记录 。">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="../../" data-tab="Developer Guide" data-page-rel="pages/dev/index.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../../index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout has-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body guide">
+  <div class="topbar">
+  <div class="crumbs">
+    <a href="../../index.html">qq-bridge</a>
+    <span class="sep">/</span>
+    Pages
+    <span class="sep">/</span>
+    <span class="here">Developer Guide</span>
+  </div>
+</div>
+  <h1>Developer Guide</h1>
+<p>给改代码、审代码的人看的部分。判定：只有改代码或审代码时才需要的页放这里；部署、运营 bot 的人不改代码也要知道的，放<a href="../use/index.html">使用指南</a>；记某个日期或版本当时状态的，放<a href="../records/index.html">记录</a>。</p>
+
+<h2 id="sections">四个 section</h2>
+<table>
+<thead><tr><th>Section</th><th>放什么</th><th>入口</th></tr></thead>
+<tbody>
+<tr><td>Core</td><td>固定的骨架：blueprint · architecture · codebase-map · glossary</td><td><a href="core/architecture.html">架构</a> · <a href="core/codebase-map.html">仓库目录地图</a></td></tr>
+<tr><td>Design docs</td><td><code>src/</code> 里一个机制一页：它的契约与实现</td><td><a href="design-docs/token-ledger.html">用量账本</a></td></tr>
+<tr><td>Security</td><td>谁能让 bot 做什么、什么不能出去：威胁模型、已实现的边界、隐私扫描、发布检查、漏洞报告</td><td><a href="security/threat-model.html">威胁模型</a> · <a href="security/baseline.html">安全基线</a></td></tr>
+<tr><td>Contributing</td><td>把改动交上来的流程：开发环境、测试、PR、DSH 升级清单</td><td><a href="contributing/setup.html">开发环境</a> · <a href="contributing/testing.html">测试</a></td></tr>
+</tbody>
+</table>
+<p>另有 tmp section：本地讨论页，gitignore 掉，只在开发服务器上看得到。</p>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+<aside class="sidebar-right" aria-label="On this page">
+  <div class="sidebar-inner">
+    <span class="toc-label">On this page</span>
+    <nav class="toc-list">
+      <a class="toc-h2" href="#sections">四个 section</a>
+    </nav>
+  </div>
+</aside>
+
+</div>
+
+<script src="../../assets/nav.js"></script>
+
+</body>
+</html>

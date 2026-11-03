@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>qq-bridge 文档 — qq-bridge</title>
+<meta name="description" content="本索引优先列出 已入库、可在公开仓库阅读 的文档。根目录主要保留 README.md 、 README.en.md 、 RULES.md ；GitHub 社区健康文件与许可文件按惯例也放在根目录或 .github/ ，包括 LICENSE 、 NOTICE.md 、 SECURITY.md 和 CONTRIBUTING.md 。">
+<meta property="og:title" content="qq-bridge 文档 — qq-bridge">
+<meta property="og:description" content="本索引优先列出 已入库、可在公开仓库阅读 的文档。根目录主要保留 README.md 、 README.en.md 、 RULES.md ；GitHub 社区健康文件与许可文件按惯例也放在根目录或 .github/ ，包括 LICENSE 、 NOTICE.md 、 SECURITY.md 和 CONTRIBUTING.md 。">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="" data-tab="使用指南" data-page-rel="index.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout no-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body blueprint">
+  <div class="topbar">
+  <div class="crumbs">
+    <span class="here">qq-bridge</span>
+  </div>
+</div>
+  <h1>qq-bridge 文档</h1>
+<!-- moved verbatim from index.html [pre] on 2026-11-03 (docs reorg step 2) -->
+<blockquote>
+<p>本索引优先列出<strong>已入库、可在公开仓库阅读</strong>的文档。根目录主要保留 <code>README.md</code>、<code>README.en.md</code>、
+<code>RULES.md</code>；GitHub 社区健康文件与许可文件按惯例也放在根目录或 <code>.github/</code>，包括 <code>LICENSE</code>、
+<code>NOTICE.md</code>、<code>SECURITY.md</code> 和 <code>CONTRIBUTING.md</code>。</p>
+<p>状态标记：✅ 当前使用说明 · 🗄️ 带日期的历史记录（用于追溯，不代表当前实现或最新验证结果）。
+仓库目录结构与 <code>scripts/</code> 命名约定见 <a href="pages/dev/core/codebase-map.html">FOLDER_MAP</a>。</p>
+<p><strong>术语边界</strong>：文中出现的 <code>[Hook]</code>、原生组件、逐字节比对、运行时源码等，均指 SnowLuma 行为或其观测记录；qq-bridge 不注入、不挂钩、不修改 SnowLuma 本体。</p>
+</blockquote>
+
+<!-- moved verbatim from index.html [h2:按需求查找] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="按需求查找">按需求查找</h2>
+<table>
+<thead><tr><th>需求</th><th>入口</th></tr></thead>
+<tbody>
+<tr><td>安装、升级或排查连接</td><td><a href="pages/use/install.html">DSH 安装指南</a></td></tr>
+<tr><td>了解模式、权限与管理命令</td><td><a href="pages/use/modes.html">使用规则</a></td></tr>
+<tr><td>修改人格卡</td><td><a href="pages/use/personas.html">人格卡写作规范</a></td></tr>
+<tr><td>查看用量与费用口径</td><td><a href="pages/use/console.html">用量看板</a></td></tr>
+<tr><td>修改控制台并运行离线回归</td><td><a href="pages/dev/contributing/testing.html">控制台测试指南</a></td></tr>
+<tr><td>修改安全相关代码</td><td><a href="pages/dev/security/baseline.html">安全基线</a></td></tr>
+<tr><td>核查 DSH 版本适配</td><td><a href="pages/records/adaptation/dsh-0.2.1.html">0.2.1 适配记录</a></td></tr>
+<tr><td>查找目录或脚本用途</td><td><a href="pages/dev/core/codebase-map.html">FOLDER_MAP</a></td></tr>
+<tr><td>报告安全问题</td><td><a href="pages/dev/security/reporting.html">安全策略</a></td></tr>
+</tbody>
+</table>
+
+  
+<!-- moved verbatim from README.md [h2:文档与开发] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="文档与开发">文档与开发</h2>
+<table>
+<thead><tr><th>我想……</th><th>入口</th></tr></thead>
+<tbody>
+<tr><td>安装、升级或排查连接</td><td><a href="pages/use/install.html">DSH 安装指南</a></td></tr>
+<tr><td>了解模式、权限与管理命令</td><td><a href="pages/use/modes.html">使用规则</a></td></tr>
+<tr><td>查看模型用量与费用口径</td><td><a href="pages/use/console.html">用量看板</a></td></tr>
+<tr><td>参与开发</td><td><a href="pages/dev/contributing/setup.html">贡献指南</a> · <a href="pages/dev/security/baseline.html">安全基线</a></td></tr>
+<tr><td>报告安全漏洞</td><td><a href="pages/dev/security/reporting.html">安全报告</a></td></tr>
+<tr><td>查找其他说明</td><td><a href="#">文档索引</a></td></tr>
+</tbody>
+</table>
+<p>开发基于 <code>dev</code>，提交 PR 前运行离线回归：</p>
+<pre><code class="language-powershell">npm run test:audit</code></pre>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+
+
+</div>
+
+<script src="assets/nav.js"></script>
+
+</body>
+</html>

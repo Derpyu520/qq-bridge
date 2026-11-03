@@ -1,0 +1,57 @@
+{
+  "label": "使用指南",
+  "key": "use",
+  "landing": "index.html",
+  "order_priority": 10,
+  "sections": [
+    {
+      "label": "开始",
+      "dir": "",
+      "key": "use",
+      "only_listed": true,
+      "nav_key": "use-start",
+      "order": [
+        "index",
+        "install",
+        "config"
+      ]
+    },
+    {
+      "label": "日常使用",
+      "dir": "",
+      "key": "use",
+      "only_listed": true,
+      "no_auto_index": true,
+      "nav_key": "use-daily",
+      "order": [
+        "modes",
+        "admin",
+        "console"
+      ]
+    },
+    {
+      "label": "定制",
+      "dir": "",
+      "key": "use",
+      "only_listed": true,
+      "no_auto_index": true,
+      "nav_key": "use-custom",
+      "order": [
+        "personas",
+        "slang"
+      ]
+    },
+    {
+      "label": "参考",
+      "dir": "",
+      "key": "use",
+      "only_listed": true,
+      "no_auto_index": true,
+      "nav_key": "use-ref",
+      "order": [
+        "faq",
+        "license"
+      ]
+    }
+  ]
+}

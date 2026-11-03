@@ -58,7 +58,7 @@ const DEFAULT_RULES = {
     // ── 以下三项来自一次独立复核：在**全新克隆**里扫描会报 15 条命中，全部是误报，
     //    但它们此前只写在本地 privacy-rules.json（不入库）里，所以对外部验证者而言
     //    这道闸门永远是红的。把误报放进来，闸门才是可用的。
-    //    逐条依据：docs/guides/PRIVACY.md 是**讲解脱敏规则**的文档，里面的
+    //    逐条依据：docs/pages/dev/security/privacy-scan.html 是**讲解脱敏规则**的文档，里面的
     //    `C:\Users\<名字>\…` / `https://user:pass@host` / `-----BEGIN … PRIVATE KEY-----`
     //    就是它要举例的占位符；src/bridge.js:1706 是注释里的示例 `D:\...\audio\xxx.mp3`；
     //    src/bridge.js 的 `accessToken:` 与 src/dsh-client.js 的 `secret =` 命中的都是
@@ -66,7 +66,15 @@ const DEFAULT_RULES = {
     //    ⚠️ 代价必须说清：allowPaths 是**按文件**粒度放行的，所以 bridge.js / dsh-client.js
     //    今后新增的真实泄漏不会被扫出来。要收紧，正确做法是给扫描器加
     //    「文件 + 规则名」粒度（或让凭据规则只认高熵字面量），而不是继续往这里加文件。
-    'docs/guides/PRIVACY.md', 'src/bridge.js', 'src/dsh-client.js',
+    'docs/pages/dev/security/privacy-scan.html', 'src/bridge.js', 'src/dsh-client.js',
+    // 文档站的全文搜索索引由 docs/_lib/_wrap_handwritten.py 从 docs/ 下各 HTML 页生成，
+    // 会把上面 privacy.html 里的占位符原样收进来。索引里的每段文字都来自某个页面，
+    // 那些页面本身仍在扫描范围内（只有 privacy.html 被放行），所以放行索引不漏真实泄漏。
+    'docs/assets/search-index.json',
+    // 文档站引擎的开发服务器（拷自 htmlkb，见 docs/README.md）。命中的是
+    // `if ENV_PASSWORD:` 换行后紧跟的下一行代码（规则里的 \s 跨了行）；文件里的密码
+    // 只从环境变量或 gitignore 的 docs/.site.json 读取，源码里没有任何凭据字面量。
+    'docs/_lib/_serve.py',
   ],
 };
 

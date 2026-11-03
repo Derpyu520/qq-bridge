@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>开发环境 — qq-bridge</title>
+<meta name="description" content="先把两件事说在前面： 这个项目只在 Windows 上跑 ， 维护者通常会直接把改动提交到 dev 。 后者会影响你怎么提 PR，所以第 4 节请读完。">
+<meta property="og:title" content="开发环境 — qq-bridge">
+<meta property="og:description" content="先把两件事说在前面： 这个项目只在 Windows 上跑 ， 维护者通常会直接把改动提交到 dev 。 后者会影响你怎么提 PR，所以第 4 节请读完。">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../../assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="../../../" data-tab="Developer Guide" data-page-rel="pages/dev/contributing/setup.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../../../index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout has-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body guide">
+  <div class="topbar">
+  <div class="crumbs">
+    <a href="../../../index.html">qq-bridge</a>
+    <span class="sep">/</span>
+    Pages
+    <span class="sep">/</span>
+    <a href="../index.html">Developer Guide</a>
+    <span class="sep">/</span>
+    Contributing
+    <span class="sep">/</span>
+    <span class="here">开发环境</span>
+  </div>
+</div>
+  <h1>开发环境</h1>
+<!-- moved verbatim from CONTRIBUTING.md [pre] on 2026-11-03 (docs reorg step 2) -->
+<p>先把两件事说在前面：<strong>这个项目只在 Windows 上跑</strong>，<strong>维护者通常会直接把改动提交到 <code>dev</code></strong>。
+后者会影响你怎么提 PR，所以第 4 节请读完。</p>
+
+<!-- moved verbatim from CONTRIBUTING.md [h2:1] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="1-环境">1. 环境</h2>
+<table>
+<thead><tr><th>需要</th><th>版本</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>Windows</td><td>10 / 11</td><td>大量依赖 Windows 的 ACL、控制台编码与进程行为；Linux / macOS 不在支持范围</td></tr>
+<tr><td>Node.js</td><td><strong>&gt;= 22.13</strong></td><td>见 <code>package.json</code> 的 <code>engines</code></td></tr>
+<tr><td>npm</td><td>随 Node</td><td>仓库带 <code>package-lock.json</code>，请用它锁定版本</td></tr>
+</tbody>
+</table>
+
+<!-- moved verbatim from CONTRIBUTING.md [h2:2] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="2-本地跑起来">2. 本地跑起来</h2>
+<pre><code class="language-bat">git clone https://github.com/Derpyu520/qq-bridge.git
+cd qq-bridge
+npm install
+npm run test:audit</code></pre>
+<p>⚠️ <strong>不要用 <code>npm ci --ignore-scripts</code></strong>。<code>postinstall</code> 会跑 <code>scripts/patch-snowluma-sdk.mjs</code>，
+给 <code>@snowluma/sdk</code> 的相对导入补 <code>.js</code> 扩展名（这两个上游包自己的 ESM 打包有问题）。
+跳过它，<code>test-snowluma-upstream-health.mjs</code> 会稳定失败——那是预期行为，不是你的改动坏了。</p>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+<aside class="sidebar-right" aria-label="On this page">
+  <div class="sidebar-inner">
+    <span class="toc-label">On this page</span>
+    <nav class="toc-list">
+      <a class="toc-h2" href="#1-环境">1. 环境</a>
+      <a class="toc-h2" href="#2-本地跑起来">2. 本地跑起来</a>
+    </nav>
+  </div>
+</aside>
+
+</div>
+
+<script src="../../../assets/nav.js"></script>
+
+</body>
+</html>
