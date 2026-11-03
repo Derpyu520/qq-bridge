@@ -55,6 +55,10 @@ const tests = [
   'test-voice-gui.mjs',
   // 控制台静态契约（跑不了 Playwright 的环境下的替代回归）
   'test-console-static.mjs',
+  // 会话级运行模式（每个会话单独设 chat/reserved/reserved2/closed-agent）：
+  //   端点 /api/conversation/mode（含删除覆盖）、建会话用该会话的 preset、
+  //   改模式后旧会话退役、closed-agent 只允许当前 owner 私聊、缺安全 preset 409。
+  'test-conversation-modes.mjs',
   // 语音系统整体结构检查（入口/依赖/端点/开关/文档一致性）
   'test-voice-system.mjs',
   // SnowLuma 账号/token 自发现（换 QQ 账号后 token 会变，写死的工具会 401）

@@ -115,6 +115,7 @@
     "enabled": true,
     "autoReplyCheckMs": 30000,
     "agentPreset": "qq-chat-v2",
+    "fullAgentPreset": "qq-chat-v2-full",
     "provideRecommendations": true,
     "privacy": {
       "exposeUserId": false

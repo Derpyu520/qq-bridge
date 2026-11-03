@@ -29,6 +29,7 @@ import { normalizeImageForModel } from './media-normalize.js';
 import { AUDIO_EXTS, cleanupTemp, describeAudio, formatBytes, formatDuration, inspectAudio, listAudioFiles, parseTargetKey, processAudioVolume, resolveAudioProcessing, resolveAudioSource, safeJoinLibrary } from './send-voice-lib.js';
 import { discoverSnowLumaConnection, persistSnowLumaEndpoint, persistToken } from './snowluma-conn.js';
 import { hardenDir, manualDirCommand } from './state-acl.mjs';
+import { CONVERSATION_MODES, ConversationModes } from './core/conversation-modes.mjs';
 import { extractForwardIds, forwardIdFromData, sanitizeForwardId, formatForwardResponse } from './forward.js';
 import { resolvePriceTable } from './model-prices.js';
 import { createTokenLedger } from './token-ledger.js';
@@ -65,6 +66,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const STATE_DIR = path.join(ROOT, 'state');
 const STATE_FILE = path.join(STATE_DIR, 'sessions.json');
+// 会话级运行模式覆盖（见 src/core/conversation-modes.mjs）。与 sessions.json 分开：
+// 它是**管理配置**，不该随会话映射的重置/清空一起消失。
+const CONVERSATION_MODES_FILE = path.join(STATE_DIR, 'conversation-modes.json');
 const ROLE_STATE_FILE = path.join(STATE_DIR, 'current-role.json');
 const SLANG_FILE = path.join(STATE_DIR, 'slang.json');
 const SLANG_SESSION_FILE = path.join(STATE_DIR, 'slang-session.json');
@@ -1479,6 +1483,35 @@ async function main() {
   acquireLock();
   loadState();
 
+  // ── 会话级运行模式覆盖 ────────────────────────────────────────────────────
+  // 没有覆盖的会话继续用全局模式（行为不变）；有覆盖的会话按覆盖里的模式运行。
+  // 读坏了就降级为「只读不写、全部走全局模式」：覆盖丢失等于回到全局默认（不提权），
+  // 而绝不是把空状态写回去把管理员的设置抹掉。
+  let conversationModesWritable = true;
+  const loadConversationModes = () => {
+    const fresh = () => new ConversationModes({ ownerQQ: cfg.ownerQQ ?? null });
+    let raw;
+    try {
+      raw = fs.readFileSync(CONVERSATION_MODES_FILE, 'utf8');
+    } catch (error) {
+      if (error?.code !== 'ENOENT') {
+        conversationModesWritable = false;
+        log(`⚠️ conversation-modes.json 读取失败，已降级为「只读不写」（不会覆盖原文件）：${error?.message ?? error}`);
+      }
+      return fresh();
+    }
+    if (!raw.trim()) return fresh();
+    try {
+      const text = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+      return new ConversationModes({ ownerQQ: cfg.ownerQQ ?? null, state: JSON.parse(text) });
+    } catch (error) {
+      conversationModesWritable = false;
+      log(`⚠️ conversation-modes.json 内容无效，已降级为「只读不写」（不会覆盖原文件；全部会话回落到全局模式）：${error?.message ?? error}`);
+      return fresh();
+    }
+  };
+  let conversationModes = loadConversationModes();
+
   // ── 群聊黑话/网络用语学习（slang） ──────────────────────────────────────
   let slangEntries = [];
   // 读失败时（被占用 / 权限 / JSON 损坏）必须**暂停写入**：否则内存里的空数组
@@ -2478,7 +2511,7 @@ async function main() {
     const now = new Date();
     const timeLine = `【当前时间】${now.toLocaleString('zh-CN', { hour12: false })}（${Intl.DateTimeFormat().resolvedOptions().timeZone}）`;
     const parts = [timeLine];
-    if (currentMode === 'closed-agent' && currentKey === `private:${String(cfg.ownerQQ ?? '')}`) {
+    if (modeFor(currentKey) === 'closed-agent' && currentKey === `private:${String(cfg.ownerQQ ?? '')}`) {
       const st = getSocialV2State(currentKey);
       parts.push(`【私聊媒体工具】key="${currentKey}"；【会话令牌】${st.agentToken}。查看或发送收藏表情时必须带上此 key 和 token；仅限当前管理员私聊。`);
     }
@@ -2741,9 +2774,12 @@ async function main() {
    * reserved 代仿真有独立的静默/退场语义，不能把内部输出当普通回复补发。
    */
   async function replayCompletedTurns(sessionId, records) {
-    if (currentMode !== 'chat' && currentMode !== 'closed-agent') return;
     const key = reverse.get(sessionId);
     if (!key || !isCurrentSession(key, sessionId)) return;
+    // 只有「自动转发回复」的模式（chat / closed-agent）才需要补发漏掉的完整回合；
+    // 仿真模式有独立的静默/退场语义。模式按**会话**取（会话可能有覆盖）。
+    const replayMode = modeFor(key);
+    if (replayMode !== 'chat' && replayMode !== 'closed-agent') return;
     const completed = completedTurnsFromRecords(records);
     if (completed.length === 0) return;
 
@@ -3002,6 +3038,9 @@ async function main() {
   // 但 DSH 0.1.5 已不存在该 preset，硬编码会让 closed-agent 模式永远挂不上 preset。
   let dshPresetIds = [];        // 当前 DSH 可用的 preset id 列表（agentPresets/list）
   let dshDefaultPreset = '';    // DSH settings `agent-presets.default`，取不到时用列表里的 isDefault
+  // 覆盖层的全局兜底先按启动时的 currentMode 同步一次；refreshMode() 之后每次
+  // 模式变化都会再同步（见 afterModeRefresh）。
+  syncConversationModeFallback();
   const queued = new Map(); // key -> { promptText }[]
   const queuedHintAt = new Map(); // key -> timestamp（冷却提示）
   const QUEUE_MAX = 50;
@@ -3035,6 +3074,8 @@ async function main() {
 
   // 从 DSH settings 读取桥接模式；命名空间未注册时回退本地 state/mode.json
   async function refreshMode() {
+    // 记住刷新前的管理员：DSH 设置页也能改 ownerQQ，变了就得重建 closed-agent 覆盖。
+    const ownerBefore = cfg.ownerQQ ?? null;
     try {
       const s = unwrap(await api.settings.describe({}), 'settings.describe');
       // DSH 的默认 preset（`agent-presets` 命名空间的 default）——closed-agent 的兜底值来源
@@ -3075,6 +3116,7 @@ async function main() {
           closedAgentPreset = localPreset.closedAgentPreset;
         }
         modeKnown = true;
+        afterModeRefresh(ownerBefore);
         return;
       }
     } catch {}
@@ -3085,6 +3127,13 @@ async function main() {
       closedAgentPreset = local.closedAgentPreset;
     }
     modeKnown = true;
+    afterModeRefresh(ownerBefore);
+  }
+
+  /** 模式/管理员刷新后的收尾：同步覆盖层的全局兜底，管理员变了就重建覆盖。 */
+  function afterModeRefresh(ownerBefore) {
+    if ((cfg.ownerQQ ?? null) !== ownerBefore) reconcileConversationModesOwner();
+    else syncConversationModeFallback();
   }
 
   /** 拉取 DSH 当前可用的 agent preset 清单（供控制台下拉与 closed-agent 兜底使用）。 */
@@ -3135,33 +3184,170 @@ async function main() {
     return dshDefaultPreset || '';
   }
 
-  /** 当前模式下的会话预设；返回 undefined 表示「该模式下没有可安全使用的 preset」 */
-  function modePreset(key, mode, cfg) {
+  /**
+   * 是否为「二代仿真」模式族。
+   *
+   * `reserved2` 与 `reserved2-full` 的对话语义完全相同（文本不自动转发、
+   * AI 自主决定看/回/潜水、走社交引擎与唤醒调度），区别只在 preset 的工具面：
+   * 后者带本机全部 MCP 与本地工具。所以凡是判断「是不是二代仿真」的地方都必须
+   * 用这个函数，不能逐个写 `=== 'reserved2'`，否则新模式会掉进别的分支。
+   */
+  function isV2Mode(mode) {
+    return mode === 'reserved2' || mode === 'reserved2-full';
+  }
+
+  /** 是否有任何会话覆盖在跑二代仿真（供全局中间件放行 agentToken 请求）。 */
+  function hasV2ConversationOverrides() {
+    try {
+      const snap = conversationModes.snapshot();
+      return Object.values(snap.conversations || {}).some((r) => isV2Mode(r?.mode));
+    } catch {
+      return false;
+    }
+  }
+
+  /** 指定模式下的会话预设；返回 undefined 表示「该模式下没有可安全使用的 preset」 */
+  function modePreset(key, mode, cfg, presetOverride) {
     if (mode === 'closed-agent') {
-      const chosen = resolvePresetName(closedAgentPreset);
+      const chosen = resolvePresetName(presetOverride || closedAgentPreset);
       if (!chosen) log('⚠️ 无法确定 closed-agent 的 preset（DSH preset 清单未知），将按 DSH 默认 preset 建会话');
       return chosen || undefined;
     }
     // 二代仿真模式优先使用 socialV2.agentPreset；未配置时回退到默认聊天预设。
     // 非 closed-agent 一律 strict：宁可建不出会话，也不给群聊套上带本地工具的默认 preset。
-    const wanted = mode === 'reserved2' ? (cfg.socialV2?.agentPreset || cfg.agentPreset) : cfg.agentPreset;
+    const wanted = presetOverride
+      || (mode === 'reserved2-full'
+        ? (cfg.socialV2?.fullAgentPreset || 'qq-chat-v2-full')
+        : mode === 'reserved2' ? (cfg.socialV2?.agentPreset || cfg.agentPreset) : cfg.agentPreset);
     return resolvePresetName(wanted, { strict: true }) || undefined;
   }
 
-  /** 判断一个会话 key 是否仍被当前模式/白名单允许（供唤醒调度与 HTTP 路由共用）。 */
+  /**
+   * 该会话的**生效模式**：有会话级覆盖就用覆盖，否则用全局 `currentMode`。
+   *
+   * 这是「每个会话都能设运行模式」的唯一入口 —— 白名单准入、preset 选择、
+   * 会话策略指纹都从这里取模式，而不是直接读 `currentMode`。这样：
+   *   · 没有覆盖的会话行为完全不变（迁移友好）；
+   *   · 有覆盖的会话按覆盖运行，且改模式会经由 sessionPolicy() 指纹触发会话重建。
+   */
+  function modeFor(key) {
+    const override = conversationModes.overrideFor(key);
+    return override ? override.mode : currentMode;
+  }
+
+  /**
+   * 该会话生效的 preset。
+   *
+   * 覆盖里存的是**设置当时**解析出的 preset，但 DSH 的 preset 清单可能变，
+   * 所以仍要走一遍 strict 解析：装不上的 preset 不能让会话跑到 DSH 默认 preset
+   * （那会把本地工具暴露给 QQ 群）。解析失败 → undefined → 调用方拒绝建会话。
+   */
+  function presetForConversation(key) {
+    const mode = modeFor(key);
+    const override = conversationModes.overrideFor(key);
+    return modePreset(key, mode, cfg, override ? override.preset : undefined);
+  }
+
+  /** 判断一个会话 key 是否仍被**它的生效模式**与白名单允许（供唤醒调度与 HTTP 路由共用）。 */
   function isSessionAllowedInCurrentMode(key) {
     const m = /^(group|private):(\d+)$/.exec(key);
     if (!m) return false;
-    return modeAllowed(key, m[1], Number(m[2]), cfg, currentMode);
+    return modeAllowed(key, m[1], Number(m[2]), cfg, modeFor(key));
   }
 
+  /**
+   * 会话策略指纹：只有**需要重建 DSH 会话**的变化才应该改变它。
+   *
+   * preset 是会话创建时绑死的（DSH 的 `sessions.create` 之后无法换 preset，
+   * `sessions.fork` 也只继承源会话的 preset），所以「preset 变了」是重建的
+   * 唯一硬理由。模式本身不进指纹：`chat` 与 `reserved` 用的是同一个 `qq-chat`，
+   * 切换它们只是桥接侧的转发/退场语义变化，同一个 DSH 会话可以继续用 ——
+   * 把模式算进去会让一次「聊天 ↔ 一代仿真」的切换白白丢掉上下文。
+   *
+   * `closed-agent` 的 owner 仍然进指纹：owner 换了，同一个 `standard` 会话
+   * 不该继续给新 owner 用（旧 owner 的历史与工具面都不该被继承）。
+   */
   function sessionPolicy(key) {
-    return JSON.stringify([currentMode, modePreset(key, currentMode, cfg) ?? '', currentMode === 'closed-agent' ? cfg.ownerQQ : null]);
+    const preset = presetForConversation(key) ?? '';
+    return JSON.stringify([preset, modeFor(key) === 'closed-agent' ? cfg.ownerQQ : null]);
+  }
+
+  /**
+   * 已存指纹是否仍然等于当前策略。
+   *
+   * 兼容升级前的旧格式 `[mode, preset, owner]`：那版把模式也算进指纹，如果
+   * 直接按新格式比较，升级后第一次 reconcile 会把**所有**在线会话当成
+   * 「策略已变化」一次性退役。旧格式只要能取出同样的 preset/owner 就视为匹配，
+   * 真正的模式切换（preset 变了）仍然会触发重建。
+   */
+  function sessionPolicyMatches(key, stored) {
+    const current = sessionPolicy(key);
+    if (stored === current) return true;
+    try {
+      const old = JSON.parse(stored);
+      const next = JSON.parse(current);
+      if (Array.isArray(old) && old.length === 3 && Array.isArray(next) && next.length === 2) {
+        return old[1] === next[0] && (old[2] ?? null) === next[1];
+      }
+    } catch {}
+    return false;
+  }
+
+  function saveConversationModes() {
+    if (!conversationModesWritable) return;
+    atomicWriteJson(CONVERSATION_MODES_FILE, conversationModes.snapshot());
+  }
+
+  /**
+   * 让覆盖层里的「全局兜底」跟着 currentMode 走。
+   *
+   * 覆盖被删除时，审计指纹要回到「全局模式 + 全局 preset」，所以兜底值必须是
+   * 当前的全局模式。这里的 preset 只是给审计指纹用的best-effort 值；
+   * 真正建会话时一律走 presetForConversation() 的 strict 解析。
+   */
+  function syncConversationModeFallback() {
+    try {
+      const preset = currentMode === 'closed-agent'
+        ? (String(closedAgentPreset || dshDefaultPreset || 'standard').trim() || 'standard')
+        : (String(currentMode === 'reserved2'
+          ? (cfg.socialV2?.agentPreset || cfg.agentPreset)
+          : cfg.agentPreset || '').trim() || 'qq-chat');
+      conversationModes.setFallback(currentMode, preset);
+    } catch (error) {
+      log(`⚠️ 会话模式兜底同步失败：${error?.message ?? error}`);
+    }
+  }
+
+  /**
+   * 管理员（ownerQQ）变了之后重建覆盖层。
+   *
+   * closed-agent 只属于**当前** owner 的私聊：换了管理员之后，旧的 closed-agent
+   * 覆盖必须作废，否则它会让一个不再是管理员的会话继续拿完整工具面。
+   * 其余模式的覆盖与 owner 无关，保留。
+   */
+  function reconcileConversationModesOwner() {
+    const ownerKey = cfg.ownerQQ === null || cfg.ownerQQ === undefined ? null : `private:${cfg.ownerQQ}`;
+    const conversations = {};
+    for (const [key, record] of Object.entries(conversationModes.snapshot().conversations)) {
+      if (record.mode === 'closed-agent' && key !== ownerKey) {
+        log(`会话模式：管理员变更，作废 ${key} 的 closed-agent 覆盖（只属于当前 owner 私聊）`);
+        continue;
+      }
+      conversations[key] = record;
+    }
+    try {
+      conversationModes = new ConversationModes({ ownerQQ: cfg.ownerQQ ?? null, state: { version: 1, conversations } });
+    } catch (error) {
+      log(`⚠️ 会话模式覆盖重建失败，已清空（全部回落到全局模式）：${error?.message ?? error}`);
+      conversationModes = new ConversationModes({ ownerQQ: cfg.ownerQQ ?? null });
+    }
+    syncConversationModeFallback();
+    saveConversationModes();
   }
 
   function isCurrentSession(key, sessionId) {
     return isSessionAllowedInCurrentMode(key) && state.sessions[key] === sessionId
-      && state.sessionPolicies[key] === sessionPolicy(key);
+      && sessionPolicyMatches(key, state.sessionPolicies[key]);
   }
 
   /**
@@ -3247,17 +3433,23 @@ async function main() {
   function reconcileSessionPolicies() {
     // DSH preset 清单未知时**绝不能**做退役判定。
     //
-    // 为什么：`sessionPolicy()` 包含 `modePreset()` 的结果，而 `modePreset()` 依赖
+    // 为什么：`sessionPolicy()` 包含 `presetForConversation()` 的结果，而它依赖
     // `dshPresetIds`（来自 DSH 的 `agentPresets/list`）。启动瞬间或一次瞬时失败时
     // 这个清单可能是空的，`resolvePresetName(strict)` 于是返回 ''，算出来的策略就变成
-    // `["reserved2","",null]` —— 与已存的 `["reserved2","qq-chat-v2",null]` 不等，
+    // `["",null]` —— 与已存的 `["qq-chat-v2",null]` 不等，
     // 于是**所有** QQ 会话在这一个 tick 里被集体退役：DSH 会话被停掉归档、agentToken 轮换、
     // 映射删除，每个群的上下文全丢，日志里只有一句「会话权限已变化」。
     // 一次网络抖动换来全体失忆，代价完全不成比例。清单为空时宁可不判定，等下一轮。
     if (dshPresetIds.length === 0) return;
+    let normalized = false;
     for (const [key, sessionId] of Object.entries(state.sessions)) {
-      if (!isCurrentSession(key, sessionId)) retireSession(key);
+      if (!isCurrentSession(key, sessionId)) { retireSession(key); continue; }
+      // 指纹可能是升级前的旧格式（`[mode, preset, owner]`）：匹配上就顺手改写成
+      // 新格式，避免每次 reconcile 都走兼容分支，也让下次真的变化时能直接比对。
+      const current = sessionPolicy(key);
+      if (state.sessionPolicies[key] !== current) { state.sessionPolicies[key] = current; normalized = true; }
     }
+    if (normalized) saveState();
   }
 
   let flushingQueue = false;
@@ -3279,8 +3471,8 @@ async function main() {
           try {
             const [kind, idStr] = key.split(':');
             const id = Number(idStr);
-            if (!modeAllowed(key, kind, id, cfg, currentMode)) {
-              log(`补投跳过未授权会话 ${key}（当前模式 ${currentMode}）`);
+            if (!modeAllowed(key, kind, id, cfg, modeFor(key))) {
+              log(`补投跳过未授权会话 ${key}（当前模式 ${modeFor(key)}）`);
               continue;
             }
             const result = await deliverPrompt(key, item.promptText, { farewell: item.farewell, silent: item.silent, media: item.media ?? [], wakeReason: item.wakeReason });
@@ -3640,7 +3832,7 @@ async function main() {
     // 二代会话工具必须仍命中当前模式的白名单/准入；避免白名单移除后旧 agentToken 继续读状态。
     const v2SessionAllowed = (key) => {
       if (!isSessionAllowedInCurrentMode(key)) return false;
-      if (currentMode !== 'closed-agent') return true;
+      if (modeFor(key) !== 'closed-agent') return true;
       const match = /^(group|private):(\d+)$/.exec(String(key));
       return !!match && allowed(match[1], match[2], cfg);
     };
@@ -3864,9 +4056,11 @@ async function main() {
           sendJson({ ok: false, error: '二代模式已关闭，当前不允许执行 v2 工具' }, 403);
           return;
         }
-        // 模式隔离：带 agent token 的 v2 接口只允许在 reserved2 模式下使用
-        if (req.headers['x-agent-token'] && url.pathname.startsWith('/api/socialV2/') && currentMode !== 'reserved2' && !closedAgentMedia) {
-          sendJson({ ok: false, error: '该接口仅 reserved2 模式可用' }, 403);
+        // 模式隔离：带 agent token 的 v2 接口只允许在二代仿真模式下使用。
+        // 全局非二代时还要放行「存在会话级二代覆盖」的情况：否则某个群被单独设成
+        // reserved2 / reserved2-full 后，它的工具调用会在到达端点前就被这里整体拒绝。
+        if (req.headers['x-agent-token'] && url.pathname.startsWith('/api/socialV2/') && !isV2Mode(currentMode) && !hasV2ConversationOverrides() && !closedAgentMedia) {
+          sendJson({ ok: false, error: '该接口仅二代仿真模式可用' }, 403);
           return;
         }
         // 管理端专用 v2 接口：带 agent token 的请求一律拒绝，防止 MCP 工具越权访问控制台功能
@@ -4526,10 +4720,87 @@ async function main() {
         if (req.method === 'GET' && url.pathname === '/api/sessions') {
           const list = [];
           for (const [key, sessionId] of Object.entries(state.sessions)) {
-            list.push({ key, sessionId, owner: key === `private:${String(cfg.ownerQQ ?? '')}` });
+            list.push({
+              key,
+              sessionId,
+              owner: key === `private:${String(cfg.ownerQQ ?? '')}`,
+              // 会话级运行模式：effective = 实际生效的，override = 是否有覆盖（null = 跟全局）。
+              mode: modeFor(key),
+              modeOverride: conversationModes.overrideFor(key)?.mode ?? null,
+              globalMode: currentMode,
+            });
           }
-          sendJson({ sessions: list });
+          sendJson({ sessions: list, globalMode: currentMode, modes: [...CONVERSATION_MODES] });
           return;
+        }
+        // ── 会话级运行模式（每个会话各自设置） ───────────────────────────────
+        // GET  ?key=group:123 → 该会话的覆盖与生效值
+        // POST { key, mode }   → 设置覆盖（mode 必须属于该会话允许的范围）
+        // POST { key, mode: null } → 删除覆盖，回到全局模式
+        if (url.pathname === '/api/conversation/mode') {
+          if (req.method === 'GET') {
+            const key = String(url.searchParams.get('key') ?? '').trim();
+            const override = conversationModes.overrideFor(key);
+            sendJson({
+              ok: true,
+              key,
+              mode: modeFor(key),
+              preset: presetForConversation(key) ?? '',
+              override: override ? { ...override } : null,
+              globalMode: currentMode,
+              modes: [...CONVERSATION_MODES],
+            });
+            return;
+          }
+          if (req.method === 'POST') {
+            const body = await readBody();
+            const key = String(body?.key ?? '').trim();
+            if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
+            // 只有「该会话本来就有 DSH 会话、且这次改动换了 preset」才会重建，
+            // 前端据此提示用户上下文是否会重开。
+            const hadSession = Boolean(state.sessions[key]);
+            let result;
+            try {
+              if (body.mode === null || body.mode === undefined || body.mode === '') {
+                result = conversationModes.deleteConversation(key, { updatedBy: 'console' });
+              } else {
+                const mode = String(body.mode).trim();
+                // preset 由桥接按模式解析（strict）：装不上的 preset 直接拒绝，
+                // 绝不让会话跑到 DSH 默认 preset（那会把本地工具暴露给 QQ 群）。
+                const preset = modePreset(key, mode, cfg);
+                if (mode !== 'closed-agent' && !preset) {
+                  sendJson({ ok: false, error: `模式 ${mode} 没有可安全使用的 preset（DSH 清单：${dshPresetIds.join(', ') || '未知'}）；请先运行 node scripts/setup-dsh.mjs 并重启 DSH` }, 409);
+                  return;
+                }
+                // closed-agent 允许 preset 为空（走 DSH 默认 preset，本来就有完整工具面）
+                result = conversationModes.setConversation(key, {
+                  mode,
+                  preset: preset || String(closedAgentPreset || dshDefaultPreset || 'standard').trim() || 'standard',
+                  updatedBy: 'console',
+                });
+              }
+            } catch (error) {
+              sendJson({ ok: false, error: error?.message ?? '会话模式设置失败' }, 400);
+              return;
+            }
+            saveConversationModes();
+            // 策略指纹变了就要退役旧会话（下次消息按新模式重建）：走既有的统一判定，
+            // 不依赖 result.changedKeys（那个是审计用、以兜底 preset 计算）。
+            reconcileSessionPolicies();
+            const rebuildRequired = hadSession && !state.sessions[key];
+            log(`控制台：${result.key} 的运行模式已设为 ${modeFor(result.key)}${conversationModes.overrideFor(result.key) ? '（会话覆盖）' : '（跟随全局）'}${rebuildRequired ? '（preset 变化，旧会话已退役）' : ''}`);
+            sendJson({
+              ok: true,
+              key: result.key,
+              mode: modeFor(result.key),
+              preset: presetForConversation(result.key) ?? '',
+              override: conversationModes.overrideFor(result.key) ? { ...conversationModes.overrideFor(result.key) } : null,
+              globalMode: currentMode,
+              changedKeys: result.changedKeys,
+              rebuildRequired,
+            });
+            return;
+          }
         }
         // ── 挂起审批 / 提问 ───────────────────────────────────────────────────
         if (req.method === 'GET' && url.pathname === '/api/pending') {
@@ -4579,9 +4850,13 @@ async function main() {
           file.deny = deny;
           file.ownerQQ = ownerQQ;
           atomicWriteJson(configFile, file);
+          const ownerChanged = (cfg.ownerQQ ?? null) !== ownerQQ;
           cfg.allow = { private: allow.private, groups: allow.groups };
           cfg.deny = { private: deny.private, groups: deny.groups };
           cfg.ownerQQ = ownerQQ;
+          // 换了管理员：closed-agent 只属于**当前** owner 私聊，旧覆盖必须立即作废，
+          // 否则一个不再是管理员的会话会继续拿完整工具面。
+          if (ownerChanged) reconcileConversationModesOwner();
           reconcileSessionPolicies();
           log(`控制台：白名单已更新（群: ${allow.groups.join(',') || '无'}，私聊: ${allow.private.join(',') || '无'}，管理员: ${ownerQQ ?? '未设置'}）`);
           sendJson({ ok: true, allow, deny, ownerQQ });
@@ -4735,7 +5010,7 @@ async function main() {
           if (!message) { sendJson({ ok: false, error: '消息不能为空' }, 400); return; }
           if (SENSITIVE_RE.test(message)) { sendJson({ ok: false, error: '消息含敏感信息，已阻止发送' }, 403); return; }
           if (!allowed(kind, id, cfg)) { sendJson({ ok: false, error: `目标不在白名单内（${kind} ${id}），请先加入白名单` }, 403); return; }
-          if (!modeAllowed(`${kind}:${id}`, kind, id, cfg, currentMode)) { sendJson({ ok: false, error: `当前模式（${currentMode}）不允许向 ${kind}:${id} 发送测试消息` }, 403); return; }
+          if (!modeAllowed(`${kind}:${id}`, kind, id, cfg, modeFor(`${kind}:${id}`))) { sendJson({ ok: false, error: `该会话的生效模式（${modeFor(`${kind}:${id}`)}）不允许向 ${kind}:${id} 发送测试消息` }, 403); return; }
           try {
             const safeMessage = escapeCqText(redactKnownTokensOnly(message));
             const result = kind === 'private'
@@ -4852,8 +5127,8 @@ async function main() {
             sendJson({ ok: false, error: 'id 无效' }, 400);
             return;
           }
-          if (!modeAllowed(key, kind, id, cfg, currentMode)) {
-            sendJson({ ok: false, error: `该会话不在当前模式（${currentMode}）允许范围内` }, 403);
+          if (!modeAllowed(key, kind, id, cfg, modeFor(key))) {
+            sendJson({ ok: false, error: `该会话不在其生效模式（${modeFor(key)}）允许范围内` }, 403);
             return;
           }
           if (!state.sessions[key] && !allowed(kind, id, cfg)) {
@@ -4864,7 +5139,7 @@ async function main() {
             sendJson({ ok: false, error: 'DSH 当前不可用，请稍后再试' }, 503, { safeError: true });
             return;
           }
-          const isV2 = currentMode === 'reserved2';
+          const isV2 = isV2Mode(modeFor(key));
           const roleState = readRoleState();
           // 角色卡按 injectEveryNWakes 的节奏注入：首次/换卡后全量，其余只给一行提醒。
           // 早期实现只给「角色名 + 请自行调用 qq_get_prompt」，实测模型几乎不会去调，人格卡等于没生效。
@@ -5535,12 +5810,12 @@ async function main() {
           const key = String(body.key ?? '').trim();
           const reason = String(body.reason ?? 'admin').trim() || 'admin';
           if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
-          if (currentMode !== 'reserved2') { sendJson({ ok: false, error: '该接口仅 reserved2 模式可用' }, 403); return; }
+          if (!isV2Mode(modeFor(key))) { sendJson({ ok: false, error: '该接口仅二代仿真模式可用' }, 403); return; }
           const keyMatch = /^(group|private):(\d+)$/.exec(key);
           if (!keyMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
           const kind = keyMatch[1];
           const id = Number(keyMatch[2]);
-          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, currentMode)) {
+          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, modeFor(key))) {
             sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403);
             return;
           }
@@ -5661,11 +5936,11 @@ async function main() {
           if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
           if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
           if (req.headers['x-agent-token'] && !v2ToolEnabled('sendBurst')) { sendJson({ ok: false, error: '工具未启用：qq_send_burst' }, 403); return; }
-          if (currentMode !== 'reserved2') {
-            sendJson({ ok: false, error: '该接口仅 reserved2 模式可用' }, 403);
+          if (!isV2Mode(modeFor(key))) {
+            sendJson({ ok: false, error: '该接口仅二代仿真模式可用' }, 403);
             return;
           }
-          if (!req.headers['x-agent-token']) { sendJson({ ok: false, error: 'reserved2 模式发送必须携带 agent token' }, 403); return; }
+          if (!req.headers['x-agent-token']) { sendJson({ ok: false, error: '二代仿真模式发送必须携带 agent token' }, 403); return; }
           const keyMatch = /^(group|private):(\d+)$/.exec(key);
           if (!keyMatch) {
             sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400);
@@ -5673,7 +5948,7 @@ async function main() {
           }
           const kind = keyMatch[1];
           const id = Number(keyMatch[2]);
-          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, currentMode)) {
+          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, modeFor(key))) {
             sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403);
             return;
           }
@@ -5790,13 +6065,13 @@ async function main() {
           if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
           if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
           if (req.headers['x-agent-token'] && !v2ToolEnabled('sendMessage')) { sendJson({ ok: false, error: '工具未启用：qq_send_message' }, 403); return; }
-          if (currentMode !== 'reserved2') { sendJson({ ok: false, error: '该接口仅 reserved2 模式可用' }, 403); return; }
-          if (!req.headers['x-agent-token']) { sendJson({ ok: false, error: 'reserved2 模式发送必须携带 agent token' }, 403); return; }
+          if (!isV2Mode(modeFor(key))) { sendJson({ ok: false, error: '该接口仅二代仿真模式可用' }, 403); return; }
+          if (!req.headers['x-agent-token']) { sendJson({ ok: false, error: '二代仿真模式发送必须携带 agent token' }, 403); return; }
           const keyMatch = /^(group|private):(\d+)$/.exec(key);
           if (!keyMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
           const kind = keyMatch[1];
           const id = Number(keyMatch[2]);
-          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, currentMode)) {
+          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, modeFor(key))) {
             sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403);
             return;
           }
@@ -5898,8 +6173,8 @@ async function main() {
           const key = String(body.key ?? '').trim();
           const targetUserId = String(body.targetUserId ?? body.userId ?? '').trim();
           if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
-          if (currentMode !== 'reserved2') { sendJson({ ok: false, error: '该接口仅 reserved2 模式可用' }, 403); return; }
-          if (!req.headers['x-agent-token']) { sendJson({ ok: false, error: 'reserved2 模式发送拍一拍必须携带 agent token' }, 403); return; }
+          if (!isV2Mode(modeFor(key))) { sendJson({ ok: false, error: '该接口仅二代仿真模式可用' }, 403); return; }
+          if (!req.headers['x-agent-token']) { sendJson({ ok: false, error: '二代仿真模式发送拍一拍必须携带 agent token' }, 403); return; }
           if (!agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
           if (!v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
           if (!v2ToolEnabled('sendPoke')) { sendJson({ ok: false, error: '工具未启用：qq_send_poke' }, 403); return; }
@@ -5908,7 +6183,7 @@ async function main() {
           if (!keyMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
           const kind = keyMatch[1];
           const id = Number(keyMatch[2]);
-          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, currentMode)) {
+          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, modeFor(key))) {
             sendJson({ ok: false, error: '当前模式不允许操作该会话' }, 403);
             return;
           }
@@ -6116,7 +6391,7 @@ async function main() {
           const key = String(body.target ?? body.key ?? '').trim();
           const parsedTarget = parseTargetKey(key);
           if (!parsedTarget) { sendJson({ ok: false, error: 'target 格式应为 group:群号 或 private:QQ号' }, 400); return; }
-          if (!modeAllowed(key, parsedTarget.kind, Number(parsedTarget.id), cfg, currentMode)) {
+          if (!modeAllowed(key, parsedTarget.kind, Number(parsedTarget.id), cfg, modeFor(key))) {
             const a = cfg.allow ?? {};
             sendJson({
               ok: false,
@@ -6220,8 +6495,8 @@ async function main() {
           const voice = voiceCfg();
           if (!voice.enabled) { sendJson({ ok: false, error: '语音功能已关闭' }, 403); return; }
           if (!key) { sendJson({ ok: false, error: 'key 不能为空（格式 group:群号 或 private:QQ号）' }, 400); return; }
-          if (currentMode !== 'reserved2') { sendJson({ ok: false, error: '该接口仅 reserved2 模式可用' }, 403); return; }
-          if (!token) { sendJson({ ok: false, error: 'reserved2 模式发送必须携带 agent token' }, 403); return; }
+          if (!isV2Mode(modeFor(key))) { sendJson({ ok: false, error: '该接口仅二代仿真模式可用' }, 403); return; }
+          if (!token) { sendJson({ ok: false, error: '二代仿真模式发送必须携带 agent token' }, 403); return; }
           if (!agentTokenOk(key, token)) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
           if (!v2ToolEnabled('sendVoice')) { sendJson({ ok: false, error: '工具未启用：qq_send_voice' }, 403); return; }
           if (!v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
@@ -6230,7 +6505,7 @@ async function main() {
           if (!keyMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
           const kind = keyMatch[1];
           const id = Number(keyMatch[2]);
-          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, currentMode)) {
+          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, modeFor(key))) {
             sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403);
             return;
           }
@@ -6299,13 +6574,13 @@ async function main() {
           if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
           if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
           if (req.headers['x-agent-token'] && !v2ToolEnabled('sendSticker')) { sendJson({ ok: false, error: '工具未启用：qq_send_sticker' }, 403); return; }
-          if (currentMode !== 'reserved2' && !closedAgentMedia) { sendJson({ ok: false, error: '该接口仅 reserved2 或管理员私聊模式可用' }, 403); return; }
+          if (!isV2Mode(modeFor(key)) && modeFor(key) !== 'closed-agent') { sendJson({ ok: false, error: '该接口仅二代仿真或管理员私聊模式可用' }, 403); return; }
           if (!req.headers['x-agent-token']) { sendJson({ ok: false, error: '发送表情必须携带 agent token' }, 403); return; }
           const keyMatch = /^(group|private):(\d+)$/.exec(key);
           if (!keyMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
           const kind = keyMatch[1];
           const id = Number(keyMatch[2]);
-          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, currentMode)) {
+          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, modeFor(key))) {
             sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403);
             return;
           }
@@ -6692,7 +6967,7 @@ async function main() {
           }
           const waitedMs = Date.now() - start;
           if (socialV2.conversations.get(canonicalV2Key(key)) !== st ||
-              (req.headers['x-agent-token'] && (currentMode !== 'reserved2' || socialV2.paused || cfg.socialV2?.enabled === false
+              (req.headers['x-agent-token'] && (!isV2Mode(modeFor(key)) || socialV2.paused || cfg.socialV2?.enabled === false
                 || !agentTokenOk(key, req.headers['x-agent-token']) || !v2SessionAllowed(key) || !v2ToolEnabled('waitMessages')))) {
             finishWait();
             sendJson({ ok: false, error: '等待期间会话已重置或权限已变化，请重新读取会话' }, 403);
@@ -7011,7 +7286,7 @@ async function main() {
           const keyMatch = /^(group|private):(\d+)$/.exec(key);
           if (!keyMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
           if (!id) { sendJson({ ok: false, error: 'id 不能为空' }, 400); return; }
-          if (currentMode !== 'reserved2') {
+          if (!isV2Mode(modeFor(key))) {
             sendJson({ ok: false, error: '合并转发查看仅 reserved2 模式可用' }, 403);
             return;
           }
@@ -7025,7 +7300,7 @@ async function main() {
           }
           const kind = keyMatch[1];
           const num = Number(keyMatch[2]);
-          if (!Number.isFinite(num) || num <= 0 || !modeAllowed(key, kind, num, cfg, currentMode)) {
+          if (!Number.isFinite(num) || num <= 0 || !modeAllowed(key, kind, num, cfg, modeFor(key))) {
             sendJson({ ok: false, error: '当前模式不允许读取该会话' }, 403);
             return;
           }
@@ -7107,7 +7382,7 @@ async function main() {
           if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
           if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
           if (req.headers['x-agent-token'] && !v2ToolEnabled('getForwardMsg')) { sendJson({ ok: false, error: '工具未启用：qq_get_forward_msg' }, 403); return; }
-          if (currentMode !== 'reserved2') { sendJson({ ok: false, error: '转发媒体读取仅 reserved2 模式可用' }, 403); return; }
+          if (!isV2Mode(modeFor(key))) { sendJson({ ok: false, error: '转发媒体读取仅二代仿真模式可用' }, 403); return; }
           if (body.media != null && !Array.isArray(body.media)) { sendJson({ ok: false, error: 'media 必须是数组' }, 400); return; }
           if (requestedMedia.length > MAX_MEDIA_COUNT) { sendJson({ ok: false, error: `media 数量超限（最多 ${MAX_MEDIA_COUNT} 项）` }, 400); return; }
           // ── 只允许取回「本会话确实见过的」转发媒体 ────────────────────────────
@@ -7194,7 +7469,7 @@ async function main() {
           // 也不能直接用 v2SessionAllowed：它的 closed-agent 分支只放行 `private:<ownerQQ>`，
           // 于是「管理员在私聊里让 AI 看看某群成员」会 403 —— 那是旧工具本来支持的能力，
           // 属于这次改动不该带走的回归。所以 closed-agent 下按**同样严格的白名单**放行群读取。
-          const groupMembersAllowed = currentMode === 'closed-agent'
+          const groupMembersAllowed = modeFor(key) === 'closed-agent'
             ? allowed('group', Number(groupMatch[1]), cfg)
             : v2SessionAllowed(key);
           if (!groupMembersAllowed) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
@@ -7477,7 +7752,7 @@ async function main() {
           }
           const kind = keyMatch[1];
           const id = Number(keyMatch[2]);
-          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, currentMode)) {
+          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, modeFor(key))) {
             sendJson({ ok: false, error: '当前模式不允许读取该会话' }, 403);
             return;
           }
@@ -7492,11 +7767,11 @@ async function main() {
           const keyMatch = /^(group|private):(\d+)$/.exec(key);
           if (!keyMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
           if (!messageId) { sendJson({ ok: false, error: 'messageId 不能为空' }, 400); return; }
-          if (currentMode === 'reserved2' && !agentToken) {
+          if (isV2Mode(modeFor(key)) && !agentToken) {
             sendJson({ ok: false, error: 'reserved2 模式读取图片必须携带 agent token' }, 403);
             return;
           }
-          if (currentMode === 'chat' || currentMode === 'reserved') {
+          if (modeFor(key) === 'chat' || modeFor(key) === 'reserved') {
             sendJson({ ok: false, error: '一代 chat/reserved 模式图片已自动内联，按需图片工具仅 reserved2 模式可用' }, 403);
             return;
           }
@@ -7506,7 +7781,7 @@ async function main() {
           }
           const kind = keyMatch[1];
           const id = Number(keyMatch[2]);
-          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, currentMode)) {
+          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, modeFor(key))) {
             sendJson({ ok: false, error: '当前模式不允许读取该会话' }, 403);
             return;
           }
@@ -7514,7 +7789,7 @@ async function main() {
             sendJson({ ok: false, error: '工具未启用：qq_get_message_images' }, 403);
             return;
           }
-          if (!agentToken && currentMode === 'closed-agent' && !v2ToolEnabled('getImages')) {
+          if (!agentToken && modeFor(key) === 'closed-agent' && !v2ToolEnabled('getImages')) {
             sendJson({ ok: false, error: '工具未启用：qq_get_message_images' }, 403);
             return;
           }
@@ -7549,7 +7824,7 @@ async function main() {
           const key = isPrivate ? `private:${targetId}` : `group:${targetId}`;
           // 安全边界：发送工具只允许在 closed-agent（管理员私聊）或 reserved2（二代 AI 带会话令牌）下使用；
           // chat/reserved 的自动转发已覆盖正常回复，MCP 发送工具不应成为 prompt injection 的越权出口。
-          if (currentMode === 'chat' || currentMode === 'reserved') {
+          if (modeFor(key) === 'chat' || modeFor(key) === 'reserved') {
             sendJson({ ok: false, error: '发送工具仅限 closed-agent / reserved2 模式使用' }, 403);
             return;
           }
@@ -7563,7 +7838,7 @@ async function main() {
             sendJson({ ok: false, error: 'replyToMessageId 不能为空' }, 400);
             return;
           }
-          if (currentMode === 'reserved2' && !token) { sendJson({ ok: false, error: 'reserved2 模式发送必须携带 agent token' }, 403); return; }
+          if (isV2Mode(modeFor(key)) && !token) { sendJson({ ok: false, error: '二代仿真模式发送必须携带 agent token' }, 403); return; }
           if (token && !agentTokenOk(key, token)) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
           const flag = isPrivate ? 'sendPrivate' : (isReply ? 'reply' : 'sendGroup');
           if (token && !v2ToolEnabled(flag)) { sendJson({ ok: false, error: `工具未启用：${flag}` }, 403); return; }
@@ -7575,7 +7850,7 @@ async function main() {
           if (!keyMatch) { sendJson({ ok: false, error: 'key 格式无效' }, 400); return; }
           const kind = keyMatch[1];
           const id = Number(keyMatch[2]);
-          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, currentMode)) {
+          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, modeFor(key))) {
             sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403);
             return;
           }
@@ -8558,7 +8833,7 @@ async function main() {
 
   function mediaHintFor(key, messageRef, mediaList) {
     if (!Array.isArray(mediaList) || mediaList.length === 0 || !messageRef) return '';
-    if (currentMode === 'reserved2') {
+    if (isV2Mode(modeFor(key))) {
       return `\n【图片/表情】本条消息包含 ${mediaList.length} 个图片/表情（消息ID=${messageRef}）。如需要查看/识别，请调用 mcp__snowluma__qq_get_message_images，参数 key="${key}", messageId="${messageRef}"。`;
     }
     return `\n【图片/表情】本条消息包含 ${mediaList.length} 个图片/表情（消息ID=${messageRef}）。`;
@@ -8568,7 +8843,7 @@ async function main() {
     const refStr = String(ref ?? '').trim();
     if (!refStr) return [];
     // 二代：消息对象上直接带 media（仅在确实存在二代会话状态时读取，避免为 gen1 创建影子状态）
-    if (currentMode === 'reserved2' || socialV2.conversations.has(key)) {
+    if (isV2Mode(modeFor(key)) || socialV2.conversations.has(key)) {
       try {
         const st = getSocialV2State(key);
         if (st) {
@@ -8667,7 +8942,7 @@ async function main() {
 
   // 审计范围：closed-agent 仅对 owner 私聊跳过；其余模式/会话一律审计
   function shouldAuditKey(key) {
-    if (currentMode === 'closed-agent') {
+    if (modeFor(key) === 'closed-agent') {
       return !(key === `private:${String(cfg.ownerQQ ?? '')}`);
     }
     return true;
@@ -8678,7 +8953,7 @@ async function main() {
     const policy = sessionPolicy(key);
     const sessionId = state.sessions[key];
     return () => {
-      if (ai && (shouldBlockSilentReply(key) || (currentMode === 'reserved2'
+      if (ai && (shouldBlockSilentReply(key) || (isV2Mode(modeFor(key))
           && (socialV2.paused || cfg.socialV2?.enabled === false)))) {
         throw new Error('发送已取消：AI 已暂停、关闭或进入静默模式');
       }
@@ -8686,7 +8961,7 @@ async function main() {
           || (sessionId && state.sessions[key] !== sessionId)) {
         throw new Error('发送已取消：会话、模式或白名单已变化');
       }
-      if (explicitAllow && currentMode === 'closed-agent') {
+      if (explicitAllow && modeFor(key) === 'closed-agent') {
         const [kind, id] = key.split(':');
         if (!allowed(kind, id, cfg)) throw new Error('发送已取消：目标已不在白名单');
       }
@@ -8708,7 +8983,7 @@ async function main() {
       log(`⏹️ 回合被中止 (${key})`);
     }
     // 二代内部回合不自动转发；其他模式只发固定提示，原始 provider 错误留在管理端。
-    if (!notify || currentMode === 'reserved2' || shouldBlockSilentReply(key)) return false;
+    if (!notify || isV2Mode(modeFor(key)) || shouldBlockSilentReply(key)) return false;
     const now = Date.now();
     if (now - (turnNoticeTimes.get(key) ?? 0) < 5 * 60 * 1000) return false;
     turnNoticeTimes.set(key, now);
@@ -8819,15 +9094,19 @@ async function main() {
       fs.mkdirSync(dir, { recursive: true });
       let sessionId;
       let lastError = null;
-      const preset = modePreset(key, currentMode, cfg);
+      const mode = modeFor(key);
+      const preset = presetForConversation(key);
       // 非 closed-agent（chat / reserved / reserved2，会话可能属于 QQ 群）必须 fail-closed：
       // 拿不到 qq-chat* 就拒绝建会话，绝不让 DSH 用默认 preset（standard）顶上——那会把
       // bash/文件读写等本地工具暴露给 QQ 群里的任何人（见 RULES.md「无本地工具」）。
       // closed-agent 仅 owner 私聊、本来就用完整工具面，回退不构成提权。
-      const strictPreset = currentMode !== 'closed-agent';
+      const strictPreset = mode !== 'closed-agent';
       if (strictPreset && !preset) {
-        const wanted = currentMode === 'reserved2' ? (cfg.socialV2?.agentPreset || cfg.agentPreset) : cfg.agentPreset;
-        throw new Error(`拒绝为 ${key} 创建会话：模式 ${currentMode} 需要 preset "${wanted}"，但它不在 DSH 可用清单中（${dshPresetIds.join(', ') || '未知'}）。回退到 DSH 默认 preset 会把本地工具暴露给 QQ 群；请先运行 node scripts/setup-dsh.mjs 并重启 DSH。`);
+        const wanted = conversationModes.overrideFor(key)?.preset
+          || (mode === 'reserved2-full'
+            ? (cfg.socialV2?.fullAgentPreset || 'qq-chat-v2-full')
+            : mode === 'reserved2' ? (cfg.socialV2?.agentPreset || cfg.agentPreset) : cfg.agentPreset);
+        throw new Error(`拒绝为 ${key} 创建会话：模式 ${mode} 需要 preset "${wanted}"，但它不在 DSH 可用清单中（${dshPresetIds.join(', ') || '未知'}）。回退到 DSH 默认 preset 会把本地工具暴露给 QQ 群；请先运行 node scripts/setup-dsh.mjs 并重启 DSH。`);
       }
       // 归组：所有 QQ 会话挂到同一个 workspace（幂等创建），GUI 里不再散落「未分组」
       // 创建顺序有安全含义：
@@ -8859,7 +9138,7 @@ async function main() {
         }
       }
       if (!sessionId) {
-        throw new Error(`无法为 ${key} 创建 DSH 会话（模式 ${currentMode}，preset ${preset ?? '无'}）：${lastError?.message ?? '未知原因'}。已拒绝退化为 DSH 默认 preset 会话——那会把本地工具暴露给 QQ 群。`);
+        throw new Error(`无法为 ${key} 创建 DSH 会话（模式 ${mode}，preset ${preset ?? '无'}）：${lastError?.message ?? '未知原因'}。已拒绝退化为 DSH 默认 preset 会话——那会把本地工具暴露给 QQ 群。`);
       }
       // 新版 DSH 事件流需要显式 follow 该会话，否则收不到 turn 事件。
       api.events.follow(sessionId);
@@ -8878,7 +9157,7 @@ async function main() {
         if (state.sessions[key] === sessionId) retireSession(key);
         throw new Error('会话创建期间已重置或权限已变化');
       }
-      log(`新会话 ${key} -> ${sessionId}（模式 ${currentMode}，preset: ${modePreset(key, currentMode, cfg) ?? '默认'}）`);
+      log(`新会话 ${key} -> ${sessionId}（模式 ${mode}，preset: ${preset ?? '默认'}）`);
       return sessionId;
     })();
     sessionPromises.set(key, promise);
@@ -9858,7 +10137,7 @@ async function main() {
     if (!isSessionAllowedInCurrentMode(key)) throw new Error(`当前模式不允许会话 ${key}`);
     // Recheck queued wakes at dispatch time: no model call while paused/disabled
     // and no reserved2 prompt leaking into an ordinary chat after a mode switch.
-    const wakeBlocked = () => opts.wakeReason && (currentMode !== 'reserved2' || socialV2.paused || cfg.socialV2?.enabled === false);
+    const wakeBlocked = () => opts.wakeReason && (!isV2Mode(modeFor(key)) || socialV2.paused || cfg.socialV2?.enabled === false);
     const skipWake = () => {
       pendingWakeKeys.delete(key);
       disarmPendingWakeLease(key);
@@ -9929,7 +10208,7 @@ async function main() {
       // rejected/stale deliveries must not be cleared by an old cursor.
       noteModelMessagesV2(wakeState, [...wakeSnapshot.messages, ...wakeSnapshot.recent]);
     }
-    if (accepted.result.value.command?.text && !opts.silent && currentMode !== 'reserved2') {
+    if (accepted.result.value.command?.text && !opts.silent && !isV2Mode(modeFor(key))) {
       if (opts.farewell) social.exitingSessions.delete(sessionId);
       await auditAndSend(key, mdToPlain(accepted.result.value.command.text));
     } else if (accepted.result.value.command?.text && opts.silent && opts.farewell) {
@@ -11250,7 +11529,7 @@ async function main() {
 
   async function sendWakePromptV2(key, reason) {
     if (cfg.socialV2?.enabled === false) return;
-    if (currentMode !== 'reserved2' || socialV2.paused) return;
+    if (!isV2Mode(modeFor(key)) || socialV2.paused) return;
     if (!isSessionAllowedInCurrentMode(key)) {
       log(`[reserved2] 跳过唤醒 ${key}（${reason}）：会话已不在当前模式允许范围内`);
       return;
@@ -11386,7 +11665,7 @@ async function main() {
 
   function scheduleReplyCheckV2(key) {
     if (cfg.socialV2?.enabled === false) return;
-    if (socialV2.paused || currentMode !== 'reserved2') return;
+    if (socialV2.paused || !isV2Mode(modeFor(key))) return;
     const st = getSocialV2State(key);
     // 已有真实唤醒/有限睡眠/回复检查在排队时不再重复安排，避免 AI 被连环唤醒。
     if (st.pendingWakeTimer || st.sleepTimer || st.replyCheckTimer) return;
@@ -11612,7 +11891,7 @@ async function main() {
 
   function scheduleProactiveCheckV2(key) {
     if (cfg.socialV2?.proactive?.enabled === false) return;
-    if (socialV2.paused || currentMode !== 'reserved2') return;
+    if (socialV2.paused || !isV2Mode(modeFor(key))) return;
     if (!isSessionAllowedInCurrentMode(key)) return;
     const st = getSocialV2State(key);
     if (st.proactiveTimer) return;
@@ -11698,8 +11977,8 @@ async function main() {
   // QQ 消息 → DSH prompt
   async function handleIncoming(kind, id, event, cfg) {
     const key = convKey(kind, id);
-    if (!modeAllowed(key, kind, id, cfg, currentMode)) {
-      log(`忽略未授权会话 ${key}（当前模式 ${currentMode}，来自 ${event.user_id}）`);
+    if (!modeAllowed(key, kind, id, cfg, modeFor(key))) {
+      log(`忽略未授权会话 ${key}（生效模式 ${modeFor(key)}，来自 ${event.user_id}）`);
       return;
     }
     if (ignoredSender(event.user_id, cfg)) {
@@ -11863,8 +12142,9 @@ async function main() {
       // 其余 / 开头内容照常发给 DSH（DSH 的斜杠命令原样执行，如 /model）
     }
 
-    // 二代仿真模式（reserved2）：唤醒调度
-    if (currentMode === 'reserved2') {
+    // 二代仿真模式（reserved2）：唤醒调度。模式按**会话**取：全局是别的模式时，
+    // 单独把这个会话覆盖成 reserved2 也要走这套调度。
+    if (isV2Mode(modeFor(key))) {
       const sender = kind === 'group' ? (event.sender?.card || event.sender?.nickname || String(event.user_id)) : '私聊';
       appendSocialV2Message(key, sender, textContent, plainContent, quoteTargetIsSelf, isOwner, event.message_id ?? event.msg_id ?? null, mediaList, event.user_id ?? null, extractForwardIds(event.message ?? []));
       // 二代同样收集群聊黑话学习素材（AI 自主提交之外，桥接仍自动提取高频陌生词）
@@ -11898,7 +12178,7 @@ async function main() {
 
     // 群聊里带发送者信息，私聊不用；角色提示注入到消息开头（agent 可见）；
     // 管理员消息带身份标记（供 agent 识别，但其权限仍受工具面硬限制）
-    const modelContent = currentMode === 'closed-agent' && isOwner ? textContent : sanitizeUntrustedText(textContent);
+    const modelContent = modeFor(key) === 'closed-agent' && isOwner ? textContent : sanitizeUntrustedText(textContent);
     const promptText = (roleHint ? roleHint + '\n\n' : '')
       + (isOwner ? '【管理员】' : '')
       + (kind === 'group'
@@ -12000,7 +12280,7 @@ async function main() {
       return;
     }
     if (result?.retried) return;
-    if (result?.ok && !result.command && cfg.ackMessage && currentMode !== 'reserved2') {
+    if (result?.ok && !result.command && cfg.ackMessage && !isV2Mode(modeFor(key))) {
       await sendToQQ(key, cfg.ackMessage);
     }
     if (result?.ok) log(`已投递 ${key}: ${promptText.slice(0, 80)}${promptText.length > 80 ? '…' : ''}`);
@@ -12174,8 +12454,8 @@ async function main() {
       id = String(peer);
       key = convKey('private', id);
     }
-    if (!modeAllowed(key, kind, id, cfg, currentMode)) return;
-    if (currentMode !== 'reserved2') {
+    if (!modeAllowed(key, kind, id, cfg, modeFor(key))) return;
+    if (!isV2Mode(modeFor(key))) {
       appendActivity(`${key} 收到拍一拍事件（非 reserved2，仅记录）：${senderId} -> ${targetId}`);
       return;
     }
@@ -12198,7 +12478,7 @@ async function main() {
       suffix: event.suffix
     });
     appendActivity(`${key} 拍一拍事件：${msg.text.slice(0, 80)}`);
-    if (currentMode !== 'reserved2') return;
+    if (!isV2Mode(modeFor(key))) return;
     if (socialV2.paused) return;
     const st = getSocialV2State(key);
     if (!st.bootstrapSent) {
@@ -12391,7 +12671,7 @@ async function main() {
               // 则累计 noActionCount；达到阈值后自动重置 WakeConfig，避免 AI 卡死。
               const silentQueueNow = social.silentTurns.get(frame.sessionId) ?? [];
               const isSilentTurn = silentQueueNow.length > 0;
-              if (currentMode === 'reserved2' && key && !isSilentTurn) {
+              if (isV2Mode(modeFor(key)) && key && !isSilentTurn) {
                 const st = getSocialV2State(key);
                 const turnStart = v2TurnStartAt.get(frame.sessionId) ?? 0;
                 const sendToolHit = sendToolSucceededSessions.has(frame.sessionId);
@@ -12588,7 +12868,7 @@ async function main() {
                       log(`社交模式：${key} 本轮发言未送达（QQ 发送失败），不刷新活跃时间`);
                     }
                   }
-                } else if (currentMode === 'reserved2') {
+                } else if (isV2Mode(modeFor(key))) {
                   log(`[reserved2] AI 内部输出（不自动转发）(${key}): ${plain.slice(0, 80)}`);
                   appendActivity(`${key} [reserved2] AI 内部输出：${plain.slice(0, 80)}${plain.length > 80 ? '…' : ''}`);
                 } else {

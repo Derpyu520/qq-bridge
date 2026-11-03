@@ -1813,6 +1813,7 @@ button:active:not(:disabled) {
     </section>
 <section id="section-sessions" data-page="sessions" class="card span-all">
       <h2>会话映射</h2>
+      <div class="meta">每个会话可以单独设<b>运行模式</b>（「跟随全局」= 不覆盖，用顶部那个全局模式）。只有切换后<b>工具预设变了</b>才会重建该会话（上下文重新开始）——例如聊天 ↔ 一代仿真共用同一个预设，会话会保留；涉及二代仿真 / 全工具 / 封闭 Agent 的切换必须换预设，DSH 只能在建会话时绑定预设，因此会重建。封闭 Agent（完整本地工具）只允许管理员私聊。</div>
       <div id="sessionList">加载中…</div>
     </section>
 <section id="section-pending" data-page="sessions" class="card span-all">
@@ -2729,7 +2730,7 @@ async function refresh() {
     document.querySelectorAll('#modeRow button').forEach(b => (b.classList.toggle('active', b.dataset.mode === s.mode), b.setAttribute('aria-pressed', String(b.dataset.mode === s.mode))));
     document.getElementById('roleText').textContent = s.role || '无';
     document.getElementById('roleModeText').textContent = s.roleMode === 'silent' ? '静默' : '正常';
-    const modeLabel = s.mode === 'reserved' ? '一代仿真模式' : s.mode === 'reserved2' ? '二代仿真模式' : s.mode === 'closed-agent' ? '封闭 Agent' : '聊天模式';
+    const modeLabel = s.mode === 'reserved' ? '一代仿真模式' : s.mode === 'reserved2' ? '二代仿真模式' : s.mode === 'reserved2-full' ? '二代仿真（全工具）' : s.mode === 'closed-agent' ? '封闭 Agent' : '聊天模式';
     updateOverview(s, modeLabel);
     document.getElementById('activity').textContent = s.activity || '（空）';
     const presetSel = document.getElementById('closedPreset');
@@ -2995,18 +2996,41 @@ async function refreshSessions() {
     const box = document.getElementById('sessionList');
     document.getElementById('metricSessions').textContent = s.sessions.length;
     if (!s.sessions.length) { box.innerHTML = '<div class="empty-state"><strong>还没有会话</strong><p>白名单中的群或好友发来消息后，会话会显示在这里。</p></div>'; return; }
-    let html = '<table><tr><th>QQ 会话</th><th>DSH 会话 ID</th><th>类型</th><th></th></tr>';
+    // 每个会话可以单独设运行模式；「跟随全局」= 没有覆盖。
+    const MODE_LABELS = { chat: '聊天模式', 'closed-agent': '封闭 Agent', reserved: '一代仿真', reserved2: '二代仿真', 'reserved2-full': '二代仿真（全工具）' };
+    const modeOptions = (selected) => {
+      let opts = `<option value=""${selected ? '' : ' selected'}>跟随全局（${esc(MODE_LABELS[s.globalMode] || s.globalMode)}）</option>`;
+      for (const m of (s.modes || Object.keys(MODE_LABELS))) {
+        opts += `<option value="${esc(m)}"${selected === m ? ' selected' : ''}>${esc(MODE_LABELS[m] || m)}</option>`;
+      }
+      return opts;
+    };
+    let html = '<table><tr><th>QQ 会话</th><th>DSH 会话 ID</th><th>类型</th><th>运行模式</th><th></th></tr>';
     for (const x of s.sessions) {
       const isP = x.key.startsWith('private:');
       const type = isP ? '<span class="pill b">私聊</span>' : '<span class="pill g">群</span>';
       const ownerTag = x.owner ? ' <span class="pill r">管理员</span>' : '';
-      html += `<tr><td>${esc(x.key)}${ownerTag}</td><td><code>${esc(x.sessionId)}</code></td><td>${type}</td><td><button class="small" data-reset-key="${esc(x.key)}">清除上下文</button></td></tr>`;
+      const overrideTag = x.modeOverride ? ' <span class="pill">已覆盖</span>' : '';
+      html += `<tr><td>${esc(x.key)}${ownerTag}</td><td><code>${esc(x.sessionId)}</code></td><td>${type}</td>`
+        + `<td><select class="small session-mode" data-mode-key="${esc(x.key)}" title="只影响这一个会话；只有工具预设变化时才会重建该会话">${modeOptions(x.modeOverride)}</select>${overrideTag}</td>`
+        + `<td><button class="small" data-reset-key="${esc(x.key)}">清除上下文</button></td></tr>`;
     }
     box.innerHTML = html + '</table>';
     box.querySelectorAll('[data-reset-key]').forEach(btn => btn.addEventListener('click', async () => {
       if (!confirm('确定清除该会话的上下文？下次消息将开新会话。')) return;
       const r = await api('/api/session/reset', 'POST', { key: btn.dataset.resetKey });
       alert(r.ok ? '✅ 已清除上下文' : ('❌ ' + (r.error || '失败')));
+      refreshSessions();
+    }));
+    box.querySelectorAll('[data-mode-key]').forEach(sel => sel.addEventListener('change', async () => {
+      const key = sel.dataset.modeKey;
+      const mode = sel.value || null; // 空 = 删除覆盖，回到全局
+      const r = await api('/api/conversation/mode', 'POST', { key, mode });
+      if (!r.ok) { alert('❌ ' + (r.error || '设置失败')); refreshSessions(); return; }
+      // 只有换了 preset 才会退役旧 DSH 会话；同一个 preset 的模式切换（如聊天 ↔ 一代仿真）保留上下文。
+      if (r.rebuildRequired) {
+        alert(`✅ 已切换为「${MODE_LABELS[r.mode] || r.mode}」。\n\n该模式需要不同的工具预设，旧 DSH 会话已退役：下一次消息会重建会话，上下文重新开始。`);
+      }
       refreshSessions();
     }));
   } catch {}

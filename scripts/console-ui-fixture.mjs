@@ -300,6 +300,8 @@ export function makeFixtureState() {
     roleInjectMax: 8000,
     dshEffort: 'max',
     whitelist: { allow: { groups: [123456789, 100003], private: [100001] }, deny: { groups: [], private: [] }, ownerQQ: '100001' },
+    // 会话级运行模式覆盖：key -> mode（缺省 = 跟随全局）。
+    conversationModes: { 'group:100003': 'chat' },
     sessions: [
       { key: 'group:123456789', sessionId: 'demo-community-20260920', owner: false },
       { key: 'group:100003', sessionId: 'demo-development-20260920', owner: false },
@@ -447,7 +449,32 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
             globalSideEffect: true,
           });
           case '/api/whitelist': return json(state.whitelist);
-          case '/api/sessions': return json({ sessions: state.sessions });
+          case '/api/sessions': {
+            const globalMode = state.mode || 'reserved2';
+            return json({
+              sessions: state.sessions.map((x) => ({
+                ...x,
+                mode: state.conversationModes?.[x.key] ?? globalMode,
+                modeOverride: state.conversationModes?.[x.key] ?? null,
+                globalMode,
+              })),
+              globalMode,
+              modes: ['chat', 'closed-agent', 'reserved', 'reserved2', 'reserved2-full'],
+            });
+          }
+          case '/api/conversation/mode': {
+            const key = url.searchParams.get('key') || '';
+            const override = state.conversationModes?.[key] ?? null;
+            return json({
+              ok: true,
+              key,
+              mode: override ?? (state.mode || 'reserved2'),
+              preset: 'qq-chat-v2',
+              override: override ? { mode: override, preset: 'qq-chat-v2', updatedBy: 'console', at: Date.now() } : null,
+              globalMode: state.mode || 'reserved2',
+              modes: ['chat', 'closed-agent', 'reserved', 'reserved2', 'reserved2-full'],
+            });
+          }
           case '/api/pending': return json({ pending: [{ key: 'group:123456789', kind: 'approval', toolName: '演示工具', reason: '等待管理员确认（离线示例）' }] });
           case '/api/social': return json({ config: state.social, states: state.socialStates, pendingSummaries: { 'group:123456789': 2 } });
           case '/api/socialV2/config': return json({ ok: true, config: state.v2 });
@@ -544,6 +571,12 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
           case '/api/dsh/effort': state.dshEffort = body.reasoningEffort; return json({ ok: true, reasoningEffort: body.reasoningEffort });
           case '/api/role-mode': state.roleMode = body.mode; return json({ ok: true });
           case '/api/whitelist': state.whitelist = body; return json({ ok: true });
+          case '/api/conversation/mode': {
+            // 空 mode = 删除覆盖，回到全局。
+            if (body.mode == null || body.mode === '') delete state.conversationModes?.[body.key];
+            else state.conversationModes = { ...(state.conversationModes || {}), [body.key]: body.mode };
+            return json({ ok: true, key: body.key, mode: state.conversationModes?.[body.key] ?? (state.mode || 'reserved2'), changedKeys: [body.key] });
+          }
           case '/api/social': state.social = body; return json({ ok: true });
           case '/api/social/state': state.socialStates[body.key] = { phase: body.phase }; return json({ ok: true });
           case '/api/socialV2/config': state.v2 = body; return json({ ok: true });

@@ -1,11 +1,11 @@
 # QQ 桥接权限与安全规则（RULES）
 
-## 运行模式（QQ 桥接四模式）
+## 运行模式（QQ 桥接四模式 + 一个仅会话级模式）
 
 模式由**桥接控制台**（默认 `http://127.0.0.1:3100`）顶部的模式按钮切换，也可直接改 DSH 设置的 `qq-mode` 命名空间；
 控制台会**同时**写穿到 DSH 设置与本地 `qq-bridge/state/mode.json`，两者保持一致。
 （DSH 设置页目前**没有** `qq-mode` 卡片：该插件只有 host 半，未实现浏览器半。详见 docs/guides/DSH_SETUP.md。）
-桥接每 5 秒读取一次；控制台切换立即应用。会话持久化记录创建时的模式、preset 和管理员边界，权限变化时自动撤销旧会话映射和二代 token，并在下次消息到达时重建，避免继续使用旧的高权限 preset。升级前没有这些权限元数据的旧会话也会重建一次，历史仍保留在 DSH。
+桥接每 5 秒读取一次；控制台切换立即应用。会话持久化记录创建时的 preset 和管理员边界，**只有 preset（或 closed-agent 的 owner）变化时**才撤销旧会话映射和二代 token，并在下次消息到达时重建，避免继续使用旧的高权限 preset。`chat` 与 `reserved` 共用 `qq-chat`，互相切换**不会**重建会话（上下文保留）。升级前没有这些权限元数据的旧会话也会重建一次，历史仍保留在 DSH。
 全新安装运行 `scripts/setup-dsh.mjs` 后，DSH 设置与本地兜底默认均为 `reserved2`；若已存在 `state/mode.json` 或 DSH 设置旧值，脚本不会覆盖。
 
 | 模式 | 允许通道 | agent preset | 用途 |
@@ -14,14 +14,48 @@
 | `closed-agent` | **仅** 私聊 ownerQQ | DSH 默认 preset（通常 `standard`，完整工具） | 你在 QQ 私聊里操控 DSH |
 | `reserved`（一代仿真） | 暂同 chat | qq-chat | 仿真群友：观望/活跃/试探/退场状态机，选择性参与并主动收尾 |
 | `reserved2`（二代仿真，运行 `setup-dsh.mjs` 后默认） | 暂同 chat | qq-chat-v2 | 文本不自动转发，AI 通过工具自主看消息/发言/等待/设置唤醒与潜水 |
+| `reserved2-full`（二代仿真·全工具，**仅会话级**） | 暂同 chat | qq-chat-v2-full | 对话语义与 `reserved2` 相同，但开放本机全部 MCP 与本地工具（shell/文件/子智能体）；见下方 L7 例外说明 |
 
 > ⚠️ `closed-agent` 模式下 owner 私聊 agent 拥有**完整本地工具**（DSH 默认 preset，通常是 `standard`），
 > 这是有意为之（QQ 远程操控 DSH）。该模式只放行 owner 私聊，群友完全无法触达；
 > 切换回 `chat` 后，owner 私聊也回到 qq-chat 安全预设。
 >
+> ⚠️ `reserved2-full` 是 **L7（仿真会话无本地工具）的唯一显式例外**：它的 preset
+> `qq-chat-v2-full` 会挂载 bash/文件检索/子智能体等本地工具面，并允许全部 MCP 命名空间。
+> 它**只能由管理员在控制台按会话开启**，没有全局开关；`qq-tool-restrict` 在该模式下
+> 仍然隐藏**宿主管理面**（`dev_*` 注入器、插件装载/市场、快照回滚、跨会话检索、终端、
+> 其它 agent 家族）并在执行期拒绝。开启前请确认该群/私聊的成员可信：本地工具意味着
+> 模型可以在这台部署机上执行命令、读写文件。
+>
 > 注：DSH 0.1.5 已不存在 `router-standard` preset。桥接现在留空表示「用 DSH 默认 preset」，
 > 并在启动时读取 `agentPresets/list` 校验；填了不存在的 preset 名会回退到默认值并打警告，
 > 绝不会创建出「无 preset」会话（那会被 DSH 套上 `standard`，对 QQ 群是安全回归）。
+
+### 会话级运行模式（每会话覆盖）
+
+上面的四个全局模式是**全局默认**（`reserved2-full` 只存在于会话级覆盖，没有全局开关）。控制台「会话映射」里还可以给**单个会话**单独指定运行模式：
+
+- 不设置覆盖 = 跟随全局（默认行为，和以前完全一样）；
+- 设置了覆盖 = 该会话按自己的模式运行，白名单准入、preset、会话策略指纹都按它自己的模式计算；
+- 覆盖存在 `state/conversation-modes.json`（与 `sessions.json` 分开：它属于管理配置，不随会话映射清空）；
+- 策略指纹只由 **preset**（和 `closed-agent` 的 owner）决定：DSH 在 `sessions.create` 时绑定 preset，
+  之后无法替换（`sessions.fork` 也只继承源会话的 preset），所以 preset 变化是重建的**唯一**硬理由。
+  - `chat` ↔ `reserved` 共用 `qq-chat`：切换只改变桥接侧的转发/退场语义，**同一个 DSH 会话继续使用，上下文保留**；
+  - 涉及 `reserved2` / `reserved2-full` / `closed-agent` 的切换会换 preset → **旧 DSH 会话退役**，
+    下次消息按新模式重建（上下文重新开始）；控制台只在这种情况提示「会话已重建」。
+
+安全边界（与全局模式同一套硬约束，不因「按会话」而放宽）：
+
+- `closed-agent` **只允许** `private:<当前 ownerQQ>`：群会话、其他私聊一律拒绝（HTTP 400）；
+- 非 `closed-agent` 的覆盖**必须**解析出安全的 preset（`qq-chat*`）；DSH 清单里没有就拒绝设置（HTTP 409），
+  绝不回退到 DSH 默认 preset；
+- 更换管理员时，旧 owner 的 `closed-agent` 覆盖**立即作废**（否则一个不再是管理员的会话会继续拿完整工具面）；
+- 覆盖文件损坏/读不动时降级为「只读不写 + 全部会话回落全局模式」，不会把空状态写回去。
+
+> 设计说明：`src/core/session-router.mjs`（会话路由器）尚未接入桥接链路。它的模式模型把
+> `reserved`（一代）与 `reserved2`（二代）都归一成 `simulation`，而桥接里这是两个独立子系统
+> （不同的 preset、不同的唤醒/退场语义），无法直接对接。桥接的会话级模式由
+> `src/core/conversation-modes.mjs` 承载，保留模式的原样拼写（含 `reserved2-full`）。
 
 ## 权限分层
 
@@ -34,7 +68,7 @@
 
 ## QQ 会话 agent 的硬边界
 
-1. **无本地工具**：qq-chat / qq-chat-v2 预设不挂载 bash/pwsh、文件读写、子代理、工作流——群友无论如何诱导，agent 物理上无法操作本机。
+1. **无本地工具（默认）**：qq-chat / qq-chat-v2 预设不挂载 bash/pwsh、文件读写、子代理、工作流——群友无论如何诱导，agent 物理上无法操作本机。唯一的例外是管理员显式开启的 `reserved2-full`（preset `qq-chat-v2-full`，见上）；它按设计拥有本地工具面，因此等同于「把部署机的执行权交给该会话」，只应在可信会话中用。
 2. **QQ 动作安全子集**：只允许 `mcp__snowluma__*`、`mcp__snowluma-host__*`、`mcp__web-search-safe__*` 三个命名空间下的工具，以及 `ask_user_question` / `todo_write`；其他工具（含 `dev_*` 开发/管理工具）在执行期会被 `qq-tool-restrict.mjs` 拒绝。QQ 动作无禁言、踢人、文件上传下载等管理操作。
 3. **只读联网搜索**：`qq-chat` / `qq-chat-v2` 预设已关闭 DSH 内置 `tool-web` 的 `search` / `fetch`，联网统一走 `src/mcp-web-search-safe.js` 提供的 `mcp__web-search-safe__web_search/web_fetch`。不暴露本地文件、命令执行、写操作。
    - ✅ `mcp__web-search-safe__web_fetch` 已做 SSRF 加固：仅 http/https、禁止 localhost/私有 IP/链路本地/CGNAT/带凭据 URL、DNS 解析结果全量校验、每跳重定向重新校验、响应体限量读取。
