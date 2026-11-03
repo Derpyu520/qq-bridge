@@ -10,6 +10,7 @@ import { renderPatch } from '../scripts/build-agent-preset-patches.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import http from 'node:http';
+import net from 'node:net';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -696,10 +697,60 @@ function ignoredSender(id, cfg) {
 }
 
 // ── 配置 ────────────────────────────────────────────────────────────────────
+/**
+ * 主机名（RFC 1123）：标签由字母/数字/连字符组成，不能以连字符开头或结尾，
+ * 总长 ≤ 253。允许结尾一个点（FQDN 的习惯写法）。
+ */
+const HOSTNAME_RE = /^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/;
+
+function isValidHostname(value) {
+  if (typeof value !== 'string') return false;
+  const host = value.endsWith('.') ? value.slice(0, -1) : value;
+  if (!host || host.length > 253) return false;
+  return HOSTNAME_RE.test(host);
+}
+
+/** 通配地址：监听所有网卡（含 tailscale0 之类）。 */
+function isWildcardHost(host) {
+  return host === '0.0.0.0' || host === '::';
+}
+
+/**
+ * 控制台对外监听地址的规范化与校验。
+ *
+ * 接受三种写法，或留空：
+ *   - 留空 = 只监听回环（默认，行为不变）；
+ *   - 具体 IP（如 192.168.1.10、::1）；
+ *   - 主机名（如 nas.local）—— 交给系统解析，解析不了就绑定失败（不致命，见下）；
+ *   - 通配地址 0.0.0.0 / :: = 监听所有网卡。
+ *
+ * IPv6 字面量允许带方括号（和 Host 头一致），内部统一去掉括号再比较。
+ *
+ * 注意：无论填哪种，**对外监听都要求 config.json 里显式设置 consoleToken** ——
+ * 自动生成的令牌只适合本机回环那种「只有你能碰到」的场景。规则见
+ * startConsoleServer() 里的对外监听器。
+ */
+function normalizeConsoleHost(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  const bare = raw.startsWith('[') && raw.endsWith(']') ? raw.slice(1, -1) : raw;
+  if (net.isIP(bare)) return bare;
+  if (isValidHostname(bare)) return bare;
+  throw new Error('consoleHost 必须是具体 IP、主机名（如 192.168.1.10、nas.local）或留空（只监听回环）');
+}
+
 function loadConfig() {
   const p = path.join(ROOT, 'config.json');
   const file = readJsonSafe(p, null, true);
   if (!file || typeof file !== 'object' || Array.isArray(file)) throw new Error(`配置格式错误：${p}`);
+  // 控制台对外监听地址：非法值退化成「只监听回环」（暴露更少才是安全的那一侧），
+  // 而不是让整个桥接起不来 —— 配置文件里一个笔误不该把 QQ 通道一起打死。
+  let consoleHost = '';
+  try {
+    consoleHost = normalizeConsoleHost(file.consoleHost);
+  } catch (error) {
+    log(`⚠️  config.consoleHost 非法（${error?.message ?? error}）：已忽略，控制台只监听回环`);
+  }
   const cfg = {
     dsh: {
       baseUrl: 'http://127.0.0.1:3080',
@@ -739,6 +790,11 @@ function loadConfig() {
     sendDelayMs: file.sendDelayMs ?? 300,
     questionTimeoutMs: file.questionTimeoutMs ?? 5 * 60 * 1000,
     consolePort: file.consolePort ?? 3100,
+    // 控制台额外监听地址（可选）：留空 = 只监听回环（默认，行为不变）。
+    // 填 '192.168.1.10' 之类具体地址时，控制台**同时**在该地址上开一个监听器，
+    // 于是局域网内可用 http://<host>:<port> 访问；回环监听器保留 —— MCP 工具进程
+    // （src/mcp-snowluma-safe.js）走 127.0.0.1，不该因为对外开放而被迫改地址。
+    consoleHost,
     consoleToken: file.consoleToken ?? '',
     // 价目表覆盖项（可选）。留空即用 src/model-prices.js 的官方默认价。
     pricing: file.pricing ?? null,
@@ -3587,6 +3643,28 @@ async function main() {
 
   // ── 本地控制台（独立 Web 面板，不依赖 DSH WebUI） ───────────────────────────
   // 模式/角色/静默状态都存 state/*.json，桥接即时感知；此服务只读写这些文件。
+  //
+  // 控制台监听现状（供 /api/console/access 如实报告「配置值」与「实际生效值」的差异）：
+  // 监听器是**启动时**创建的，所以改了 consoleHost 必须重启桥接才生效 ——
+  // 这里不假装热生效，接口把两者分开返回，界面据此提示「待重启」。
+  let consoleLanHost = '';   // 实际已绑定的对外监听地址（'' = 只监听回环）
+  let consoleBoundPort = 0;  // 控制台实际监听的端口（配置端口为 0 时是系统分配的）
+
+  /**
+   * config.json 里是否**显式**配置了合法的控制台令牌。
+   *
+   * 对外监听（consoleHost）必须满足这个条件：自动生成的令牌只适合「只有本机能
+   * 碰到控制台」的场景，它落在 state/console-token，靠文件系统权限兜底；
+   * 一旦控制台开始对外监听，这个前提就不成立了。
+   *
+   * 每次都重新读 cfg.consoleToken，而不是复用启动时的快照 —— 控制台里改令牌会
+   * 热更新 cfg（并写回 config.json），所以「现在配了没有」是随时会变的。
+   */
+  const explicitConsoleTokenNow = () => {
+    const token = String(cfg.consoleToken ?? '').trim();
+    return token.length >= 16 && token.length <= 128 && /^[A-Za-z0-9_-]+$/.test(token);
+  };
+
   function v2ToolEnabled(flag) {
     return cfg.socialV2?.tools?.[flag] !== false;
   }
@@ -3606,6 +3684,16 @@ async function main() {
     if (!consoleToken) throw new Error('控制台令牌为空：拒绝以无鉴权方式启动控制台 API');
     if (!tokenValid && configuredToken) log(`控制台 config.consoleToken 长度/字符不合法，已忽略并回退到自动生成令牌`);
     if (!configuredToken) log('控制台未配置 consoleToken，已自动生成并保存到 state/console-token');
+    // 对外监听（consoleHost）**必须**配一个管理员显式设置的令牌。
+    //
+    // 自动生成的令牌只适合「只有本机能碰到控制台」的场景：它落在 state/console-token，
+    // 靠文件系统权限兜底。一旦控制台开始对外监听，这个前提就不成立了 ——
+    // 令牌会出现在每一次跨机请求里（哪怕只是输错时也不该由机器替管理员决定）。
+    // 所以对外监听这条路要求 config.json 里**显式**写了 consoleToken；
+    // 没写就**不开**对外监听器（失败关闭：暴露更少才是安全的那一侧），
+    // 本机回环控制台照常可用，管理员改完配置重启即可。
+    const hasExplicitConsoleToken = explicitConsoleTokenNow();
+    const wantsLanListener = Boolean(String(cfg.consoleHost ?? '').trim());
     // 二代会话级隔离：MCP 工具调用时若带 x-agent-token，则必须匹配该会话的 agentToken。
     // 控制台/管理端请求不带此头，仍走 consoleToken 管理通道。
     //
@@ -3666,7 +3754,7 @@ async function main() {
       );
     };
 
-    const server = http.createServer(async (req, res) => {
+    const consoleHandler = async (req, res) => {
       let url;
       try { url = new URL(req.url ?? '/', `http://127.0.0.1:${port}`); }
       catch {
@@ -3755,17 +3843,51 @@ async function main() {
         res.end();
         return;
       }
-      // Host 头校验（DNS rebinding 硬化）：控制台只监听 127.0.0.1，因此合法请求的 Host
+      // Host 头校验（DNS rebinding 硬化）：控制台默认只监听 127.0.0.1，因此合法请求的 Host
       // 只可能是 127.0.0.1 / localhost / [::1] 加本端口。攻击者用一个 TTL=0 的域名解析到
       // 127.0.0.1 时，浏览器会把 evil.com:3100 当作同源，Origin 校验随之失效；卡住 Host
       // 这一层后，这类请求在进入任何业务分支之前就被拒掉。
       // 反代/端口转发场景会被一并拒绝——这是有意的（要远程访问请用 SSH 隧道并自行承担）。
-      const hostHeader = String(req.headers.host ?? '');
+      //
+      // 配置了 consoleHost（对外监听）时，**按监听器分别判定**：
+      //   · 回环监听器：永远只接受回环 Host —— DNS rebinding 硬化的底线不能因为
+      //     「反正开了对外监听」就一起失效；
+      //   · 对外监听器：放行配置里那个地址（IP 或主机名）本身。绑 0.0.0.0 / :: 时
+      //     它监听所有网卡，Host 可能是这台机器的任意地址 —— 那种情况下唯一的门槛
+      //     是控制台令牌（而对外监听本来就强制要求显式设置令牌）。
+      // 怎么知道是从哪个监听器进来的？req.socket.localAddress 就是连接实际落到
+      // 哪个本地地址上的（IPv4-mapped 的 ::ffff: 前缀要去掉）。
+      const hostHeader = String(req.headers.host ?? '').toLowerCase();
       // 用**实际绑定端口**而不是配置值：测试夹具用 consolePort: 0 让系统分配端口，
       // 配置里那个 0 不是请求里的 Host 端口。请求必然发生在 listen 之后，所以这里拿得到。
       const boundPort = server.address()?.port ?? port;
-      const allowedHosts = [`127.0.0.1:${boundPort}`, `localhost:${boundPort}`, `[::1]:${boundPort}`];
-      if (!allowedHosts.includes(hostHeader.toLowerCase())) {
+      const localAddress = String(req.socket?.localAddress ?? '').replace(/^::ffff:/i, '');
+      const onLoopbackListener = localAddress === '127.0.0.1' || localAddress === '::1';
+      const loopbackHosts = [`127.0.0.1:${boundPort}`, `localhost:${boundPort}`, `[::1]:${boundPort}`];
+      const lanHost = String(cfg.consoleHost ?? '').trim().toLowerCase();
+      // 按**监听器**分别判定：
+      //   · 回环监听器：只接受回环三形态 —— DNS rebinding 硬化的底线，不能因为
+      //     「反正开了对外监听」就一起失效；
+      //   · 对外监听器 + 绑具体地址：只接受配置里那个地址本身（IP 或主机名）；
+      //   · 对外监听器 + 绑通配地址（0.0.0.0 / ::）：它监听所有网卡，来路的
+      //     本机地址与 Host 都可能是这台机器的任意一个 —— 这种部署下唯一的门槛
+      //     是控制台令牌，而对外监听本来就强制要求显式令牌。
+      let hostAllowed;
+      if (onLoopbackListener) {
+        hostAllowed = loopbackHosts.includes(hostHeader);
+      } else if (lanHost && isWildcardHost(lanHost)) {
+        hostAllowed = true;
+      } else if (lanHost) {
+        // Host 头里 IPv6 要带方括号（[::1]:3100），IPv4/主机名是裸的（192.168.1.10:3100）——
+        // 放行形态错了，浏览器发来的 Host 就对不上，会被这层误杀。
+        const bare = lanHost.includes(':') ? `[${lanHost}]` : lanHost;
+        // 部分客户端（非浏览器）会省略默认端口以外的端口号？反过来更常见的是带端口，
+        // 但裸 IP 的 Host 也出现过 —— 只放行**精确等于**该地址的那两种形态。
+        hostAllowed = [`${bare}:${boundPort}`, bare].includes(hostHeader);
+      } else {
+        hostAllowed = false;
+      }
+      if (!hostAllowed) {
         sendJson({ ok: false, error: `Host 头不被允许（${hostHeader || '缺失'}）：控制台只接受本机回环访问` }, 403);
         return;
       }
@@ -3837,8 +3959,22 @@ async function main() {
         const origin = req.headers['origin'];
         if (origin) {
           let originHost = '';
-          try { originHost = new URL(String(origin)).host; } catch {}
-          if (![`127.0.0.1:${boundPort}`, `localhost:${boundPort}`, `[::1]:${boundPort}`].includes(originHost)) {
+          try { originHost = new URL(String(origin)).host.toLowerCase(); } catch {}
+          // 与 Host 白名单同一口径，按监听器分别判定（回环监听器只认回环三形态；
+          // 对外监听器才放行配置里那个地址；绑通配地址时 Origin 不再限制，
+          // 令牌是唯一门槛）。
+          let originAllowed;
+          if (onLoopbackListener) {
+            originAllowed = loopbackHosts.includes(originHost);
+          } else if (lanHost && isWildcardHost(lanHost)) {
+            originAllowed = true;
+          } else if (lanHost) {
+            const bare = lanHost.includes(':') ? `[${lanHost}]` : lanHost;
+            originAllowed = [`${bare}:${boundPort}`, bare].includes(originHost);
+          } else {
+            originAllowed = false;
+          }
+          if (!originAllowed) {
             sendJson({ ok: false, error: '跨站请求被拒绝' }, 403);
             return;
           }
@@ -4586,6 +4722,62 @@ async function main() {
           log(`控制台：白名单已更新（群: ${allow.groups.join(',') || '无'}，私聊: ${allow.private.join(',') || '无'}，管理员: ${ownerQQ ?? '未设置'}）`);
           sendJson({ ok: true, allow, deny, ownerQQ });
           return;
+        }
+
+        // ── 控制台对外访问地址（写 config.json；监听器启动时创建，需重启才生效）──
+        // 为什么单独一个端点而不是塞进 /api/status：/api/status 有智能体可见的分支，
+        // 控制台的监听地址属于管理面信息（对外暴露面），不该混进那个接口。
+        if (url.pathname === '/api/console/access') {
+          if (req.method === 'GET') {
+            sendJson({
+              ok: true,
+              consoleHost: cfg.consoleHost ?? '',
+              effectiveConsoleHost: consoleLanHost,
+              consolePort: consoleBoundPort || (cfg.consolePort ?? 3100),
+              consoleTokenConfigured: explicitConsoleTokenNow(),
+            });
+            return;
+          }
+          if (req.method === 'POST') {
+            const body = await readBody();
+            if (!body || typeof body !== 'object' || body.consoleHost === undefined) {
+              sendJson({ ok: false, error: '缺少 consoleHost 字段（留空字符串表示只监听回环）' }, 400);
+              return;
+            }
+            let wanted = '';
+            try {
+              wanted = normalizeConsoleHost(body.consoleHost);
+            } catch (error) {
+              sendJson({ ok: false, error: error?.message ?? 'consoleHost 无效' }, 400);
+              return;
+            }
+            const configFile = path.join(ROOT, 'config.json');
+            // fail-fast：配置文件损坏时直接 500，绝不回写（与白名单保存同一口径）
+            const file = readConfigObject(configFile);
+            file.consoleHost = wanted;
+            atomicWriteJson(configFile, file);
+            cfg.consoleHost = wanted;
+            // 监听器是**启动时**创建的，改配置不会热生效：如实告诉界面「需重启」，
+            // 而不是让界面显示一个假的「已生效」。
+            const restartRequired = wanted !== consoleLanHost;
+            // 对外监听要求显式令牌：没配就等于「重启后也不会开对外监听」，
+            // 这里如实告诉界面，别让它显示一个假的「已生效」。
+            const tokenReady = explicitConsoleTokenNow();
+            const willExpose = Boolean(wanted) && !tokenReady;
+            log(`控制台：对外监听地址已更新为 ${wanted || '（只监听回环）'}${restartRequired ? '，需重启桥接后生效' : ''}${willExpose ? '；⚠️ 缺少显式 consoleToken，重启后不会开对外监听' : ''}`);
+            sendJson({
+              ok: true,
+              consoleHost: wanted,
+              effectiveConsoleHost: consoleLanHost,
+              consolePort: consoleBoundPort || (cfg.consolePort ?? 3100),
+              consoleTokenConfigured: tokenReady,
+              restartRequired,
+              warning: willExpose
+                ? '对外监听要求在 config.json 里显式设置 consoleToken（至少 16 位，仅 A-Za-z0-9_-）；当前没有，重启后不会开对外监听。'
+                : '',
+            });
+            return;
+          }
         }
 
         // ── DSH 模型与思考强度 ───────────────────────────────────────────────
@@ -7788,10 +7980,69 @@ async function main() {
         const status = Number(error?.statusCode) || 500;
         sendJson({ ok: false, error: error?.message ?? String(error) }, status);
       }
-    });
-    server.listen(port, '127.0.0.1', () => {
-      log(`本地控制台已启动：http://127.0.0.1:${port}`);
-    });
+    };
+    const server = http.createServer(consoleHandler);
+    // 附加监听器（对外那个）挂在 server 上：关停路径与测试夹具需要能一并关掉 ——
+    // 否则它会一直占着端口，Node 的事件循环也不会退出（测试进程会挂住）。
+    server.extraListeners = [];
+    const lanHost = String(cfg.consoleHost ?? '').trim();
+    // 对外监听必须配一个**显式**的 consoleToken（见上面 hasExplicitConsoleToken 的说明）。
+    // 没配就不开对外监听器 —— 失败关闭：暴露更少才是安全的那一侧。
+    if (wantsLanListener && !hasExplicitConsoleToken) {
+      log(`⛔ 控制台对外监听已跳过：配置了 consoleHost="${lanHost}"，但 config.json 里没有合法的 consoleToken（至少 16 位，仅 A-Za-z0-9_-）。对外暴露的管理入口必须用管理员显式设置的强令牌；自动生成的令牌只适合本机回环。请设置 consoleToken 后重启桥接。`);
+    }
+    const lanEnabled = wantsLanListener && hasExplicitConsoleToken;
+    // 通配地址（0.0.0.0 / ::）单独处理：
+    //   - 同一端口上不能再单独绑 127.0.0.1（会 EADDRINUSE），而通配监听器本来
+    //     就覆盖回环，MCP 工具进程走 127.0.0.1 依然通；
+    //   - 回环请求靠 req.socket.localAddress 区分（见 Host 校验处），白名单照旧严格。
+    const wildcard = lanEnabled && isWildcardHost(lanHost);
+    // 额外的对外监听器（可选）：consoleHost 配置了就多开一个监听器。
+    // 为什么单独开而不是把回环那个换成绑 0.0.0.0：
+    //   - 绑具体地址时，用它精确控制暴露面（不像 0.0.0.0 那样把 tailscale0
+    //     等所有网卡一起暴露）；
+    //   - 回环监听器必须留着 —— MCP 工具进程（src/mcp-snowluma-safe.js 的 agentApiBase）
+    //     固定走 http://127.0.0.1:<consolePort>，它不该受对外开放影响；
+    //   - 两个监听器共用同一个 handler、同一份鉴权与 Host 白名单逻辑。
+    //
+    // 端口取回环监听器的**实际**端口（server.address()），而不是配置里的 port：
+    // 配置端口为 0 时系统会分配一个随机端口，两个监听器必须落在同一个端口上，
+    // 否则「配置值」与「实际监听」会各说各话（外部访问的是哪一个就成了玄学）。
+    const startLanListener = () => {
+      if (!lanEnabled) return;
+      const lanPort = server.address()?.port ?? port;
+      try {
+        const lanServer = http.createServer(consoleHandler);
+        server.extraListeners.push(lanServer);
+        lanServer.on('error', (error) => {
+          // 对外监听失败**不致命**：回环控制台仍然可用（管理端不至于失联）。
+          log(`控制台对外监听失败（${lanHost}:${lanPort}）: ${error?.message ?? error}`);
+        });
+        lanServer.listen(lanPort, lanHost, () => {
+          consoleLanHost = lanHost;
+          log(`本地控制台已启动（对外）：http://${lanHost}:${lanPort}`);
+        });
+      } catch (error) {
+        log(`控制台对外监听失败（${lanHost}:${lanPort}）: ${error?.message ?? error}`);
+      }
+    };
+    if (wildcard) {
+      // 只开通配监听器（它覆盖回环，也覆盖所有网卡）。
+      server.listen(port, lanHost, () => {
+        consoleBoundPort = server.address()?.port ?? port;
+        consoleLanHost = lanHost;
+        log(`本地控制台已启动（所有网卡）：http://${lanHost}:${consoleBoundPort}`);
+      });
+    } else {
+      // 回环监听器：MCP 工具进程与本机脚本走 127.0.0.1，永远保留。
+      server.listen(port, '127.0.0.1', () => {
+        consoleBoundPort = server.address()?.port ?? port;
+        log(`本地控制台已启动：http://127.0.0.1:${consoleBoundPort}`);
+        // 对外监听器等回环监听**成功之后**再建：端口用回环那个的实际端口，
+        // 保证两个监听器永远在同一个端口上。
+        startLanListener();
+      });
+    }
     // 端口被占用说明已有实例在跑：以 exit 2 退出，守护脚本会识别为"已有实例"而不是无限重启
     server.on('error', (error) => {
       log(`控制台服务错误: ${error?.message ?? error}`);

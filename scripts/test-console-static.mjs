@@ -40,6 +40,14 @@ ok(/api\('\/api\/voice\/list/.test(html), '面板调用 /api/voice/list（操作
 ok(/api\('\/api\/voice\/send'/.test(html), '面板调用 /api/voice/send');
 ok(/typeof loadVoiceLibrary === 'function'|async function loadVoiceLibrary/.test(html), 'loadVoiceLibrary 已定义');
 
+console.log('## 控制台对外访问面板接线');
+ok(/id="section-console-access"[^>]*data-page="access"/.test(html), '面板挂在「访问与安全」页');
+ok(/id="consoleHostInput"/.test(html), '监听地址输入框存在');
+ok(/getElementById\('consoleHostSave'\)\.addEventListener/.test(html), '保存按钮已绑定事件');
+ok(/getElementById\('consoleHostClear'\)\.addEventListener/.test(html), '清除按钮已绑定事件');
+ok(/api\('\/api\/console\/access'/.test(html), '面板调用 /api/console/access');
+ok(/refreshConsoleAccess\(\)/.test(html), 'refreshConsoleAccess 已定义并被调用');
+
 console.log('## JS 语法');
 const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/gi)].map((m) => m[1]);
 const big = scripts.sort((a, b) => b.length - a.length)[0];
@@ -72,6 +80,7 @@ console.log('## fixture mock 覆盖');
 const fixture = fs.readFileSync(path.join(ROOT, 'scripts', 'console-ui-fixture.mjs'), 'utf8');
 ok(fixture.includes("case '/api/socialV2/voices'"), 'fixture mock 了 /api/socialV2/voices');
 ok(fixture.includes("case '/api/voice/send'"), 'fixture mock 了 /api/voice/send');
+ok(fixture.includes("case '/api/console/access'"), 'fixture mock 了 /api/console/access');
 
 console.log(bad === 0 ? '\n全部通过' : `\n${bad} 项失败`);
 if (bad > 0) process.exit(1);

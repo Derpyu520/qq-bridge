@@ -2509,6 +2509,26 @@ button:active:not(:disabled) {
         <span class="meta" id="consoleTokenMsg"></span>
       </div>
     </section>
+    <section id="section-console-access" data-page="access" class="card">
+      <h2>控制台对外访问</h2>
+      <div id="consoleAccessState" style="padding:8px 10px;border-left:3px solid var(--warn-fg-strong);background:var(--warn-bg)">
+        <div class="meta" style="margin:0">正在读取…</div>
+      </div>
+      <div class="meta" style="margin-top:10px">默认控制台<b>只监听本机回环</b>（<code>127.0.0.1</code>），局域网里打不开。填一个<b>地址</b>，控制台会在该地址上<b>额外</b>开一个监听器；回环监听器始终保留（MCP 工具进程走 127.0.0.1）。</div>
+      <div class="row" style="margin-top:8px">
+        <input type="text" id="consoleHostInput" placeholder="留空 = 只监听回环；或填 IP（192.168.1.10）、主机名（nas.local）、0.0.0.0（所有网卡）" style="flex:1">
+        <button id="consoleHostSave" class="small">保存</button>
+        <button id="consoleHostClear" class="small">清除</button>
+      </div>
+      <div class="meta" id="consoleAccessMsg"></div>
+      <div id="consoleTokenWarn" style="display:none;margin-top:8px;padding:8px 10px;border-left:3px solid var(--warn-fg-strong);background:var(--warn-bg)">
+        <b>⚠️ 对外监听要求显式设置控制台令牌</b>
+        <div class="meta" style="margin:4px 0">自动生成的令牌只适合「只有本机能碰到控制台」的场景（它落在 <code>state/console-token</code>，靠文件系统权限兜底）。控制台一旦对外暴露，这个前提就不成立了。请在 <code>config.json</code> 里显式设置 <code>consoleToken</code>（至少 16 位，仅 <code>A-Za-z0-9_-</code>）后重启桥接。</div>
+      </div>
+      <div class="meta">接受具体 IP、主机名，或 <code>0.0.0.0</code> / <code>::</code>（监听所有网卡，含 tailscale0 —— 暴露面最大，令牌是唯一门槛）。<b>对外监听时必须显式设置 <code>consoleToken</code></b>，否则不会开对外监听器。</div>
+      <div class="meta">放行的是配置里那个地址本身：回环监听器永远只接受回环 Host，外来 Host 一律 403（DNS rebinding 硬化）。</div>
+      <div class="meta">监听器是<b>启动时</b>创建的，所以保存后要<b>重启桥接</b>才真正生效（见「运维」页的「重启桥接」）。</div>
+    </section>
 <section id="section-test-send" data-page="operations" class="card">
       <h2>测试发送</h2>
       <div class="row">
@@ -2989,6 +3009,42 @@ async function refreshWhitelist() {
   } catch {}
 }
 
+async function refreshConsoleAccess() {
+  try {
+    const r = await api('/api/console/access');
+    const host = String(r.consoleHost || '');
+    const eff = String(r.effectiveConsoleHost || '');
+    const port = r.consolePort;
+    const tokenReady = r.consoleTokenConfigured !== false;
+    const input = document.getElementById('consoleHostInput');
+    if (input && document.activeElement !== input) input.value = host;
+    const box = document.getElementById('consoleAccessState');
+    if (!box) return;
+    let html = '';
+    let warn = true;
+    if (eff) {
+      html += `<div class="meta" style="margin:0">⚠️ 控制台<b>已对 ${esc(eff)}:${esc(port)} 开放</b> —— 能连到这台机器的人都能打开它（能否从公网访问还取决于你的路由器/防火墙是否放行这个端口）。控制台令牌是唯一的门槛，别泄露出去。</div>`;
+    } else {
+      html += `<div class="meta" style="margin:0">✅ 控制台<b>只监听本机回环</b>（http://127.0.0.1:${esc(port)}），局域网内打不开。</div>`;
+      warn = false;
+    }
+    // 配置值与生效值可能不一致：监听器是启动时创建的，改完必须重启。
+    if (host && eff && host !== eff) {
+      html += `<div class="meta" style="margin:6px 0 0">配置里写的是 <b>${esc(host)}</b>，当前生效的是 <b>${esc(eff)}</b> —— 需要<b>重启桥接</b>才生效。</div>`;
+    } else if (host && !eff) {
+      html += `<div class="meta" style="margin:6px 0 0">已保存 <b>${esc(host)}</b>，<b>重启桥接</b>后才会对外监听。</div>`;
+    } else if (!host && eff) {
+      html += `<div class="meta" style="margin:6px 0 0">配置已清空，但当前仍在监听 <b>${esc(eff)}</b> —— <b>重启桥接</b>后才会关闭。</div>`;
+    }
+    box.innerHTML = html;
+    box.style.borderLeftColor = warn ? 'var(--warn-fg-strong)' : 'var(--ok)';
+    box.style.background = warn ? 'var(--warn-bg)' : 'transparent';
+    // 配了对外地址却没显式令牌 → 重启后也不会开对外监听，界面必须说清楚。
+    const tokenWarn = document.getElementById('consoleTokenWarn');
+    if (tokenWarn) tokenWarn.style.display = (host && !tokenReady) ? 'block' : 'none';
+  } catch {}
+}
+
 async function refreshSessions() {
   try {
     const s = await api('/api/sessions');
@@ -3163,6 +3219,32 @@ document.getElementById('wlSave').addEventListener('click', async () => {
   });
   if (r.ok) { refreshWhitelist(); refresh(); alert('白名单已保存并生效'); }
   else alert(r.error || '保存失败');
+});
+async function saveConsoleHost(value) {
+  const msg = document.getElementById('consoleAccessMsg');
+  try {
+    const r = await api('/api/console/access', 'POST', { consoleHost: value });
+    if (r.ok) {
+      msg.textContent = r.warning
+        ? `✅ 已保存；${r.warning}`
+        : (r.restartRequired ? '✅ 已保存；重启桥接后生效' : '✅ 已保存（当前已生效）');
+      msg.className = r.warning ? 'meta err' : 'meta ok';
+      refreshConsoleAccess();
+    } else {
+      msg.textContent = '❌ ' + (r.error || '保存失败');
+      msg.className = 'meta err';
+    }
+  } catch (e) {
+    msg.textContent = '❌ ' + (e?.message || '保存失败');
+    msg.className = 'meta err';
+  }
+}
+document.getElementById('consoleHostSave').addEventListener('click', () => {
+  saveConsoleHost(document.getElementById('consoleHostInput').value.trim());
+});
+document.getElementById('consoleHostClear').addEventListener('click', () => {
+  document.getElementById('consoleHostInput').value = '';
+  saveConsoleHost('');
 });
 document.getElementById('tsSend').addEventListener('click', async () => {
   const r = await api('/api/test-send', 'POST', {
@@ -4538,7 +4620,7 @@ document.querySelectorAll('input,select,textarea').forEach(input => {
     input.setAttribute('aria-label', names[input.id] || input.placeholder || input.closest('section')?.querySelector('h2')?.textContent || '设置');
   }
 });
-const primaryActions = ['roleSet','roleCreate','socialSave','v2ConfigSave','v2ConfigSaveTop','wlSave','secSave','consoleTokenSave','tsSend','aiNotifySend','slangAdd','slangConfigSave','slangModalDirectConfirm'];
+const primaryActions = ['roleSet','roleCreate','socialSave','v2ConfigSave','v2ConfigSaveTop','wlSave','secSave','consoleTokenSave','consoleHostSave','tsSend','aiNotifySend','slangAdd','slangConfigSave','slangModalDirectConfirm'];
 primaryActions.forEach(id => document.getElementById(id)?.classList.add('primary'));
 document.querySelectorAll('.meta[id$="Msg"], .meta[id$="Msg2"]').forEach(el => el.setAttribute('role','status'));
 document.getElementById('section-mode').querySelector('h2').dataset.note = '选择后即时生效';
@@ -5047,8 +5129,8 @@ document.getElementById('usageClear').addEventListener('click', async () => {
 
 setConsolePage(location.hash.slice(1), { updateHash:false });
 
-refresh(); refreshRoles(); refreshWhitelist(); refreshSessions(); refreshPending(); refreshPresets(); loadSocialForm(); loadV2Config(); refreshV2Activity(); loadV2ToolLog(); loadV2SessionOptions(); refreshSocialStatus(); refreshSlang(); loadSlangConfig(); loadSecurity(); refreshSimPrompt(); refreshDshModel(); refreshUsage(); refreshUsageChart(); refreshUsageRecent();
-setInterval(() => { refresh(); refreshSessions(); refreshPending(); refreshSocialStatus(); refreshSlang(); }, 3000);
+refresh(); refreshRoles(); refreshWhitelist(); refreshConsoleAccess(); refreshSessions(); refreshPending(); refreshPresets(); loadSocialForm(); loadV2Config(); refreshV2Activity(); loadV2ToolLog(); loadV2SessionOptions(); refreshSocialStatus(); refreshSlang(); loadSlangConfig(); loadSecurity(); refreshSimPrompt(); refreshDshModel(); refreshUsage(); refreshUsageChart(); refreshUsageRecent();
+setInterval(() => { refresh(); refreshSessions(); refreshPending(); refreshSocialStatus(); refreshSlang(); refreshConsoleAccess(); }, 3000);
 // 用量看板只在本页可见时轮询：既保证「实时」，又不让其它页白白多打两份接口。
 setInterval(() => { if (currentConsolePage !== 'usage') return; refreshUsage(); refreshUsageChart(); refreshUsageRecent(); }, 3000);
 // 主题切换（纯前端，不发任何请求；选择写入 localStorage，未选择时跟随系统）
