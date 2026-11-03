@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>管理员操作 — qq-bridge</title>
+<meta name="description" content="途径 A：QQ 群内管理命令 （桥接直接执行，不经过模型判断）：">
+<meta property="og:title" content="管理员操作 — qq-bridge">
+<meta property="og:description" content="途径 A：QQ 群内管理命令 （桥接直接执行，不经过模型判断）：">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="../../" data-tab="使用指南" data-page-rel="pages/use/admin.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../../index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout has-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body guide">
+  <div class="topbar">
+  <div class="crumbs">
+    <a href="../../index.html">qq-bridge</a>
+    <span class="sep">/</span>
+    Pages
+    <span class="sep">/</span>
+    <a href="index.html">使用指南</a>
+    <span class="sep">/</span>
+    <span class="here">管理员操作</span>
+  </div>
+</div>
+  <h1>管理员操作</h1>
+<!-- moved verbatim from RULES.md [h2:管理员操作手册] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="管理员操作手册">管理员操作手册</h2>
+<h3 id="切换角色--模式两种途径均为硬性机制">切换角色 / 模式（两种途径，均为硬性机制）</h3>
+<p><strong>途径 A：QQ 群内管理命令</strong>（桥接直接执行，不经过模型判断）：</p>
+<pre><code>/role 傲娇助手    # 切换角色（roles/傲娇助手.md）
+/role off         # 清除角色
+/silent           # 静默模式（群友消息不回复）
+/active           # 恢复正常
+/status           # 查看会话/白名单/角色/模式状态
+/reset            # 重置当前 QQ 会话上下文</code></pre>
+<p><strong>途径 B：DSH WebUI</strong>：</p>
+<ul>
+<li>在 GUI 会话里对我说「给 QQ 机器人设置角色：傲娇助手」/「清除角色」/「开启静默模式」，我写 <code>state/current-role.json</code></li>
+<li>或手动编辑 <code>qq-bridge/state/current-role.json</code>：
+<pre><code class="language-json">{ &quot;role&quot;: &quot;傲娇助手&quot;, &quot;mode&quot;: &quot;active&quot; }   // active=正常, silent=静默</code></pre></li>
+<li>角色文件放 <code>qq-bridge/roles/&lt;角色名&gt;.md</code>（格式见 <code>roles/README.md</code>）</li>
+</ul>
+<h3 id="查看-qq-活动">查看 QQ 活动</h3>
+<ul>
+<li>WebUI 里直接打开「QQ 聊天」工作区的会话，可完整查看每次交互（含工具调用）</li>
+<li>桥接还会把每次收发写入 <code>qq-bridge/state/qq-activity.log</code>（最近 500 行），GUI 会话的 agent 可读取汇报</li>
+</ul>
+<h3 id="在-webui-与-qq-机器人对话">在 WebUI 与 QQ 机器人对话</h3>
+<p>打开「QQ 聊天」工作区里的会话即可直接对话（DSH 原生）。<code>reserved2</code> 不自动转发 agent 文本，但工具可以发送 QQ；<code>chat</code>、<code>reserved</code> 和 <code>closed-agent</code> 会转发映射会话的 agent 回合输出，因此在这些会话中从 DSH 界面输入内容，也可能使回复出现在 QQ。需要纯本地讨论时请使用没有 QQ 映射的 DSH 会话。</p>
+
+<!-- moved verbatim from RULES.md [h2:事故与兜底] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="事故与兜底">事故与兜底</h2>
+<ul>
+<li>群友诱导 agent 时，preset 的工具限制和目标白名单是主要硬边界。发送工具仍可能造成白名单内的误发；敏感信息正则属于启发式审计，不能识别任意秘密或保证“最多只发一条”。账号和会话隔离仍需结合实际运行模式使用。</li>
+<li>想彻底关闭机器人：停止桥接进程（start.bat 窗口 Ctrl+C）或 SnowLuma。</li>
+<li>修改白名单/角色/owner 后保存即热更新（控制台写入 config.json / state/*.json 后即时生效）；修改 preset（权威源在 <code>dsh/agent-presets/</code>，改完跑 <code>node scripts/build-agent-preset-patches.mjs</code> 重新生成 bundle patch）后重启 DSH 生效。</li>
+<li>⚠️ 桥接只能运行一个实例：消息异常时先检查任务管理器里是否有多余的 <code>node ...bridge.js</code>。</li>
+</ul>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+<aside class="sidebar-right" aria-label="On this page">
+  <div class="sidebar-inner">
+    <span class="toc-label">On this page</span>
+    <nav class="toc-list">
+      <a class="toc-h2" href="#管理员操作手册">管理员操作手册</a>
+      <a class="toc-h3" href="#切换角色--模式两种途径均为硬性机制">切换角色 / 模式（两种途径，均为硬性机制）</a>
+      <a class="toc-h3" href="#查看-qq-活动">查看 QQ 活动</a>
+      <a class="toc-h3" href="#在-webui-与-qq-机器人对话">在 WebUI 与 QQ 机器人对话</a>
+      <a class="toc-h2" href="#事故与兜底">事故与兜底</a>
+    </nav>
+  </div>
+</aside>
+
+</div>
+
+<script src="../../assets/nav.js"></script>
+
+</body>
+</html>

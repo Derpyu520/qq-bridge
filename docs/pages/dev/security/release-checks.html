@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>发布检查 — qq-bridge</title>
+<meta name="description" content="npm run test:audit # 离线回归脚本（含安全专项），必须全绿 npm audit --omit=dev --audit-level=high # CI 阻止已知高危和严重依赖漏洞 npm run verify:adaptation # DSH 适配一致性（preset/工具守卫/MCP 挂载/活 DSH 实测） npm run verify:persona # 人格配置一致性…">
+<meta property="og:title" content="发布检查 — qq-bridge">
+<meta property="og:description" content="npm run test:audit # 离线回归脚本（含安全专项），必须全绿 npm audit --omit=dev --audit-level=high # CI 阻止已知高危和严重依赖漏洞 npm run verify:adaptation # DSH 适配一致性（preset/工具守卫/MCP 挂载/活 DSH 实测） npm run verify:persona # 人格配置一致性…">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../../assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="../../../" data-tab="Developer Guide" data-page-rel="pages/dev/security/release-checks.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../../../index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout has-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body decisions">
+  <div class="topbar">
+  <div class="crumbs">
+    <a href="../../../index.html">qq-bridge</a>
+    <span class="sep">/</span>
+    Pages
+    <span class="sep">/</span>
+    Developer Guide
+    <span class="sep">/</span>
+    Security
+    <span class="sep">/</span>
+    <span class="here">发布检查</span>
+  </div>
+</div>
+  <h1>发布检查</h1>
+<!-- moved verbatim from pages/ops/security-baseline.html [h2:四] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="四发布前必须跑的检查回归清单">四、发布前必须跑的检查（回归清单）</h2>
+<pre><code class="language-bash">npm run test:audit          # 离线回归脚本（含安全专项），必须全绿
+npm audit --omit=dev --audit-level=high # CI 阻止已知高危和严重依赖漏洞
+npm run verify:adaptation   # DSH 适配一致性（preset/工具守卫/MCP 挂载/活 DSH 实测）
+npm run verify:persona      # 人格配置一致性
+npm run diagnose:acl        # ACL 收紧路径盘点（只读；需在**无沙箱**终端跑，见 §2.6）
+npm run scan:tool-names     # 守卫名单 vs 已安装 DSH 的真实工具名（每次升级 DSH 后跑）
+node --check src/bridge.js  # 语法门禁（大文件改动后必跑）</code></pre>
+<p>安全专项必须覆盖（缺一不可）：</p>
+<ul>
+<li>[x] 白名单/黑名单/空白名单 fail-closed（含单复数与字符串/数字两种写法）</li>
+<li>[x] <code>closed-agent</code> 只对 <code>private:&lt;ownerQQ&gt;</code> 放行；模式切换会退役旧会话</li>
+<li>[x] 预设清单不可用时<strong>拒绝</strong>建群聊会话（不回退到默认预设）</li>
+<li>[x] agent token 无法访问任何管理端点；空 agent token 被拒</li>
+<li>[x] 控制台伪造 <code>Host</code> 被拒；错令牌（含错长度、大小写、尾空格）被拒</li>
+<li>[x] <code>/api/authorize/read</code> 空令牌被拒</li>
+<li>[x] agent 令牌只能读自己会话；跨会话读返回 403</li>
+<li>[x] 语音只能取语音库内的文件（含 <code>allowAbsolutePath=true</code> 与相对穿越两种情形）</li>
+<li>[x] 出站文本命中敏感信息时整条拦截；含已知会话令牌时直接抛错</li>
+<li>[x] SSRF：scheme、URL 凭据、私有 IP、重定向、超时、大小限制（11 项）</li>
+<li>[x] 桥接 <code>200 + {ok:false}</code> 会被 MCP 当作失败上报（不产生静默假成功）</li>
+<li>[x] 旧只读工具在非 <code>closed-agent</code> 模式下 fail-closed</li>
+<li>[x] <code>state/</code> ACL 助手：非阻断、防递归、<code>start.bat</code> 纯 ASCII+CRLF 且先于桥接调用（<strong>结构级断言</strong>）</li>
+<li>[ ] <strong><code>state/</code> ACL 的真实 icacls/UAC 行为</strong>：需在普通终端手动复跑 <code>node scripts/harden-state-acl.mjs</code> 确认（沙箱/CI 里改 ACL 会被拒，无法自动化）</li>
+</ul>
+<hr>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+<aside class="sidebar-right" aria-label="On this page">
+  <div class="sidebar-inner">
+    <span class="toc-label">On this page</span>
+    <nav class="toc-list">
+      <a class="toc-h2" href="#四发布前必须跑的检查回归清单">四、发布前必须跑的检查（回归清单）</a>
+    </nav>
+  </div>
+</aside>
+
+</div>
+
+<script src="../../../assets/nav.js"></script>
+
+</body>
+</html>

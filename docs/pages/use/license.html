@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>许可与边界 — qq-bridge</title>
+<meta name="description" content="本文件载明 qq-bridge（下称「本软件」）的著作权归属、许可范围、第三方组件与合规边界。">
+<meta property="og:title" content="许可与边界 — qq-bridge">
+<meta property="og:description" content="本文件载明 qq-bridge（下称「本软件」）的著作权归属、许可范围、第三方组件与合规边界。">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="../../" data-tab="使用指南" data-page-rel="pages/use/license.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../../index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout has-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body guide">
+  <div class="topbar">
+  <div class="crumbs">
+    <a href="../../index.html">qq-bridge</a>
+    <span class="sep">/</span>
+    Pages
+    <span class="sep">/</span>
+    <a href="index.html">使用指南</a>
+    <span class="sep">/</span>
+    <span class="here">许可与边界</span>
+  </div>
+</div>
+  <h1>许可与边界</h1>
+<!-- moved verbatim from NOTICE.md [pre] on 2026-11-03 (docs reorg step 2) -->
+<p>本文件载明 qq-bridge（下称「本软件」）的著作权归属、许可范围、第三方组件与合规边界。</p>
+<p>本文件不是许可条款，亦不构成对许可条款的补充、限制或解释。本软件的许可条款以 <code>LICENSE</code> 为准；
+本文件与 <code>LICENSE</code> 不一致时，以 <code>LICENSE</code> 为准。</p>
+<hr>
+
+<!-- moved verbatim from NOTICE.md [h2:一] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="一著作权与许可">一、著作权与许可</h2>
+<h3 id="11-著作权归属">1.1 著作权归属</h3>
+<p>本软件著作权由 Derpyu520 及 qq-bridge 贡献者共同享有，依
+<strong>PolyForm Noncommercial License 1.0.0</strong>（SPDX 标识符：<code>PolyForm-Noncommercial-1.0.0</code>）授权。
+许可全文见 <a href="https://github.com/Derpyu520/qq-bridge/blob/main/LICENSE"><code>LICENSE</code></a>，官方文本见
+<a href="https://polyformproject.org/licenses/noncommercial/1.0.0">https://polyformproject.org/licenses/noncommercial/1.0.0</a>。</p>
+<h3 id="12-许可范围">1.2 许可范围</h3>
+<p>以下为条款索引，仅供查阅；权利义务以 <code>LICENSE</code> 正文为准。</p>
+<table>
+<thead><tr><th>事项</th><th>规定</th></tr></thead>
+<tbody>
+<tr><td>使用目的</td><td>限于非商业目的</td></tr>
+<tr><td>修改</td><td>允许</td></tr>
+<tr><td>分发</td><td>允许，包括分发含修改的版本</td></tr>
+<tr><td>商业使用</td><td>不允许</td></tr>
+<tr><td>再许可、转让</td><td>不允许</td></tr>
+<tr><td>分发时的义务</td><td>须随附本许可条款或其 URL，以及 <code>LICENSE</code> 中 <code>Required Notice:</code> 行</td></tr>
+</tbody>
+</table>
+<p>依许可「Noncommercial Purposes」「Personal Uses」「Noncommercial Organizations」三条，个人学习、
+研究、实验、业余项目，以及慈善组织、教育机构、公共研究机构、公共安全与卫生机构、环境保护组织、
+政府机构的使用，均属许可用途，不受经费来源影响。</p>
+<h3 id="13-版本适用">1.3 版本适用</h3>
+<p><code>v0.2.1-r1</code> 及更早发布版本仍可按其发布时的 MIT 条款使用；<code>v0.2.1-r1</code> 之后的发布版本及
+基于这些新版本形成的修改，适用其发布时的许可。仅取得旧版本或创建过 fork，不会改变后续版本的许可。</p>
+<p>仓库内随附的子包（<code>plugins/qq-agent-presets</code>、<code>plugins/qq-mode-console</code>）与根目录适用同一
+许可；它们的 <code>package.json</code> <code>license</code> 字段与根清单保持一致，不构成单独的 MIT 例外。</p>
+<h3 id="14-托管平台的许可标识">1.4 托管平台的许可标识</h3>
+<p>GitHub 的许可识别清单不包含 PolyForm 系列（2026-10-30 核验：<code>GET /licenses</code> 共返回 13 项，
+均为开源许可；<code>GET /licenses/polyform-noncommercial-1.0.0</code> 返回 404），其仓库页面因此显示
+<code>Other / NOASSERTION</code>。该显示不影响许可效力。许可类型以 <code>LICENSE</code> 正文及 <code>package.json</code>
+的 <code>license</code> 字段为准。</p>
+<hr>
+
+<!-- moved verbatim from NOTICE.md [h2:二] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="二第三方组件">二、第三方组件</h2>
+<h3 id="21-组件与许可">2.1 组件与许可</h3>
+<p>本软件包含或依赖下列第三方组件。各组件依其自身许可授权，不适用本软件的许可。</p>
+<table>
+<thead><tr><th>组件</th><th>许可</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><a href="https://github.com/deepseek-ai/deepseek-harness"><code>@deepseek-ai/dsh</code></a> 及 <code>@deepseek-ai/*</code> 各包</td><td>MIT</td><td>DeepSeek Harness 本体与官方 API 客户端</td></tr>
+<tr><td><a href="https://www.npmjs.com/package/@snowluma/sdk"><code>@snowluma/sdk</code></a>、<a href="https://www.npmjs.com/package/@snowluma/mcp"><code>@snowluma/mcp</code></a></td><td>声明为 <code>SEE LICENSE IN LICENSE</code>，发布包内未附许可文件（见 2.2）</td><td>经 npm 依赖使用</td></tr>
+<tr><td><a href="https://github.com/SnowLuma/SnowLuma">SnowLuma</a> 本体</td><td>源码可见的非商业许可（非 OSI 开源许可）</td><td>本软件不在仓库内包含或分发其源码与二进制，仅经 OneBot v11 协议通信；并在本机读取安装目录下 <code>config/onebot_*.json</code> 中的接入令牌，令牌仅用于连接相应的 OneBot 地址</td></tr>
+<tr><td><code>@modelcontextprotocol/sdk</code>、<code>js-yaml</code>、<code>zod</code> 等</td><td>MIT / ISC</td><td>见各自包内 LICENSE</td></tr>
+</tbody>
+</table>
+<h3 id="22-snowlumasdk-与-snowlumamcp-的许可状态">2.2 <code>@snowluma/sdk</code> 与 <code>@snowluma/mcp</code> 的许可状态</h3>
+<p><strong>核验事实</strong>（2026-09-20，可自行复核）：</p>
+<ol>
+<li>两个包的 <code>package.json</code> 均声明 <code>&quot;license&quot;: &quot;SEE LICENSE IN LICENSE&quot;</code>；</li>
+<li>发布的 npm 包内不含 LICENSE 文件：<code>npm pack @snowluma/sdk --dry-run</code> 的文件清单仅有
+<code>dist/</code>、<code>README.md</code>、<code>CHANGELOG.md</code>、<code>VERSIONING.md</code>；</li>
+<li>成因在源仓库：<code>packages/sdk/package.json</code> 与 <code>packages/mcp/package.json</code> 的 <code>files</code> 字段
+未包含 <code>LICENSE</code>，且 <code>packages/sdk/LICENSE</code>、<code>packages/mcp/LICENSE</code> 均不存在。</li>
+</ol>
+<p><strong>认定</strong>：上述两个包的许可状态在包内不可判定，<code>SEE LICENSE IN LICENSE</code> 指向的文件并不存在。
+但 SnowLuma LICENSE §1 对 "Software" 的定义为「the SnowLuma source code and assets <strong>in this
+repository</strong>」，而 <code>packages/sdk</code>、<code>packages/mcp</code> 位于该仓库之内，故二者受同一非商业许可约束。
+此为 §1 定义的直接结论。</p>
+<p><strong>本软件的处理</strong>：</p>
+<ol>
+<li>仓库内不含、不分发上述两个包的代码。<code>node_modules/</code> 已在 <code>.gitignore</code> 中；已跟踪文件内不包含
+任何原生二进制（<code>.node</code> / <code>.dll</code> / <code>.so</code>），亦不包含 <code>@snowluma</code> 路径下的文件。</li>
+<li><code>npm install</code> 的 <code>postinstall</code> 会运行 <code>scripts/patch-snowluma-sdk.mjs</code>，对
+<code>node_modules/@snowluma/{sdk,mcp}</code> 的 <code>dist/**/*.js</code> 执行一次机械修补（为相对导入补充 <code>.js</code>
+扩展名，规避该两包自身的 ESM 打包缺陷）。该修补仅作用于本机安装副本，不进入本仓库；
+SnowLuma 许可 §2(c) 允许为自身非商业使用而修改。<strong>本软件不修改 SnowLuma 应用本体，
+上述说明仅指对本机 npm 安装副本进行兼容性修补。</strong></li>
+<li>后续如替换这些依赖，需同步调整客户端实现与 <code>postinstall</code> 修补，避免留下失效的构建步骤。
+<code>@snowluma/mcp</code> 的 <code>catalog.js</code> 快照属于再分发其内容，不得提交至本仓库；
+仓库根目录曾跟踪的 <code>_snowluma-catalog.json</code> 已删除并加入 <code>.gitignore</code>。</li>
+<li>如需消除上述不确定性，应向 SnowLumaDevs 书面确认 <code>packages/sdk</code> 与 <code>packages/mcp</code> 所适用的许可。</li>
+</ol>
+<hr>
+
+<!-- moved verbatim from NOTICE.md [h2:三] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="三与-snowluma-的关系">三、与 SnowLuma 的关系</h2>
+<h3 id="31-独立关系声明">3.1 独立关系声明</h3>
+<p>qq-bridge 是独立维护的第三方工具，不是 SnowLuma 的子项目；qq-bridge 与 SnowLuma、DeepSeek、
+腾讯 / QQ 之间不存在隶属、官方合作或背书关系。</p>
+<h3 id="32-互操作性质">3.2 互操作性质</h3>
+<p>本软件不在仓库内包含或分发 SnowLuma 的源码与二进制，仅通过 OneBot v11 协议与其通信。
+它会在本机读取安装目录下的 <code>config/onebot_*.json</code>，从已有账号配置中寻找当前可用的接入令牌，
+并只将令牌用于连接相应的 OneBot 地址。本软件不是 SnowLuma 的修改版或衍生版本。</p>
+<h3 id="33-条款对照">3.3 条款对照</h3>
+<p>SnowLuma 采用源码可见的非商业许可（<a href="https://github.com/SnowLuma/SnowLuma/blob/main/LICENSE">LICENSE</a>，
+以中文文本为准）。本软件与其为协议互操作关系，对照如下。<strong>以下为工程层面的判断，不构成法律意见。</strong></p>
+<table>
+<thead><tr><th>条款</th><th>SnowLuma 的要求</th><th>本软件的判断</th></tr></thead>
+<tbody>
+<tr><td>§2 授权</td><td>允许为非商业目的使用、运行，以及为自身非商业使用而修改</td><td>在授权范围内</td></tr>
+<tr><td>§3(d)</td><td>公开发布修改版或衍生版须事先取得书面许可</td><td>不适用：本软件不含、不分发其源码与二进制，非其修改版或衍生版</td></tr>
+<tr><td>§4(a)</td><td>禁止商业使用</td><td>两项许可分别适用：qq-bridge 自身许可与 SnowLuma 许可均禁止商业使用，不构成相互豁免</td></tr>
+<tr><td>§4(b)</td><td>不得基于本软件开发、发布或分发另一个项目</td><td>见 3.4</td></tr>
+</tbody>
+</table>
+<h3 id="34-关于-4b-的解释与不确定性">3.4 关于 §4(b) 的解释与不确定性</h3>
+<p>本软件注意到该条存在两种解释：</p>
+<ul>
+<li>一种解释认为，§4(b) 紧接商业限制，且 §1 已将基于本软件的付费托管、部署、代搭列为商业用途，
+故其意旨在于禁止将商业使用包装为周边项目以规避 §4(a)，而非禁止一切互操作工具。</li>
+<li>另一种解释更为严格，且更具文本依据：§4(a) 已表述为「Commercial Use of the Software <strong>in any
+form</strong> is PROHIBITED」，若采用前一种解释，§4(b) 将不具独立适用范围，与同一许可内部应作一致
+解释的原则相悖。赋予 §4(b) 独立含义的正是字面解释：它是一项不含商业限定语的独立禁止。</li>
+</ul>
+<p>此外，§2 授予的权利为可撤销（revocable），EULA §8 允许著作权人单方面更新条款。</p>
+<p><strong>本软件的立场</strong>：不因协议互操作而假定获得额外授权。使用者在评估公开分发、托管或相关服务时，
+应自行核对 SnowLuma 条款，并在需要时联系 SnowLumaDevs 确认；本软件不声称已取得额外许可。</p>
+<h3 id="35-eula-54必须遵守的边界">3.5 EULA §5.4：必须遵守的边界</h3>
+<blockquote>
+<p>EULA §5.4（以中文文本为准）：「除事先取得著作权人的书面授权外，您仅可为 <code>LICENSE</code> 允许的
+非商业用途，以专有组件随本软件提供的形式运行该组件；不得复制、修改、单独再分发或再许可该组件。
+<strong>将其并入第三方安装包或 Docker 镜像、通过自动化脚本部署</strong>，或者将其用于任何商业用途，
+均须事先取得书面授权。」</p>
+</blockquote>
+<p>据此，本软件不安装、不复制、不打包、不自动部署 SnowLuma 及其原生组件，亦不以程序化方式启动或
+结束其进程；仅进行端口探测与状态查询，缺失时提示使用者自行经官方渠道获取并启动。</p>
+<p>该约束已作为设计不变量 L6 记录于本项目的<a href="../dev/security/baseline.html">安全基线</a>。
+原 <code>start_snowluma</code> / <code>stop_snowluma</code> 工具与 <code>snowluma.allowProcessControl</code> 配置项已于 v0.1.5 移除，
+并有回归断言（<code>scripts/test-audit-setup-guards.mjs</code>）防止回退。</p>
+<h3 id="36-构成本软件明示排除的使用形态">3.6 构成本软件明示排除的使用形态</h3>
+<p>下列形态将直接落入 SnowLuma §4(a) 的禁止范围，不因本软件采用何种许可而改变：</p>
+<ol>
+<li>提供付费的托管、部署、代搭或代运营服务，包括以成本价收费；</li>
+<li>将本软件并入任何付费产品或服务；</li>
+<li>以收费方式运行本软件对外提供服务；</li>
+<li>将赞助或捐赠与可获得的服务相绑定。</li>
+</ol>
+<h3 id="37-结论">3.7 结论</h3>
+<p>本软件的版权许可仅覆盖本软件自身的代码，不对 SnowLuma 授予任何权利，亦不替代使用者依其许可
+应承担的义务。使用者应自行取得 SnowLuma 并遵守其许可。</p>
+<hr>
+
+<!-- moved verbatim from NOTICE.md [h2:五] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="五使用风险与免责">五、使用风险与免责</h2>
+<ol>
+<li>使用非官方协议工具接入第三方平台，可能违反该平台的服务条款并导致账号受限，风险由使用者承担。</li>
+<li>本软件将聊天内容交由第三方大语言模型处理，并可能代账号发言。部署方应仅在
+<a href="modes.html">RULES.md</a> 所述白名单与审计机制下运行，不应在未配置白名单的情况下向任意群聊或
+陌生人开放。</li>
+<li>部署方应保护控制台令牌、<code>config.json</code> 与 <code>state/</code> 的访问权限，不应将 DSH 或本软件的端口
+暴露于公网。</li>
+<li>本软件按「现状」提供，不附带任何明示或默示担保。在适用法律允许的最大范围内，著作权人
+不对使用本软件所产生的任何后果承担责任。此条与 <code>LICENSE</code> 的 No Liability 条款一致。</li>
+</ol>
+<hr>
+
+<!-- moved verbatim from NOTICE.md [h2:六] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="六联系">六、联系</h2>
+<ul>
+<li>安全漏洞：依 <a href="../dev/security/reporting.html">SECURITY.md</a> 通过 GitHub 私密漏洞上报渠道提交，不得以公开 issue 披露。</li>
+<li>许可与合规问题：于本仓库提交 issue。</li>
+</ul>
+<!-- moved verbatim from README.md [h2:使用边界与许可] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="使用边界与许可">使用边界与许可</h2>
+<ul>
+<li>仅在知情并获准的会话中使用，遵守平台规则；使用非官方 QQ 后端可能导致账号受限。</li>
+<li>聊天内容会经 DSH 发送给所配置的模型服务；黑话自动研究默认开启，可能将提取的关键词发送给搜索服务。数据流与关闭方式见 <a href="../dev/security/baseline.html#四数据传输">NOTICE</a>。</li>
+<li>保护 <code>config.json</code>、<code>state/</code> 与控制台令牌，保持服务仅在本机可访问。</li>
+<li>DSH 离线期间的消息队列仅保存在内存中，每个会话最多 50 条；桥接进程退出后队列丢失，不保证送达。</li>
+<li>本工具不实现 QQ 登录或底层协议，不安装、打包或启停 SnowLuma 后端；当前客户端仍依赖 <code>@snowluma/sdk</code> 等包，第三方组件适用各自条款。</li>
+</ul>
+<p>当前代码按 <a href="https://github.com/Derpyu520/qq-bridge/blob/main/LICENSE">PolyForm Noncommercial 1.0.0</a> 提供，限非商业用途；<code>v0.2.1-r1</code> 及更早已发布版本沿用其发布时的 MIT 许可。第三方组件、独立关系与使用风险见 <a href="#">NOTICE</a>。</p>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+<aside class="sidebar-right" aria-label="On this page">
+  <div class="sidebar-inner">
+    <span class="toc-label">On this page</span>
+    <nav class="toc-list">
+      <a class="toc-h2" href="#一著作权与许可">一、著作权与许可</a>
+      <a class="toc-h3" href="#11-著作权归属">1.1 著作权归属</a>
+      <a class="toc-h3" href="#12-许可范围">1.2 许可范围</a>
+      <a class="toc-h3" href="#13-版本适用">1.3 版本适用</a>
+      <a class="toc-h3" href="#14-托管平台的许可标识">1.4 托管平台的许可标识</a>
+      <a class="toc-h2" href="#二第三方组件">二、第三方组件</a>
+      <a class="toc-h3" href="#21-组件与许可">2.1 组件与许可</a>
+      <a class="toc-h3" href="#22-snowlumasdk-与-snowlumamcp-的许可状态">2.2 @snowluma/sdk 与 @snowluma/mcp 的许可状态</a>
+      <a class="toc-h2" href="#三与-snowluma-的关系">三、与 SnowLuma 的关系</a>
+      <a class="toc-h3" href="#31-独立关系声明">3.1 独立关系声明</a>
+      <a class="toc-h3" href="#32-互操作性质">3.2 互操作性质</a>
+      <a class="toc-h3" href="#33-条款对照">3.3 条款对照</a>
+      <a class="toc-h3" href="#34-关于-4b-的解释与不确定性">3.4 关于 §4(b) 的解释与不确定性</a>
+      <a class="toc-h3" href="#35-eula-54必须遵守的边界">3.5 EULA §5.4：必须遵守的边界</a>
+      <a class="toc-h3" href="#36-构成本软件明示排除的使用形态">3.6 构成本软件明示排除的使用形态</a>
+      <a class="toc-h3" href="#37-结论">3.7 结论</a>
+      <a class="toc-h2" href="#五使用风险与免责">五、使用风险与免责</a>
+      <a class="toc-h2" href="#六联系">六、联系</a>
+      <a class="toc-h2" href="#使用边界与许可">使用边界与许可</a>
+    </nav>
+  </div>
+</aside>
+
+</div>
+
+<script src="../../assets/nav.js"></script>
+
+</body>
+</html>

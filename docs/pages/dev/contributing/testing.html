@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>测试 — qq-bridge</title>
+<meta name="description" content="privacy-scan 的规则文件 scripts/privacy-rules.json 不进仓库 （它本身会记录敏感判断依据）。 没有它时扫描只走内置默认规则；干净 clone 上应当 直接通过 （内置规则已把测试夹具与文档占位符排除）。 如果本机补了 privacy-rules.json （含你自己的真实 QQ 号/路径），扫描会在内置默认规则之上追加你的本地规则。">
+<meta property="og:title" content="测试 — qq-bridge">
+<meta property="og:description" content="privacy-scan 的规则文件 scripts/privacy-rules.json 不进仓库 （它本身会记录敏感判断依据）。 没有它时扫描只走内置默认规则；干净 clone 上应当 直接通过 （内置规则已把测试夹具与文档占位符排除）。 如果本机补了 privacy-rules.json （含你自己的真实 QQ 号/路径），扫描会在内置默认规则之上追加你的本地规则。">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../../assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="../../../" data-tab="Developer Guide" data-page-rel="pages/dev/contributing/testing.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../../../index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout has-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body guide">
+  <div class="topbar">
+  <div class="crumbs">
+    <a href="../../../index.html">qq-bridge</a>
+    <span class="sep">/</span>
+    Pages
+    <span class="sep">/</span>
+    Developer Guide
+    <span class="sep">/</span>
+    Contributing
+    <span class="sep">/</span>
+    <span class="here">测试</span>
+  </div>
+</div>
+  <h1>测试</h1>
+<!-- moved verbatim from CONTRIBUTING.md [h2:3] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="3-测试">3. 测试</h2>
+<table>
+<thead><tr><th>命令</th><th>环境要求</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>npm run test:audit</code></td><td>离线，无需 QQ / DSH</td><td><strong>提 PR 前必须跑</strong>。fixtures + mock，不碰真实账号</td></tr>
+<tr><td><code>npm run privacy-scan</code></td><td>无需额外环境</td><td>扫入库文件里的 token、本机路径、真实 QQ 号/群号（CI 会跑）</td></tr>
+<tr><td><code>npm run privacy-scan:history</code></td><td>需要完整 clone</td><td>追加扫描全部 git 历史（发布前必跑，历史未清理时会报出已知泄漏）</td></tr>
+<tr><td><code>npm run verify:adaptation</code></td><td><strong>需要活的 DSH</strong></td><td>DSH 协议适配对账（含活体回合），CI 里跑不了</td></tr>
+<tr><td><code>npm run test:mcp-servers</code></td><td>离线</td><td>三个 MCP server 的工具清单</td></tr>
+<tr><td><code>node src/self-test.js</code></td><td>需要 DSH + SnowLuma 在线</td><td>端到端链路</td></tr>
+</tbody>
+</table>
+<p><code>privacy-scan</code> 的规则文件 <code>scripts/privacy-rules.json</code> <strong>不进仓库</strong>（它本身会记录敏感判断依据）。
+没有它时扫描只走内置默认规则；干净 clone 上应当<strong>直接通过</strong>（内置规则已把测试夹具与文档占位符排除）。
+如果本机补了 <code>privacy-rules.json</code>（含你自己的真实 QQ 号/路径），扫描会在内置默认规则之上追加你的本地规则。</p>
+
+<!-- moved verbatim from pages/ops/console-ui-testing.html [all] on 2026-11-03 (docs reorg step 2) -->
+<p>这些脚本只读取控制台 HTML，使用内存中的演示数据模拟 API。不会加载项目入口、配置文件、真实 state，也不会连接 QQ 或 DSH。重启、清空、发送消息等按钮只改变内存或返回模拟结果。</p>
+<h2 id="启动预览">启动预览</h2>
+<p>在项目根目录执行：</p>
+<pre><code class="language-sh">npm run preview:console          # 等价于 node scripts/console-ui-fixture.mjs</code></pre>
+<p>浏览器访问 <code>http://127.0.0.1:4173</code>。写请求会打印到终端，也可以访问 <code>/__fixture/requests</code> 查看记录。服务只监听 loopback 地址。按 <code>Ctrl+C</code> 退出，演示数据随之丢弃。</p>
+<p>可用选项：</p>
+<pre><code class="language-sh">node scripts/console-ui-fixture.mjs --port=4174
+node scripts/console-ui-fixture.mjs --original --port=4174
+node scripts/console-ui-fixture.mjs --html=path/to/console.html</code></pre>
+<p><code>--original</code> 读取 <code>scripts/fixtures/console.before.html</code>（改造前的原版，随仓库保留），仅用于对照预览；正常预览读取 <code>public/console.html</code>。</p>
+<h2 id="浏览器回归">浏览器回归</h2>
+<pre><code class="language-sh">npm run test:console-ui          # 等价于 node scripts/test-console-ui.mjs
+node scripts/test-console-ui.mjs --artifacts=docs/ui-verification</code></pre>
+<p>脚本使用 Playwright 和 Chromium。优先使用项目内安装的 <code>playwright</code>；Windows 上若未安装 Playwright，会自动改用本机 Chrome / Edge，无需下载浏览器。其他环境可安装 Playwright 及其浏览器，或通过以下环境变量指定：</p>
+<ul>
+<li><code>PLAYWRIGHT_MODULE</code>：Playwright 模块目录（例如 <code>npm install --no-save playwright</code> 后指向 <code>node_modules/playwright</code>）。</li>
+<li><code>PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH</code>：Chromium / Chrome 可执行文件。</li>
+</ul>
+<p>测试自行启动随机端口的 fixture，并在退出时关闭浏览器和服务。浏览器请求被限制到该 fixture 的 origin，外部请求会被阻止并使检查失败。</p>
+<p>覆盖范围：</p>
+<ul>
+<li>改造前 225 个元素 ID 保留，DOM ID 唯一。</li>
+<li>十个导航视图及切换后草稿保留，跨越实际的 3 秒状态轮询。</li>
+<li>模式及预设、角色创建与切换、静默模式、白名单、安全设置。</li>
+<li>二代配置上下两个保存按钮的完整 payload，时间单位、零值、工具开关、暂停及恢复。</li>
+<li>一代社交参数与会话阶段。</li>
+<li>黑话添加、搜索、标签切换、确认对话框与学习参数。</li>
+<li>测试消息、AI 提醒仅发送到 mock API。</li>
+<li>全部 24 次写请求与改造前的 API payload 基线逐项完全比较。</li>
+<li>手机 390px 与平板 768px 下十个视图没有页面级横向溢出。</li>
+<li>深色模式：切换生效、写入 <code>localStorage</code>、刷新后保持、<code>aria-pressed</code> 与 <code>color-scheme</code> 同步、正文对比度 ≥ 7:1、深色下 390 / 768px 无横向溢出。</li>
+<li>未做选择时跟随系统 <code>prefers-color-scheme</code>。</li>
+<li><code>prefers-reduced-motion: reduce</code> 下关闭背景动效、页面切换动画与过渡。</li>
+<li>人格管理全流程：新建 → 点列表载入编辑（内容回填、按钮切到「保存修改」）→ 保存修改 → 改名保存（先重命名再保存）→ 删除（确认框自动接受），每步都断言列表随之更新。</li>
+<li>仿真提示词：默认可查看且只读、解锁后可编辑、保存后回到只读并提示「需重启 DSH」。</li>
+<li>思考强度：档位来自 DSH 公布的能力（low/high/max）、默认 max、可切换保存，并断言页面明示会连带修改 DSH 全局默认。</li>
+<li>无 JavaScript 错误、未知 API 或外部网络请求。</li>
+</ul>
+<p>新增的控制台 API 都已在 <code>console-ui-fixture.mjs</code> 里 mock；<strong>改动控制台时若加了新接口，必须同步补 mock</strong>，否则本套件会在「未知 API」这一项失败。</p>
+<p><code>--artifacts</code> 会保存检查结果 JSON、模拟写请求记录和桌面 / 手机截图（浅色与深色各一组），截图时会静止动画以保证可复现。默认不生成额外文件。</p>
+<h2 id="基线说明">基线说明</h2>
+<p><code>console-ui-legacy-ids.json</code> 保存改造前的 225 个元素 ID。<code>console-ui-contracts.json</code> 来自原控制台在相同 fixture 中执行相同操作后的 24 次写请求，包含二代配置的完整嵌套参数。</p>
+<p>只有后端契约经过明确调整时才更新基线。<code>scripts/fixtures/console.before.html</code> 是改造前的原版控制台（通常无需改动），重录时运行：</p>
+<pre><code class="language-sh">node scripts/test-console-ui.mjs --original --record-baseline</code></pre>
+<p>普通回归不依赖 <code>console.before.html</code>。不要用真实的 <code>test-console.mjs</code> 替代本脚本：那个脚本可能向真实 QQ 发送消息。</p>
+<p>此回归验证前端行为和提交契约，不能替代真实 QQ / DSH 集成测试。</p>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+<aside class="sidebar-right" aria-label="On this page">
+  <div class="sidebar-inner">
+    <span class="toc-label">On this page</span>
+    <nav class="toc-list">
+      <a class="toc-h2" href="#3-测试">3. 测试</a>
+      <a class="toc-h2" href="#启动预览">启动预览</a>
+      <a class="toc-h2" href="#浏览器回归">浏览器回归</a>
+      <a class="toc-h2" href="#基线说明">基线说明</a>
+    </nav>
+  </div>
+</aside>
+
+</div>
+
+<script src="../../../assets/nav.js"></script>
+
+</body>
+</html>

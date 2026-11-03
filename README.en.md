@@ -1,6 +1,6 @@
 # qq-bridge
 
-[中文](README.md) · [Setup guide](docs/guides/DSH_SETUP.md) · [Issues](https://github.com/Derpyu520/qq-bridge/issues)
+[中文](README.md) · [Setup guide](docs/pages/use/install.html) · [Issues](https://github.com/Derpyu520/qq-bridge/issues)
 
 A local message bridge that forwards message events and AI replies between the **OneBot v11 interfaces provided by SnowLuma** and [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness).
 
@@ -28,7 +28,7 @@ QQ ↔ SnowLuma ↔ qq-bridge ↔ DeepSeek Harness ↔ Model provider
 
 Use **Windows 10 / 11 and Node.js ≥ 22.13**, with these two services running separately:
 
-- **DSH Web**: validation records cover `0.2.0-rc.2` / `0.2.1-rc.2`. See [compatibility](docs/guides/DSH_SETUP.md#兼容范围) for other versions.
+- **DSH Web**: validation records cover `0.2.0-rc.2` / `0.2.1-rc.2`. See [compatibility](docs/pages/use/install.html#兼容范围) for other versions.
 - **SnowLuma**: follow the [upstream instructions](https://github.com/SnowLuma/SnowLuma) to install, start, and sign in. Enable its OneBot **WebSocket server** and **HTTP API**.
 
 ### 1. Get the project
@@ -56,7 +56,7 @@ Edit `config.json` and check at least these fields:
 | `ownerQQ` | Your administrator QQ ID |
 | `allow.private` / `allow.groups` | Allowed QQ IDs / group IDs; empty allowlists accept no conversations by default |
 
-When running on the same machine, normally leave `dsh.authToken` empty so the bridge authenticates using local DSH credentials. See the [setup guide](docs/guides/DSH_SETUP.md) for details and troubleshooting.
+When running on the same machine, normally leave `dsh.authToken` empty so the bridge authenticates using local DSH credentials. See the [setup guide](docs/pages/use/install.html) for details and troubleshooting.
 
 ### 3. Install DSH plugins
 
@@ -64,7 +64,7 @@ When running on the same machine, normally leave `dsh.authToken` empty so the br
 node scripts/setup-dsh.mjs
 ```
 
-This installs the chat presets and MCP tools into DSH. **It is required for a fresh installation.** Restart DSH afterwards. For profiles other than `web`, see the [setup guide](docs/guides/DSH_SETUP.md#安装步骤).
+This installs the chat presets and MCP tools into DSH. **It is required for a fresh installation.** Restart DSH afterwards. For profiles other than `web`, see the [setup guide](docs/pages/use/install.html#安装步骤).
 
 ### 4. Start and test
 
@@ -82,12 +82,12 @@ Most detailed documentation is currently in Chinese.
 
 | Task | Documentation |
 | --- | --- |
-| Install, upgrade, or troubleshoot | [DSH setup](docs/guides/DSH_SETUP.md) |
+| Install, upgrade, or troubleshoot | [DSH setup](docs/pages/use/install.html) |
 | Modes, permissions, and commands | [Usage rules](RULES.md) |
-| Model usage and cost estimates | [Usage dashboard](docs/guides/TOKEN_USAGE_CONSOLE.md) |
-| Contribute | [Contributing](CONTRIBUTING.md) · [Security baseline](docs/guides/SECURITY_BASELINE.md) |
+| Model usage and cost estimates | [Usage dashboard](docs/pages/use/console.html) |
+| Contribute | [Contributing](CONTRIBUTING.md) · [Security baseline](docs/pages/dev/security/baseline.html) |
 | Report a vulnerability | [Security policy](SECURITY.md) |
-| Find other documentation | [Documentation index](docs/README.md) |
+| Find other documentation | [Documentation index](docs/index.html) |
 
 Develop on `dev` and run the offline suite before submitting a PR:
 

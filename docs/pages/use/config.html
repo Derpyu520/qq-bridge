@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>配置参考 — qq-bridge</title>
+<meta name="description" content="编辑 config.json ，至少核对这些字段：">
+<meta property="og:title" content="配置参考 — qq-bridge">
+<meta property="og:description" content="编辑 config.json ，至少核对这些字段：">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="../../" data-tab="使用指南" data-page-rel="pages/use/config.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../../index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout has-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body guide">
+  <div class="topbar">
+  <div class="crumbs">
+    <a href="../../index.html">qq-bridge</a>
+    <span class="sep">/</span>
+    Pages
+    <span class="sep">/</span>
+    <a href="index.html">使用指南</a>
+    <span class="sep">/</span>
+    <span class="here">配置参考</span>
+  </div>
+</div>
+  <h1>配置参考</h1>
+<!-- moved verbatim from README.md [h3:快速开始/2.] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="2-填写配置">2. 填写配置</h2>
+<p>编辑 <code>config.json</code>，至少核对这些字段：</p>
+<table>
+<thead><tr><th>字段</th><th>填写内容</th></tr></thead>
+<tbody>
+<tr><td><code>dsh.baseUrl</code></td><td>DSH Web 地址，默认 <code>http://127.0.0.1:3080</code>；模型选择需与 DSH 中可用的配置一致</td></tr>
+<tr><td><code>snowluma.wsUrl</code> / <code>httpUrl</code></td><td>OneBot WebSocket / HTTP 地址，示例分别为 <code>ws://127.0.0.1:3001</code> / <code>http://127.0.0.1:3000</code>，不要混用端口</td></tr>
+<tr><td><code>snowluma.accessToken</code> / <code>homeDir</code></td><td>按实际配置填写令牌与 SnowLuma 安装目录；HTTP、WS 令牌不同时，需能从该目录发现各自令牌</td></tr>
+<tr><td><code>ownerQQ</code></td><td>你的管理员 QQ 号</td></tr>
+<tr><td><code>allow.private</code> / <code>allow.groups</code></td><td>允许接入的 QQ 号 / 群号；默认空白名单不响应任何会话</td></tr>
+</tbody>
+</table>
+<p>同机运行时，<code>dsh.authToken</code> 通常留空，由桥接使用本机 DSH 凭据完成鉴权。完整配置与连接排查见<a href="install.html">安装指南</a>。</p>
+
+<!-- moved verbatim from pages/ops/token-usage.html [h2:六] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="六配置">六、配置</h2>
+<p>价目表默认内置，<strong>开箱即用</strong>。需要覆盖时在 <code>config.json</code> 加 <code>pricing</code>：</p>
+<pre><code class="language-json">{
+  &quot;pricing&quot;: {
+    &quot;peakMultiplier&quot;: 2,
+    &quot;holidays&quot;: [&quot;2027-01-01&quot;, &quot;2027-02-06&quot;],
+    &quot;models&quot;: {
+      &quot;my-relay-model&quot;: {
+        &quot;label&quot;: &quot;我的中转&quot;,
+        &quot;off&quot;: { &quot;cacheHit&quot;: 0.5, &quot;cacheMiss&quot;: 3, &quot;output&quot;: 9 }
+      }
+    }
+  }
+}</code></pre>
+<ul>
+<li>只写要改的字段即可，其余继承默认值。</li>
+<li>自定义模型未写 <code>cacheWrite</code> 时自动跟随 <code>cacheMiss</code>。</li>
+<li>未登记的模型按 <code>fallbackModel</code>（默认 <code>deepseek-flash</code>）估算，并在控制台标 <code>estimated</code>。</li>
+<li>改了价目表<strong>不需要重算历史</strong>：金额一律在读取时折算。</li>
+</ul>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+<aside class="sidebar-right" aria-label="On this page">
+  <div class="sidebar-inner">
+    <span class="toc-label">On this page</span>
+    <nav class="toc-list">
+      <a class="toc-h2" href="#2-填写配置">2. 填写配置</a>
+      <a class="toc-h2" href="#六配置">六、配置</a>
+    </nav>
+  </div>
+</aside>
+
+</div>
+
+<script src="../../assets/nav.js"></script>
+
+</body>
+</html>

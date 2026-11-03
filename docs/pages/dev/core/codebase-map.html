@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>仓库目录地图 — qq-bridge</title>
+<meta name="description" content="说明顶层目录、主要脚本和公开 / 本地文档边界。本文描述当前结构，不作为删除文件的指令。 文档索引见 README.md 。最后核对：2026-11-01。">
+<meta property="og:title" content="仓库目录地图 — qq-bridge">
+<meta property="og:description" content="说明顶层目录、主要脚本和公开 / 本地文档边界。本文描述当前结构，不作为删除文件的指令。 文档索引见 README.md 。最后核对：2026-11-01。">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../../assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="../../../" data-tab="Developer Guide" data-page-rel="pages/dev/core/codebase-map.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../../../index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout has-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body codebase">
+  <div class="topbar">
+  <div class="crumbs">
+    <a href="../../../index.html">qq-bridge</a>
+    <span class="sep">/</span>
+    Pages
+    <span class="sep">/</span>
+    Developer Guide
+    <span class="sep">/</span>
+    Core
+    <span class="sep">/</span>
+    <span class="here">仓库目录地图</span>
+  </div>
+</div>
+  <h1>仓库目录地图</h1>
+<!-- moved verbatim from pages/ops/folder-map.html [pre] on 2026-11-03 (docs reorg step 2) -->
+<blockquote>
+<p>说明顶层目录、主要脚本和公开 / 本地文档边界。本文描述当前结构，不作为删除文件的指令。
+文档索引见 <a href="../../../index.html">README.md</a>。最后核对：2026-11-01。</p>
+</blockquote>
+
+<!-- moved verbatim from pages/ops/folder-map.html [h2:一] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="一工作区与仓库布局">一、工作区与仓库布局</h2>
+<p>典型本地工作区如下；仓库外目录不是 qq-bridge 的组成部分：</p>
+<pre><code class="language-text">DSH/                         ← 工作区根（不是仓库根）
+├── qq-bridge/               ← 本仓库
+├── voice-tool/              ← 可选的独立语音工具
+├── 发语音-图形界面.cmd      ← 工作区启动器
+└── 重启DSH-加载语音工具.cmd  ← 工作区运维启动器</code></pre>
+<p><code>qq-bridge/</code> 内部的主要路径：</p>
+<table>
+<thead><tr><th>路径</th><th>作用</th><th>修改注意事项</th></tr></thead>
+<tbody>
+<tr><td><code>src/</code></td><td>桥接主程序、DSH 客户端、MCP server、共享库和核心模块</td><td>包含 <code>.js</code> 与 <code>.mjs</code>。<code>bridge.js</code> 约 1.3 万行；<code>state-acl.mjs</code>、<code>core/*.mjs</code> 同样属于源码</td></tr>
+<tr><td><code>scripts/</code></td><td>离线回归、安装、诊断、探针和运维脚本</td><td>文件以 Git 跟踪清单为准；新增回归脚本应加入 <code>scripts/test-audit.mjs</code></td></tr>
+<tr><td><code>dsh/agent-presets/</code></td><td><code>qq-chat</code> / <code>qq-chat-v2</code> 的权威 preset 源</td><td>修改后运行 <code>node scripts/build-agent-preset-patches.mjs</code> 重新生成 bundle patch</td></tr>
+<tr><td><code>plugins/</code></td><td>DSH bundle：<code>qq-agent-presets</code> 与 <code>qq-mode-console</code></td><td>修改后需重新同步安装并重启 DSH；<code>qq-mode-console</code> 目前只有 host 半</td></tr>
+<tr><td><code>public/console.html</code></td><td>桥接自带本地控制台</td><td>修改前端契约时同步 fixture、基线和离线回归</td></tr>
+<tr><td><code>roles/</code></td><td>人格卡与人格写作说明</td><td>属于用户可编辑内容；权限和注入规则见 <code>RULES.md</code>、<code>roles/README.md</code></td></tr>
+<tr><td><code>assets/</code></td><td>仓库用图片等资源</td><td>当前仅跟踪 <code>deepseek娘.png</code>；演示视频作为 Release 附件管理，不入库</td></tr>
+<tr><td><code>audio/</code></td><td>本地语音库，默认被 <code>.gitignore</code> 排除</td><td>用户音频不应提交或随意删除</td></tr>
+<tr><td><code>state/</code></td><td>会话、模式、日志、锁、令牌等运行时数据</td><td>被 <code>.gitignore</code> 排除；不要提交，也不要在测试中使用生产副本</td></tr>
+<tr><td><code>docs/</code></td><td>文档站（HTML）：公开指南、历史记录和本地文档目录约定</td><td>公开 / 本地边界见第三节</td></tr>
+<tr><td><code>node_modules/</code>、<code>.npm-cache/</code></td><td>依赖与缓存</td><td>不入库</td></tr>
+<tr><td><code>config.example.json</code></td><td>配置模板</td><td>修改配置结构时同步代码、文档和相关测试</td></tr>
+<tr><td><code>config.json</code></td><td>用户真实配置</td><td>不入库，测试不得依赖它</td></tr>
+</tbody>
+</table>
+
+<!-- moved verbatim from pages/ops/folder-map.html [h2:二] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="二scripts-命名与用途">二、<code>scripts/</code> 命名与用途</h2>
+<p>以下是主要约定，不是允许随意删除的清单。是否仍被使用应结合 <code>package.json</code>、
+<code>scripts/test-audit.mjs</code> 和实际引用判断。</p>
+<table>
+<thead><tr><th>前缀 / 文件</th><th>用途与注意事项</th></tr></thead>
+<tbody>
+<tr><td><code>test-*.mjs</code></td><td>自动化测试。只有加入 <code>scripts/test-audit.mjs</code> 的测试才会随 <code>npm run test:audit</code> 执行</td></tr>
+<tr><td><code>test-audit-*.mjs</code></td><td>离线审计子模块，覆盖桥接、协议、网络、运行时、权限和安装边界</td></tr>
+<tr><td><code>test-dsh-*.mjs</code></td><td>DSH 契约测试；有些使用离线夹具，有些需要活的 DSH，环境要求以各文件和 <code>package.json</code> 为准</td></tr>
+<tr><td><code>console-ui-*</code></td><td>控制台离线预览、fixture 和 API 基线；说明见 <a href="../contributing/testing.html">CONSOLE-UI-TESTING</a></td></tr>
+<tr><td><code>setup-*.mjs</code></td><td>DSH 插件、preset 与 MCP 的幂等安装</td></tr>
+<tr><td><code>verify-*.mjs</code></td><td>DSH 适配和 persona 一致性检查</td></tr>
+<tr><td><code>probe-*.mjs</code></td><td>本机兼容性检查，鉴权路径以各脚本为准（部分使用 <code>probe-auth.mjs</code>）。<code>probe-snowluma-heartbeat</code> 只读；<code>probe-020-settings</code> 将读取的 mode 原值写回以验证写入路径；<code>probe-020-protocol</code> 会创建测试会话 / 工作区，结束后归档会话、删除工作区并清理临时目录。可能连接真实本机服务，不属于纯离线套件</td></tr>
+<tr><td><code>scan-*.mjs</code></td><td>工具名、依赖或其他静态对账</td></tr>
+<tr><td><code>privacy-scan.mjs</code></td><td>工作树与历史隐私扫描；本地规则模板为 <code>privacy-rules.example.json</code></td></tr>
+<tr><td><code>patch-*.mjs</code></td><td>兼容性修补。<code>patch-snowluma-sdk.mjs</code> 是 <code>postinstall</code> 依赖，不能当作一次性脚本删除</td></tr>
+<tr><td><code>stop-bridge-instance.mjs</code></td><td>供 <code>restart.bat</code> 使用；结合锁 PID、控制台端口和当前仓库绝对脚本路径验证实例，无法证明归属时拒绝停止</td></tr>
+<tr><td><code>harden-state-acl.mjs</code>、<code>diagnose-acl.mjs</code></td><td>Windows ACL 收紧与只读诊断</td></tr>
+<tr><td><code>send-*.mjs</code></td><td>可能向真实 QQ 发送内容的小工具，运行前必须核对目标和环境</td></tr>
+<tr><td><code>cleanup-*</code>、<code>fix-*</code>、<code>diag-*</code>、<code>debug-*</code></td><td>清理、一次性修复或调试脚本；删除前仍需检查引用，不能仅凭前缀认定无用</td></tr>
+</tbody>
+</table>
+<h3 id="不应误删的基础文件">不应误删的基础文件</h3>
+<ul>
+<li><code>scripts/test-audit.mjs</code> 清单中的回归脚本；</li>
+<li><code>scripts/audit-bridge-harness.mjs</code>、<code>scripts/dsh-modules.mjs</code> 等共享实现；</li>
+<li><code>scripts/console-ui-*</code> 的 fixture 与基线；</li>
+<li><code>scripts/patch-snowluma-sdk.mjs</code>；</li>
+<li><code>scripts/privacy-rules.example.json</code>。</li>
+</ul>
+
+<!-- moved verbatim from pages/ops/folder-map.html [h2:四] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="四仓库外独立语音工具">四、仓库外独立语音工具</h2>
+<p><code>voice-tool/</code> 位于工作区而非本仓库。它可以复用本仓库的 <code>src/voice-core.js</code> 与
+<code>src/snowluma-conn.js</code>，但独立部署和运行。相关测试通过 <code>scripts/voice-tool-locator.mjs</code> 查找它；
+目录不存在时应明确跳过对应检查，而不是把“缺少可选工具”误判为通过或失败。</p>
+<p>本地语音库、工具配置和运行状态仍按各自 <code>.gitignore</code> 规则处理，不应因文档整理而移动或删除。</p>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+<aside class="sidebar-right" aria-label="On this page">
+  <div class="sidebar-inner">
+    <span class="toc-label">On this page</span>
+    <nav class="toc-list">
+      <a class="toc-h2" href="#一工作区与仓库布局">一、工作区与仓库布局</a>
+      <a class="toc-h2" href="#二scripts-命名与用途">二、scripts/ 命名与用途</a>
+      <a class="toc-h3" href="#不应误删的基础文件">不应误删的基础文件</a>
+      <a class="toc-h2" href="#四仓库外独立语音工具">四、仓库外独立语音工具</a>
+    </nav>
+  </div>
+</aside>
+
+</div>
+
+<script src="../../../assets/nav.js"></script>
+
+</body>
+</html>

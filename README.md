@@ -1,6 +1,6 @@
 # qq-bridge
 
-[English](README.en.md) · [安装指南](docs/guides/DSH_SETUP.md) · [问题反馈](https://github.com/Derpyu520/qq-bridge/issues)
+[English](README.en.md) · [安装指南](docs/pages/use/install.html) · [问题反馈](https://github.com/Derpyu520/qq-bridge/issues)
 
 qq-bridge 是一个本地消息桥接工具，在 SnowLuma 提供的 **OneBot v11 接口**与 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/deepseek-harness) 之间转发消息事件和 AI 回复。
 
@@ -28,7 +28,7 @@ QQ ↔ SnowLuma ↔ qq-bridge ↔ DeepSeek Harness ↔ 模型服务
 
 准备好 **Windows 10 / 11、Node.js ≥ 22.13**，以及以下两个独立运行的服务：
 
-- **DSH Web**：当前有 `0.2.0-rc.2` / `0.2.1-rc.2` 的验证记录，其他版本见[兼容范围](docs/guides/DSH_SETUP.md#兼容范围)。
+- **DSH Web**：当前有 `0.2.0-rc.2` / `0.2.1-rc.2` 的验证记录，其他版本见[兼容范围](docs/pages/use/install.html#兼容范围)。
 - **SnowLuma**：请自行按[上游文档](https://github.com/SnowLuma/SnowLuma)安装、启动并登录，开启 OneBot **WebSocket 服务端**和 **HTTP API**。
 
 ### 1. 获取项目
@@ -56,7 +56,7 @@ Copy-Item config.example.json config.json
 | `ownerQQ` | 你的管理员 QQ 号 |
 | `allow.private` / `allow.groups` | 允许接入的 QQ 号 / 群号；默认空白名单不响应任何会话 |
 
-同机运行时，`dsh.authToken` 通常留空，由桥接使用本机 DSH 凭据完成鉴权。完整配置与连接排查见[安装指南](docs/guides/DSH_SETUP.md)。
+同机运行时，`dsh.authToken` 通常留空，由桥接使用本机 DSH 凭据完成鉴权。完整配置与连接排查见[安装指南](docs/pages/use/install.html)。
 
 ### 3. 安装 DSH 插件
 
@@ -64,7 +64,7 @@ Copy-Item config.example.json config.json
 node scripts/setup-dsh.mjs
 ```
 
-这一步会把聊天预设和 MCP 工具接入 DSH，**首次安装也必须执行**。完成后重启 DSH；使用非 `web` profile 时见[安装指南](docs/guides/DSH_SETUP.md#安装步骤)。
+这一步会把聊天预设和 MCP 工具接入 DSH，**首次安装也必须执行**。完成后重启 DSH；使用非 `web` profile 时见[安装指南](docs/pages/use/install.html#安装步骤)。
 
 ### 4. 启动并测试
 
@@ -80,12 +80,12 @@ Windows 也可双击 `start.bat` 以守护模式运行，关闭窗口即停止�
 
 | 我想…… | 入口 |
 | --- | --- |
-| 安装、升级或排查连接 | [DSH 安装指南](docs/guides/DSH_SETUP.md) |
+| 安装、升级或排查连接 | [DSH 安装指南](docs/pages/use/install.html) |
 | 了解模式、权限与管理命令 | [使用规则](RULES.md) |
-| 查看模型用量与费用口径 | [用量看板](docs/guides/TOKEN_USAGE_CONSOLE.md) |
-| 参与开发 | [贡献指南](CONTRIBUTING.md) · [安全基线](docs/guides/SECURITY_BASELINE.md) |
+| 查看模型用量与费用口径 | [用量看板](docs/pages/use/console.html) |
+| 参与开发 | [贡献指南](CONTRIBUTING.md) · [安全基线](docs/pages/dev/security/baseline.html) |
 | 报告安全漏洞 | [安全报告](SECURITY.md) |
-| 查找其他说明 | [文档索引](docs/README.md) |
+| 查找其他说明 | [文档索引](docs/index.html) |
 
 开发基于 `dev`，提交 PR 前运行离线回归：
 

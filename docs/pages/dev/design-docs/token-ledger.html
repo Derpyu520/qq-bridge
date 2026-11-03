@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>用量账本 — qq-bridge</title>
+<meta name="description" content="DSH 会话日志 ├─ assistant/message.data.usage ──► 逐轮明细（每条一次采样） ├─ llm/retry-started ─────────────► 重试轴（同一步骤的第二次请求另算一次） └─ session/follow 开场快照 ├─ projections.tokenUsage ──► 累计总量（整条日志的权威值） └─ records[]（最多…">
+<meta property="og:title" content="用量账本 — qq-bridge">
+<meta property="og:description" content="DSH 会话日志 ├─ assistant/message.data.usage ──► 逐轮明细（每条一次采样） ├─ llm/retry-started ─────────────► 重试轴（同一步骤的第二次请求另算一次） └─ session/follow 开场快照 ├─ projections.tokenUsage ──► 累计总量（整条日志的权威值） └─ records[]（最多…">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../../assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="../../../" data-tab="Developer Guide" data-page-rel="pages/dev/design-docs/token-ledger.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../../../index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout has-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body designdoc">
+  <div class="topbar">
+  <div class="crumbs">
+    <a href="../../../index.html">qq-bridge</a>
+    <span class="sep">/</span>
+    Pages
+    <span class="sep">/</span>
+    Developer Guide
+    <span class="sep">/</span>
+    Design docs
+    <span class="sep">/</span>
+    <span class="here">用量账本</span>
+  </div>
+</div>
+  <h1>用量账本</h1>
+<!-- moved verbatim from pages/ops/token-usage.html [h2:三] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="三数据从哪来三个来源各管一段">三、数据从哪来（三个来源，各管一段）</h2>
+<pre><code>DSH 会话日志
+  ├─ assistant/message.data.usage ──► 逐轮明细（每条一次采样）
+  ├─ llm/retry-started ─────────────► 重试轴（同一步骤的第二次请求另算一次）
+  └─ session/follow 开场快照
+        ├─ projections.tokenUsage ──► 累计总量（整条日志的权威值）
+        └─ records[]（最多 200 条） ─► 历史逐轮回填</code></pre>
+<table>
+<thead><tr><th>维度</th><th>来源</th><th>精度</th></tr></thead>
+<tbody>
+<tr><td><strong>累计总量</strong>（每会话 / 全局）</td><td>DSH 的 <code>tokenUsage</code> 投影，经 <code>session/follow</code> 开场快照下发</td><td><strong>精确</strong>，且包含桥接启动之前的历史</td></tr>
+<tr><td><strong>逐轮明细</strong></td><td><code>assistant/message</code> 的 <code>usage</code> 折叠</td><td>精确；但只覆盖「桥接运行期间 + 开场快照窗口内」的回合</td></tr>
+<tr><td><strong>金额</strong></td><td>读取时用价目表折算</td><td>按每条采样<strong>自己的时间点</strong>判定高峰/空闲</td></tr>
+</tbody>
+</table>
+<p>三条实现要点：</p>
+<ol>
+<li><strong>不自己累加总量。</strong> 桥接重启、换会话、会话退役都不会让总量失真——总量永远等于 DSH 报的投影值加上「基线之后」的增量。</li>
+<li><strong>幂等折叠。</strong> 重连时 DSH 会重新下发开场快照。账本按 <code>(session, turn, step, retry)</code> 建键，且只有 <strong>seq 严格更新</strong>才覆盖，所以重放不会让用量翻倍。</li>
+<li><strong>先落盘再进内存。</strong> <code>pumpMux</code> 的 <code>finally</code> 会在断线时清空所有 per-turn 状态（否则重连后回复会重复累加），所以每条采样一到就 append 到 <code>state/token-usage.jsonl</code>，内存只是它的投影。</li>
+</ol>
+
+<!-- moved verbatim from pages/ops/token-usage.html [h2:四] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="四计价口径">四、计价口径</h2>
+<p>官方价目表（元 / 百万 token），<strong>高峰时段单价 = 空闲时段的 2 倍</strong>：</p>
+<table>
+<thead><tr><th>模型</th><th>缓存命中（空闲）</th><th>缓存未命中（空闲）</th><th>输出（空闲）</th></tr></thead>
+<tbody>
+<tr><td><code>deepseek-flash</code>（DeepSeek-V4.1-Flash）</td><td>¥0.02</td><td>¥1</td><td>¥4</td></tr>
+<tr><td><code>deepseek-v4-pro</code>（DeepSeek-V4-Pro-0813）</td><td>¥0.15</td><td>¥4.5</td><td>¥13.5</td></tr>
+</tbody>
+</table>
+<ul>
+<li><strong>高峰时段</strong> = 北京时间 <strong>周一至周五 9:00–12:00、14:00–18:00</strong>，且<strong>不含中国法定节假日</strong>；
+其余时段（含周末与法定节假日全天）均为空闲时段。</li>
+<li>节假日表目前同时包含 2026 年官方安排与 2027 年预置日期；2027 年数据应在官方安排发布后复核更新，具体以 <code>src/model-prices.js</code> 为准。</li>
+<li>四个计费桶<strong>互不重叠</strong>：<code>计费输入 = 未命中 + 缓存命中 + 缓存写入</code>。
+DSH 的 <code>inputTokens</code> 只表示<strong>未命中</strong>部分，所以三个桶分别计价再相加。</li>
+<li>缓存写入（<code>cacheWriteTokens</code>）DeepSeek 目前恒为 0；若出现，默认按未命中价计费。</li>
+</ul>
+<blockquote>
+<p><strong>已知精度边界</strong>：投影基线（开场快照里的累计值）无法拆出逐时明细，只能整体按
+<strong>快照时刻</strong>的峰谷档位计价。它覆盖的是「桥接启动前 + 快照窗口外」的历史，
+因此当会话跨过高峰/空闲边界时，这部分金额可能有 ±2 倍以内的偏差。
+桥接运行期间逐条采样的金额是精确的。</p>
+</blockquote>
+
+<!-- moved verbatim from pages/ops/token-usage.html [h2:五] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="五控制台-api">五、控制台 API</h2>
+<p>五个端点都在 <code>/api/tokens/*</code>，<strong>仅控制台可用</strong>：带 <code>x-agent-token</code> 的请求一律 403
+（路径刻意放在 <code>/api/socialV2/</code> 之外，那个前缀对 QQ 侧 AI 是放行的；跨群花费属于管理信息，
+不应让某个群的 AI 读到别的群烧了多少钱）。</p>
+<table>
+<thead><tr><th>方法</th><th>路径</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>GET</td><td><code>/api/tokens/summary?limit=200</code></td><td>全局合计 + 每个会话一行 + 当前价目表</td></tr>
+<tr><td>GET</td><td><code>/api/tokens/series?hours=24</code></td><td>走势图分桶数据（<code>hours</code> 1~2160；桶数上限 48，可用 <code>buckets</code> 覆盖）</td></tr>
+<tr><td>GET</td><td><code>/api/tokens/turns?key=group:123&amp;limit=200</code></td><td>单个会话的逐轮明细</td></tr>
+<tr><td>GET</td><td><code>/api/tokens/recent?limit=40</code></td><td>最近采样流水</td></tr>
+<tr><td>POST</td><td><code>/api/tokens/reset</code></td><td>清空账本（不可恢复）</td></tr>
+</tbody>
+</table>
+<p><code>summary</code> 的 <code>totals</code> 关键字段：</p>
+<table>
+<thead><tr><th>字段</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td><code>cost</code></td><td>总花费（权威值：基线 + 基线之后的逐条增量）</td></tr>
+<tr><td><code>attributedCost</code></td><td>其中<strong>能归属到具体某一轮</strong>的部分</td></tr>
+<tr><td><code>unattributedCost</code></td><td>差额：只剩累计值、无法再拆到某一轮的历史花费</td></tr>
+<tr><td><code>byTier.peak</code> / <code>byTier.off</code></td><td>高峰期 / 空闲期各自的花费</td></tr>
+<tr><td><code>cacheHitRate</code></td><td>缓存命中输入 ÷ 总输入</td></tr>
+<tr><td><code>estimated</code></td><td>为 <code>true</code> 表示存在未登记模型，按兜底价估算</td></tr>
+</tbody>
+</table>
+
+<!-- moved verbatim from pages/ops/token-usage.html [h2:七] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="七存储与体量">七、存储与体量</h2>
+<ul>
+<li>账本文件：<code>state/token-usage.jsonl</code>，两种行（<code>k:&quot;base&quot;</code> 投影基线 / <code>k:&quot;turn&quot;</code> 逐轮采样）。</li>
+<li>行数超过 20000 时自动压缩重写：按内存态去重、丢弃被覆盖的旧采样。每次采样约 200 字节，
+压缩后一条会话一轮 ≈ 10 行，正常运行远达不到上限。</li>
+<li>进程中断留下的半行会被跳过，不会让整个账本读不出来。</li>
+<li>清空账本后，下一次同步会从 DSH 重新拉回各会话的<strong>累计值</strong>（但逐轮明细只能重新累积）。</li>
+</ul>
+
+<!-- moved verbatim from pages/ops/token-usage.html [h2:八] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="八测试">八、测试</h2>
+<pre><code class="language-sh">npm run test:tokens        # 账本 + 价目表单元测试（峰谷判定、幂等折叠、基线合并、压缩、容错）
+npm run test:console-ui    # 离线浏览器回归（含「令牌与花费」页渲染与下钻）</code></pre>
+<p>单元测试覆盖的语义（每一条都对应一个真踩过的坑）：</p>
+<ul>
+<li>峰谷判定按北京时间，且排除法定节假日；</li>
+<li>四个桶互不重叠、金额 = Σ(桶 × 单价)；</li>
+<li>未知模型兜底并标 <code>estimated</code>；</li>
+<li>同一 <code>(turn, step, retry)</code> <strong>后到覆盖先到</strong>而不是累加；</li>
+<li>重连重放同一批快照<strong>不会让用量翻倍</strong>；</li>
+<li>旧 seq 的采样不得覆盖新数据（否则花费凭空缩水）；</li>
+<li><code>llm/retry-started</code> 之后同一步骤的第二次请求<strong>另算一次</strong>；</li>
+<li>权威总量 = 投影基线 + 基线之后 seq 的增量；</li>
+<li>逐轮明细与「未逐轮归属」差额自洽；</li>
+<li>半行容错、超限压缩后不丢数据（淘汰明细但<strong>累计总量精确</strong>）；</li>
+<li>走势分桶：空桶补零、桶边界对齐（刷新之间不抖）、桶的峰谷档位、
+各桶之和 = 窗口合计、更大窗口用更粗的桶且桶数始终受上限约束。</li>
+</ul>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+<aside class="sidebar-right" aria-label="On this page">
+  <div class="sidebar-inner">
+    <span class="toc-label">On this page</span>
+    <nav class="toc-list">
+      <a class="toc-h2" href="#三数据从哪来三个来源各管一段">三、数据从哪来（三个来源，各管一段）</a>
+      <a class="toc-h2" href="#四计价口径">四、计价口径</a>
+      <a class="toc-h2" href="#五控制台-api">五、控制台 API</a>
+      <a class="toc-h2" href="#七存储与体量">七、存储与体量</a>
+      <a class="toc-h2" href="#八测试">八、测试</a>
+    </nav>
+  </div>
+</aside>
+
+</div>
+
+<script src="../../../assets/nav.js"></script>
+
+</body>
+</html>
