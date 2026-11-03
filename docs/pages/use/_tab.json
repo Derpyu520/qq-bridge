@@ -13,6 +13,7 @@
       "order": [
         "index",
         "install",
+        "install-macos",
         "config"
       ]
     },

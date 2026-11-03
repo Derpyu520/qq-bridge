@@ -66,7 +66,9 @@
 <table>
 <thead><tr><th>需要</th><th>版本</th><th>说明</th></tr></thead>
 <tbody>
-<tr><td>Windows</td><td>10 / 11</td><td>大量依赖 Windows 的 ACL、控制台编码与进程行为；Linux / macOS 不在支持范围</td></tr>
+<tr><td>Windows</td><td>10 / 11</td><td>大量依赖 Windows 的 ACL、控制台编码与进程行为；测试矩阵只覆盖 Windows</td></tr>
+<tr><td>macOS</td><td>Apple Silicon</td><td>有实测运行记录，不在测试矩阵内；没有守护与停实例脚本、DSH 端口不自动发现，见 <a href="../../use/install-macos.html">macOS 安装</a></td></tr>
+<tr><td>Linux</td><td>—</td><td>未验证</td></tr>
 <tr><td>Node.js</td><td><strong>&gt;= 22.13</strong></td><td>见 <code>package.json</code> 的 <code>engines</code></td></tr>
 <tr><td>npm</td><td>随 Node</td><td>仓库带 <code>package-lock.json</code>，请用它锁定版本</td></tr>
 </tbody>
