@@ -44,6 +44,8 @@ console.log('## 会话级运行模式面板接线');
 ok(/data-mode-key="\$\{esc\(x\.key\)\}"/.test(html), '会话表渲染了运行模式下拉');
 ok(/api\('\/api\/conversation\/mode'/.test(html), '下拉调用 /api/conversation/mode');
 ok(/跟随全局/.test(html), '保留「跟随全局（不覆盖）」选项');
+ok(/r\.rebuildRequired/.test(html), '仅在实际重建会话时提示上下文重开');
+ok(/工具预设变了|预设变化时才会重建/.test(html), '面板说明「只有预设变化才重建」');
 
 console.log('## 控制台对外访问面板接线');
 ok(/id="section-console-access"[^>]*data-page="access"/.test(html), '面板挂在「访问与安全」页');
