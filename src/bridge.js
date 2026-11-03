@@ -4244,6 +4244,12 @@ async function main() {
       // ── 登录 / 登出 ────────────────────────────────────────────────────────
       // 这两个端点必须在令牌门**之前**处理：它们的作用就是获得 / 丢弃凭证。
       if (url.pathname === '/api/console/login' || url.pathname === '/api/console/logout') {
+        // 只允许 POST：GET 的登出可以被任意网页用一张 <img> 触发（登出 CSRF），
+        // 登录也不该能从 URL 触发。
+        if (req.method !== 'POST') {
+          sendJson({ ok: false, error: '该接口只接受 POST' }, 405);
+          return;
+        }
         const blocked = writeRequestBlocked();
         if (blocked) { sendJson({ ok: false, error: blocked.error }, blocked.status); return; }
         if (url.pathname === '/api/console/login') {
