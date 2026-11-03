@@ -165,7 +165,7 @@ await test('fetchMediaData 标注表情/图片，并保留 summary 与 emojiId',
   const h = await bridgeHarness({
     globals: {
       safeFetchBuffer: async (url) => {
-        if (String(url).includes('gxh.vip.qq.com')) return { buffer: GIF, mimeType: 'image/gif' };
+        if (new URL(url).hostname === 'gxh.vip.qq.com') return { buffer: GIF, mimeType: 'image/gif' };
         throw new Error('网络不可用');
       }
     }

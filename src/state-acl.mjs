@@ -18,11 +18,8 @@
 //
 // 合并成一份实现，从结构上杜绝两份逻辑再次漂移。
 //
-// 正确顺序是四步，缺一不可：
-//   1. 目录上停止继承；
-//   2. 按 **SID** 删除宽松主体（不受系统显示语言影响）；
-//   3. 对**每一个**条目显式授权 —— 不带 (OI)(CI)，所以对文件同样有效；
-//   4. 给目录补一份可继承 ACE，让以后新建的文件自动拿到权限。
+// 正确顺序：先为每个条目补显式授权，再断继承并补目录的可继承授权，
+// 最后按 SID 删除宽松主体。任何时候都不能先清空仅靠继承得到的 DACL。
 // 最后自检由调用方按需做（{@link isHardened}）。
 
 import fs from 'node:fs';
@@ -51,7 +48,42 @@ export function hasInheritedPermissionAce(icaclsOutput) {
 
 /** 是否还有本机任意用户可读的宽松主体授权。 */
 export function hasPermissiveTrustee(icaclsOutput) {
-  return /Authenticated Users|BUILTIN\\Users|\bEveryone\b/i.test(String(icaclsOutput ?? ''));
+  return /Authenticated Users|BUILTIN\\Users|\bEveryone\b|\bS-1-5-11\b|\bS-1-5-32-545\b|\bS-1-1-0\b/i.test(String(icaclsOutput ?? ''));
+}
+
+/** 空 DACL/仅完整性标签不属于「已收紧」：至少要存在一条实际 allow 权限。 */
+export function hasPermissionGrant(icaclsOutput) {
+  return String(icaclsOutput ?? '').split(/\r?\n/).some((line) => {
+    if (/Mandatory Label|\(DENY\)/i.test(line)) return false;
+    // 必须是 trustee 冒号后的 ACE，路径名里的「(F)」不是授权。
+    const ace = /:((?:\((?:I|OI|CI|IO|NP)\))*)\((?:F|M|RX|R|W|D|RC|WDAC|WO|RD|WD|AD|REA|WEA|X|DC|RA|WA)(?:,[A-Z]+)*\)/.exec(line);
+    // (IO) 只对子项生效，不能证明当前目录/文件自己仍有可用权限。
+    return ace !== null && !ace[1].includes('(IO)');
+  });
+}
+
+function icaclsFailure(res) {
+  const out = `${res.stdout ?? ''}${res.stderr ?? ''}`;
+  if (res.error) return res.error.message;
+  if (res.status !== 0) return `icacls 退出码 ${res.status}：${out.trim()}`;
+  // 修改命令不使用 /C：遇错立即停止，主要依靠与系统语言无关的退出码判定。
+  // 失败汇总和常见本地化错误仅作为额外兜底。
+  if (/access is denied|拒绝访问|拒絕存取|Failed processing\s+[1-9]\d*\s+files|处理\s*[1-9]\d*\s*个文件(?:时)?失败/i.test(out)) {
+    return out.split('\n').filter(Boolean).slice(-3).join(' / ');
+  }
+  return '';
+}
+
+function verifyAcl(target, { hardened = false } = {}) {
+  const res = icacls([target], 10000);
+  const failure = icaclsFailure(res);
+  if (failure) return { ok: false, detail: failure };
+  const out = res.stdout ?? '';
+  if (!hasPermissionGrant(out)) return { ok: false, detail: 'ACL 中没有可用的显式或继承授权，拒绝继续修改' };
+  if (hardened && (hasInheritedPermissionAce(out) || hasPermissiveTrustee(out))) {
+    return { ok: false, detail: 'ACL 回读仍有继承权限或宽松主体，未确认收紧成功' };
+  }
+  return { ok: true, detail: 'icacls' };
 }
 
 /**
@@ -62,10 +94,7 @@ export function isHardened(target) {
   if (process.platform !== 'win32') {
     try { return (fs.statSync(target).mode & 0o077) === 0; } catch { return false; }
   }
-  const res = icacls([target], 10000);
-  if (res.error || res.status !== 0) return false;
-  const out = res.stdout ?? '';
-  return !hasInheritedPermissionAce(out) && !hasPermissiveTrustee(out);
+  return verifyAcl(target, { hardened: true }).ok;
 }
 
 /**
@@ -81,19 +110,16 @@ export function hardenDir(dir) {
   const user = process.env.USERNAME;
   if (!user) return { ok: false, detail: '无法确定当前用户名（%USERNAME% 为空）' };
   const steps = [
-    [dir, '/inheritance:r', '/C', '/Q'],
-    [dir, '/remove:g', ...PERMISSIVE_SIDS, '/T', '/C', '/Q'],
-    [dir, '/T', '/C', '/Q', '/grant', `${user}:F`, '/grant', 'SYSTEM:F', '/grant', 'Administrators:F'],
-    [dir, '/Q', '/grant', `${user}:(OI)(CI)F`, '/grant', 'SYSTEM:(OI)(CI)F', '/grant', 'Administrators:(OI)(CI)F']
+    [dir, '/T', '/Q', '/grant', `${user}:F`, '/grant', '*S-1-5-18:F', '/grant', '*S-1-5-32-544:F'],
+    [dir, '/inheritance:r', '/Q', '/grant', `${user}:(OI)(CI)F`, '/grant', '*S-1-5-18:(OI)(CI)F', '/grant', '*S-1-5-32-544:(OI)(CI)F'],
+    [dir, '/remove:g', ...PERMISSIVE_SIDS, '/T', '/Q']
   ];
-  for (const args of steps) {
+  for (const [index, args] of steps.entries()) {
     const res = icacls(args);
-    const out = `${res.stdout ?? ''}${res.stderr ?? ''}`;
-    if (res.error) return { ok: false, detail: res.error.message };
-    // /C 会让 icacls 继续处理剩余文件、即使全失败退出码仍是 0，所以必须看输出。
-    if (/access is denied/i.test(out)) {
-      return { ok: false, detail: out.split('\n').filter(Boolean).slice(-3).join(' / ') };
-    }
+    const failure = icaclsFailure(res);
+    if (failure) return { ok: false, detail: failure };
+    const verified = verifyAcl(dir, { hardened: index === steps.length - 1 });
+    if (!verified.ok) return verified;
   }
   // 自检：属主必须仍能读到目录内容（防止把 DACL 清空这种"成功"的破坏）。
   try { fs.readdirSync(dir); }
@@ -113,12 +139,17 @@ export function hardenFile(file) {
   }
   const user = process.env.USERNAME;
   if (!user) return { ok: false, detail: '无法确定当前用户名（%USERNAME% 为空）' };
-  const res = icacls([file, '/inheritance:r',
-    '/grant:r', `${user}:F`, '/grant:r', 'SYSTEM:F', '/grant:r', 'Administrators:F', '/C', '/Q']);
-  const out = `${res.stdout ?? ''}${res.stderr ?? ''}`;
-  if (res.error) return { ok: false, detail: res.error.message };
-  if (/access is denied/i.test(out)) {
-    return { ok: false, detail: out.split('\n').filter(Boolean).slice(-2).join(' / ') };
+  const grants = ['/grant:r', `${user}:F`, '/grant:r', '*S-1-5-18:F', '/grant:r', '*S-1-5-32-544:F'];
+  const steps = [
+    [file, ...grants, '/Q'],
+    [file, '/inheritance:r', ...grants, '/Q'],
+    [file, '/remove:g', ...PERMISSIVE_SIDS, '/Q']
+  ];
+  for (const [index, args] of steps.entries()) {
+    const failure = icaclsFailure(icacls(args));
+    if (failure) return { ok: false, detail: failure };
+    const verified = verifyAcl(file, { hardened: index === steps.length - 1 });
+    if (!verified.ok) return verified;
   }
   return { ok: true, detail: 'icacls' };
 }
@@ -132,9 +163,8 @@ export function manualDirCommand(dir) {
   if (process.platform !== 'win32') return `chmod -R go-rwx "${dir}"`;
   const d = `"${dir}"`;
   return [
-    `icacls ${d} /inheritance:r /C /Q`,
-    `icacls ${d} /remove:g "*S-1-5-11" "*S-1-5-32-545" "*S-1-1-0" /T /C /Q`,
-    `icacls ${d} /T /C /Q /grant "%USERNAME%:F" /grant "SYSTEM:F" /grant "Administrators:F"`,
-    `icacls ${d} /Q /grant "%USERNAME%:(OI)(CI)F" /grant "SYSTEM:(OI)(CI)F" /grant "Administrators:(OI)(CI)F"`
+    `icacls ${d} /T /Q /grant "%USERNAME%:F" /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F"`,
+    `icacls ${d} /inheritance:r /Q /grant "%USERNAME%:(OI)(CI)F" /grant "*S-1-5-18:(OI)(CI)F" /grant "*S-1-5-32-544:(OI)(CI)F"`,
+    `icacls ${d} /remove:g "*S-1-5-11" "*S-1-5-32-545" "*S-1-1-0" /T /Q`
   ].join('\n             ');
 }

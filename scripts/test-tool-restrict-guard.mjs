@@ -106,10 +106,25 @@ await test('执行期 guard 照旧：QQ MCP 放行、dev_* 与本地工具拒绝
   assert.equal(typeof calls.guard, 'function', '必须注册执行期 guard');
   const guard = calls.guard;
   for (const name of ['mcp__snowluma__qq_send_message', 'mcp__snowluma-host__snowluma_status', 'mcp__web-search-safe__web_search', 'ask_user_question', 'todo_write']) {
-    assert.equal(guard({ name }), undefined, `${name} 应放行`);
+    assert.equal(guard({ name, agent: { id: 'qqb-g-1' }, arguments: { key: 'group:1' } }), undefined, `${name} 应放行`);
   }
   for (const name of ['dev_inject_plugin', 'dev_plugin_status', 'pwsh', 'read', 'write', 'dsh_snapshot', 'skill']) {
     assert.match(String(guard({ name })), /不在 QQ 桥接白名单内/, `${name} 必须拒绝`);
+  }
+  const send = { name: 'mcp__snowluma__qq_send_message', agent: { id: 'qqb-g-1' } };
+  assert.equal(guard({ ...send, arguments: { target: 'group:1' } }), undefined);
+  assert.equal(guard({ ...send, arguments: { key: 'group:1', target: 'group:01' } }), undefined);
+  for (const args of [{}, { target: 'group:2' }, { key: 'group:1', target: 'group:2' }]) {
+    assert.equal(guard({ ...send, arguments: args }), '该会话不可用');
+  }
+  for (const [tool, field, kind] of [
+    ['qq_send_group_message', 'groupId', 'group'], ['qq_reply', 'groupId', 'group'],
+    ['qq_send_private_message', 'userId', 'private'], ['qq_send_burst', 'groupId', 'group']
+  ]) {
+    const exec = { name: `mcp__snowluma__${tool}`, agent: { id: `qqb-${kind === 'group' ? 'g' : 'p'}-1` } };
+    assert.equal(guard({ ...exec, arguments: { [field]: '1' } }), undefined);
+    assert.equal(guard({ ...exec, arguments: { [field]: '2', target: `${kind}:1` } }), '该会话不可用');
+    assert.equal(guard({ name: exec.name, arguments: { [field]: '1' } }), '该会话不可用');
   }
   assert.match(String(guard({ name: '' })), /工具名无效/);
   assert.match(String(guard({})), /工具名无效/);

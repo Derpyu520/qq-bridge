@@ -1,0 +1,10 @@
+# Windows .bat 必须 CRLF：cmd.exe 对 LF-only 批处理有已知怪癖（label/goto 场景），
+# 而 start.bat 的守护循环正是 goto loop。
+#
+# 为什么用 -text 而不是 eol=crlf：eol=crlf 只保证**检出时**转成 CRLF，仓库 blob
+# 仍是 LF —— GitHub 的 zip 直下/存档不做任何转换，拿到的是 LF，导致
+# scripts/test-audit-setup-guards.mjs 对 zip 下载者必然失败。
+# -text 让 git 把 .bat 当二进制原样存取：blob 就是 CRLF ⇒ zip 直下也拿到 CRLF，
+# 任何平台、任何 git 配置的检出都一致。
+# 代价：编辑这两个文件必须手动保持 CRLF —— 这是有意的，上面那条测试就是防 LF 回归的守卫。
+*.bat -text

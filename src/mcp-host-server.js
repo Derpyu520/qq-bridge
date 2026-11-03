@@ -17,7 +17,7 @@
 // 原生组件是**专有组件**；由本程序**程序化启动/结束**它，落在"通过自动化脚本部署"的射程内。
 // 即便是"用户已装好、我们帮忙拉起"，也不值得为这点便利去踩一条需要书面授权的条款。
 //
-// 设计不变量 L6（见规划集 QSH_PLAN.md §6.0）：**QSH 只探测、不部署**——
+// 设计不变量 L6（见 NOTICE.md 与安全基线）：**qq-bridge 只探测、不部署**——
 // 永不安装、复制、打包或自动部署 SnowLuma 及其原生组件，也不程序化启停其进程。
 // 用户在 QQ 侧不可用时得到的应该是**可操作的提示**（"请自行启动 SnowLuma"），而不是被代劳。
 import fs from 'node:fs';
@@ -25,6 +25,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { z } from 'zod';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -71,12 +72,14 @@ async function gatewayInfo() {
   }
 }
 
-const server = new McpServer({ name: 'snowluma-host', version: '0.2.1-r1' });
+const server = new McpServer({ name: 'snowluma-host', version: '0.2.1-r2' });
 
-server.tool(
+server.registerTool(
   'snowluma_status',
-  '检查 SnowLuma OneBot 网关是否在线（只读探活 get_login_info）。返回网关可达性、QQ 在线状态与账号信息。网关不可达时返回可操作的提示（本程序不会代你启动 SnowLuma）。',
-  {},
+  {
+    description: '检查 SnowLuma OneBot 网关是否在线（只读探活 get_login_info）。返回网关可达性、QQ 在线状态与账号信息。网关不可达时返回可操作的提示（本程序不会代你启动 SnowLuma）。',
+    inputSchema: z.object({}).strict()
+  },
   async () => {
     const hc = getHostConfig();
     const info = await gatewayInfo();

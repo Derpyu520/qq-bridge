@@ -81,6 +81,40 @@ test('sensitive audit catches UNC paths and quoted JSON credentials', () => {
   }
 });
 
+// ── 伪装形态：逐字匹配的正则挡不住"看起来一样、字节不同"的写法 ──────────────
+//
+// 攻击者只需要让文本在**归一化之后**相同就能绕过逐字正则：
+//   · 全角冒号/反斜杠（NFKC 归一后与半角相同）
+//   · 零宽字符（肉眼不可见）
+//   · 整段 base64 编码
+//   · 用空格/点/横线把关键词拆开
+// 这条把"归一化后必须命中"钉成断言。
+test('sensitive audit normalizes disguises before matching', () => {
+  const ZWSP = '\u200b';
+  const ZWJ = '\u200d';
+  for (const value of [
+    'C：＼Users＼someone＼config.json',                 // 全角冒号 + 全角反斜杠
+    `C:${ZWSP}\\Users\\someone`,                       // 零宽空格
+    `C:${ZWJ}\\Users\\someone`,                        // 零宽连接符
+    'dG9rZW49Zml4dHVyZS1vbmx5LXRva2Vu',                // base64('token=fixture-only-token')
+    't o k e n = fixture-value-xxx',                   // 空格拆开
+    'to-ken=fixture-value-xxx',                        // 横线拆开
+  ]) assert.equal(SENSITIVE_RE.test(value), true, `伪装形态必须被拦：${value}`);
+});
+
+// 归一化不得把正常内容误伤成敏感 —— 否则闸门会被用成"随便拦"。
+test('sensitive normalization does not flag ordinary content', () => {
+  for (const value of [
+    '你好，今天吃什么',
+    '如何设置密码？',
+    'token 的作用是什么？',
+    '访问 https://example.com/guide',
+    '表情 md5 是 0123456789abcdef0123456789abcdef',   // 32-hex 不得被当令牌
+    '这个包的版本是 v0.2.1-r1',
+    '随便一串英文 base64 lookalike 字符串',
+  ]) assert.equal(SENSITIVE_RE.test(value), false, `不得误伤：${value}`);
+});
+
 test('IPv6 canonicalization cannot turn a private address into public', () => {
   for (const value of [
     '0:0:0:0:0:0:0:1', '0:0:0:0:0:ffff:7f00:1',
@@ -99,6 +133,37 @@ test('URLs and every DNS result are validated before opening a connection', asyn
     'http://[::ffff:127.0.0.1]/', 'http://localhost./', 'http://host.local./',
     'http://mixed.test/', 'http://expanded.test/',
   ]) await assert.rejects(validateFetchUrl(url));
+  assert.equal(transport.requests.length, 0);
+});
+
+// ── 端口白名单：SSRF 判定只看地址，不看端口 ──────────────────────────────────
+//
+// 一个**公网可达**的非常规端口（某内网服务通过端口映射暴露出来）在地址判定看来完全
+// 合法，于是能被拿来探测。端口白名单把"能抓什么"收窄到常规 Web 端口，与地址判定互补。
+test('optional allowPorts rejects non-web ports before opening a connection', async (t) => {
+  const transport = mockTransport(t, []);
+  const allowPorts = [80, 443, 8080, 8443];
+
+  // 默认不限端口：既有调用方行为不变（否则会静默收紧媒体抓取）。
+  await assert.doesNotReject(validateFetchUrl('http://public.test:9200/'));
+
+  // 显式传入白名单后，非常规端口必须被拦。
+  for (const url of [
+    'http://public.test:9200/', 'http://public.test:6379/', 'http://public.test:8081/',
+    'https://public.test:8444/', 'http://public.test:3000/',
+  ]) {
+    await assert.rejects(validateFetchUrl(url, { allowPorts }), /端口 \d+ 不在允许列表/);
+  }
+
+  // 白名单内的端口（含省略端口的默认 80/443）必须照常放行。
+  for (const url of [
+    'http://public.test/', 'https://public.test/', 'http://public.test:80/',
+    'https://public.test:443/', 'http://public.test:8080/', 'https://public.test:8443/',
+  ]) {
+    await assert.doesNotReject(validateFetchUrl(url, { allowPorts }));
+  }
+
+  // 校验必须在**发起连接之前**失败。
   assert.equal(transport.requests.length, 0);
 });
 

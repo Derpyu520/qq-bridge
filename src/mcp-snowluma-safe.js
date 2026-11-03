@@ -23,6 +23,42 @@ import { serializeModelData } from './qq-model-view.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 
+// ── 会话绑定（SELF_KEY）──────────────────────────────────────────────────────
+//
+// 桥接为每个 QQ 会话派生一个 MCP 进程，spawn 时注入 `QQ_BRIDGE_SELF_KEY=<该会话 key>`。
+// 这个值**不由模型决定**（模型既看不到也改不了），因此可以当作可信身份。
+//
+// 为什么必须有这道门：MCP 协议里没有「这次调用来自哪个会话」的字段，所有带 `key`
+// 参数的工具本来只能按**模型给的 key** 去解析会话令牌 —— 模型（或被注入的群友文本）
+// 只要把 key 换成别的群号，就能读到那个群的会话状态。有了 SELF_KEY，凡带 key 的调用
+// 都先与它比对，不一致一律拒绝。
+//
+// 未注入 SELF_KEY 时（例如手动直跑本文件调试）**保持既有行为**，不因为缺少这个
+// 环境变量而把整个 MCP 变成不可用 —— 那样会让部署升级变成一次硬故障。
+const SELF_KEY = canonicalKey(process.env.QQ_BRIDGE_SELF_KEY) || '';
+/** 所有「非当前会话」的拒绝共用同一句文案：不可区分，避免群号枚举 oracle。 */
+const SELF_KEY_DENIAL = '该会话不可用';
+
+/** 归一化会话 key（与桥接 canonicalKey 同口径：去掉前导零、校验正整数）。 */
+function canonicalKey(value) {
+  const m = /^(group|private):(\d{1,20})$/.exec(String(value ?? '').trim());
+  if (!m) return '';
+  const id = Number(m[2]);
+  if (!Number.isSafeInteger(id) || id <= 0) return '';
+  return `${m[1]}:${id}`;
+}
+
+/**
+ * 校验一次带 key 的调用是否指向当前会话。
+ * @returns {string} 拒绝理由；空串表示放行。
+ */
+function selfKeyGuard(key) {
+  if (!SELF_KEY) return '';
+  const canonical = canonicalKey(key);
+  if (!canonical || canonical !== SELF_KEY) return SELF_KEY_DENIAL;
+  return '';
+}
+
 function loadConfig() {
   try {
     let text = fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8');
@@ -293,7 +329,7 @@ async function legacyReadToolAllowed() {
   return String(status?.mode ?? '') === 'closed-agent';
 }
 
-const server = new McpServer({ name: 'snowluma-safe', version: '0.2.1-r1' });
+const server = new McpServer({ name: 'snowluma-safe', version: '0.2.1-r2' });
 
 // ── 工具开关必须在**注册期**生效，而不是只在校验期 ──────────────────────────
 //
@@ -352,15 +388,96 @@ const TOOL_CONFIG_FLAGS = {
   qq_set_sticker_remark: 'setStickerRemark',
 };
 const disabledTools = [];
+// 别名必须同时出现在 schema 与规范化入口中，否则 Zod 会先把它丢弃。
+// 只兼容已有的等价参数，不把消息里的空格解释成分条。
+const TOOL_ARGUMENT_ALIASES = {
+  qq_send_message: { key: ['target'], messages: ['message', 'text', 'content'] },
+  qq_get_message_detail: { key: ['target'] }
+};
+
+function foldArgumentAliases(args, aliases, required = new Set()) {
+  const next = { ...args };
+  for (const [canonical, alternatives] of Object.entries(aliases)) {
+    const supplied = [canonical, ...alternatives].filter((field) => args[field] !== undefined);
+    if (!supplied.length) {
+      if (required.has(canonical)) throw new Error(`缺少参数 ${canonical}（也可使用 ${alternatives.join('/')}）`);
+      continue;
+    }
+    const comparable = (value) => canonical === 'key' ? (canonicalKey(value) || String(value)) : JSON.stringify(value);
+    if (supplied.some((field) => comparable(args[field]) !== comparable(args[supplied[0]]))) {
+      throw new Error(`参数 ${canonical} 与其别名 ${alternatives.join('/')} 冲突，请只传一种写法`);
+    }
+    next[canonical] = canonical === 'key' ? (canonicalKey(args[supplied[0]]) || args[supplied[0]]) : args[supplied[0]];
+    for (const field of alternatives) delete next[field];
+  }
+  return next;
+}
+
+function normalizeWakeArguments(config) {
+  const next = { ...config };
+  if (next.mode !== undefined) {
+    const mode = String(next.mode).trim().toLowerCase();
+    if (['diving', 'silent', 'quiet', 'sleep', 'normal', '潜水', '安静', '正常'].includes(mode)) next.mode = 'diving';
+    else if (['active', 'chat', 'talking', '活跃'].includes(mode)) next.mode = 'active';
+    else throw new Error('mode 无效：请使用 diving（潜水/安静）或 active（活跃）');
+  }
+  if (next.triggers) {
+    const triggers = { ...next.triggers };
+    for (const field of ['keywords', 'keyword']) {
+      if (triggers[field] === undefined) continue;
+      if (typeof triggers[field] === 'boolean') {
+        throw new Error('keyword/keywords 需要关键词字符串或数组；不能用布尔值开启，保留原关键词时请省略该字段');
+      }
+      triggers[field] = (Array.isArray(triggers[field]) ? triggers[field] : triggers[field].split(/[,，、\s]+/))
+        .map((value) => String(value).trim()).filter(Boolean);
+    }
+    next.triggers = foldArgumentAliases(triggers, {
+      atMention: ['at'], nameMention: ['name'], keywords: ['keyword'], probability: ['prob']
+    });
+  }
+  return next;
+}
+
 {
-  const registerTool = server.tool.bind(server);
+  const registerTool = server.registerTool.bind(server);
   server.tool = (name, ...rest) => {
     const flag = TOOL_CONFIG_FLAGS[name];
     if (flag && cfg.socialV2?.tools?.[flag] === false) {
       disabledTools.push(`${name}(${flag})`);
       return undefined;
     }
-    return registerTool(name, ...rest);
+    // ── 会话绑定闸门（SELF_KEY）──────────────────────────────────────────────
+    //
+    // 在**统一注册点**包一层，而不是逐个改 31 个带 key 的工具 —— 逐改容易漏
+    // （新增工具时忘了加），而这里是所有工具必经之路。
+    //
+    // 判据是「参数表里**声明**了 key」，不是「运行时 arguments 里有没有 key」：
+    // 声明才是工具的身份，运行时 arguments 是模型可控的 —— 用它来判断
+    // 「该不该校验」等于让攻击者自己选考卷。
+    const schema = rest.length >= 2 ? rest[rest.length - 2] : undefined;
+    const handler = rest[rest.length - 1];
+    const shape = { ...schema };
+    const aliases = TOOL_ARGUMENT_ALIASES[name] || {};
+    const required = new Set();
+    for (const [canonical, alternatives] of Object.entries(aliases)) {
+      if (!schema[canonical].isOptional()) required.add(canonical);
+      shape[canonical] = schema[canonical].optional();
+      for (const alias of alternatives) shape[alias] = schema[canonical].optional().describe(`${canonical} 的别名；请只使用一种写法`);
+    }
+    const guarded = async (args, ...tail) => {
+      let canonicalArgs;
+      try { canonicalArgs = foldArgumentAliases(args, aliases, required); }
+      catch (error) { return { content: [{ type: 'text', text: `参数错误：${error.message}` }], isError: true }; }
+      if (Object.prototype.hasOwnProperty.call(schema, 'key')) {
+        const denial = selfKeyGuard(canonicalArgs?.key);
+        if (denial) {
+          return { content: [{ type: 'text', text: denial }], isError: true };
+        }
+      }
+      return handler(canonicalArgs, ...tail);
+    };
+    // 旧 tool(rawShape) 的默认策略是 strip；改用公开注册接口保留 strict，未知键明确失败。
+    return registerTool(name, { description: rest[0], inputSchema: z.object(shape).strict() }, guarded);
   };
 }
 
@@ -663,7 +780,7 @@ server.tool(
     token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
     throughSeq: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional().describe('可同时确认已读：使用已查看结果中的 readThroughSeq，省去额外 qq_mark_read；不传则只设置唤醒配置。若 markRead 工具被关闭，该水位会被忽略，本工具只设置唤醒配置'),
     config: z.object({
-      mode: z.enum(['diving', 'active']).optional().describe('diving=潜水，active=活跃（anyMessage 开启）'),
+      mode: z.string().optional().describe('diving=潜水，active=活跃；兼容 silent/quiet/sleep/normal/潜水/安静/正常 表示 diving'),
       infinite: z.boolean().optional().describe('true=无限期，只有条件命中才唤醒；false=有限时间'),
       sleepMs: z.number().optional().describe('有限潜水毫秒数（从当前时间起算）'),
       sleepUntil: z.string().optional().describe('有限潜水截止时间 ISO 字符串，优先级高于 sleepMs'),
@@ -671,18 +788,23 @@ server.tool(
         atMention: z.boolean().optional().describe('被 @ 或引用自己时唤醒'),
         nameMention: z.boolean().optional().describe('被叫名字/昵称时唤醒'),
         speakerIds: z.array(z.union([z.number(), z.string()])).max(20).optional().describe('指定群友 QQ 号数组：这些群友中任意一位发言时唤醒（可选，最多 20 个，不设置则不启用；私聊不适用，设置会被桥接清除；可从 qq_get_active_members / qq_get_group_members / qq_get_message_detail 的 userId/user_id 获取）'),
-        keywords: z.array(z.string()).optional().describe('出现任意关键词时唤醒'),
+        keywords: z.union([z.array(z.union([z.string(), z.number()])), z.string()]).optional().describe('出现任意关键词时唤醒；可传数组或逗号/顿号/空白分隔的字符串'),
         question: z.boolean().optional().describe('被直接提问/点名挑战时唤醒'),
         poke: z.boolean().optional().describe('有人拍一拍时唤醒（群聊包括拍你和拍别人，私聊为对方拍你）'),
         anyMessage: z.boolean().optional().describe('任意新消息都唤醒（活跃模式）'),
-        probability: z.number().optional().describe('普通消息按该概率随机唤醒（0~1）')
-      }).optional(),
+        probability: z.number().optional().describe('普通消息按该概率随机唤醒（0~1）'),
+        at: z.boolean().optional().describe('atMention 的别名'),
+        name: z.boolean().optional().describe('nameMention 的别名'),
+        keyword: z.union([z.array(z.union([z.string(), z.number()])), z.string(), z.boolean()]).optional().describe('keywords 的别名，需要具体关键词；布尔值会明确拒绝'),
+        prob: z.number().optional().describe('probability 的别名')
+      }).strict().optional(),
       batchWindowMs: z.number().optional().describe('多条消息合并唤醒窗口（毫秒，>=1000）')
-    }).describe('要设置的唤醒配置，缺省字段保留原值')
+    }).strict().describe('要设置的唤醒配置，缺省字段保留原值；未知字段会明确报错')
   },
   async ({ key, token, config, throughSeq }) => {
     try {
-      const data = await agentApi('/api/socialV2/wake-config', { method: 'POST', body: JSON.stringify({ key, config, throughSeq }), headers: { 'x-agent-token': token } });
+      const canonicalConfig = normalizeWakeArguments(config);
+      const data = await agentApi('/api/socialV2/wake-config', { method: 'POST', body: JSON.stringify({ key, config: canonicalConfig, throughSeq }), headers: { 'x-agent-token': token } });
       return { content: [{ type: 'text', text: serializeModelData(data) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `设置唤醒配置失败：${error?.message ?? error}` }], isError: true };

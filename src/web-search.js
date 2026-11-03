@@ -131,7 +131,12 @@ function normalizeSearchUrl(raw) {
 }
 
 /** 把 Anthropic Messages 响应映射成统一结果（参照 dsh-web-search-deepseek 的实现）。 */
-export function mapDeepSeekResponse(response, maxResults = 8) {
+export function mapDeepSeekResponse(response, maxResults = 8, apiKey = '') {
+  // 只清理会进入结果的数据字段，不能修改 type 等协议字段；短 key 也可能出现在工具类型里。
+  const redact = (value) => {
+    const text = String(value ?? '');
+    return apiKey ? text.replaceAll(apiKey, '[REDACTED]') : text;
+  };
   const blocks = Array.isArray(response?.content) ? response.content : [];
   const resultBlocks = blocks.filter((block) => block?.type === 'web_search_tool_result');
   if (!resultBlocks.length) {
@@ -143,7 +148,7 @@ export function mapDeepSeekResponse(response, maxResults = 8) {
     for (const cite of block.citations ?? []) {
       const url = normalizeSearchUrl(cite?.url);
       if (!url || snippets.has(url)) continue;
-      const text = String(cite?.cited_text ?? '').trim();
+      const text = redact(cite?.cited_text).trim();
       if (text) snippets.set(url, text);
     }
   }
@@ -155,13 +160,13 @@ export function mapDeepSeekResponse(response, maxResults = 8) {
       const url = normalizeSearchUrl(item.url);
       if (!url || seen.has(url)) continue;
       seen.add(url);
-      const title = String(item.title ?? '').trim().slice(0, 200);
+      const title = redact(item.title).trim().slice(0, 200);
       const snippet = String(snippets.get(url) ?? '').trim().slice(0, 500);
       results.push({
         title,
-        url,
+        url: redact(url),
         ...(snippet ? { snippet } : {}),
-        ...(item.page_age ? { publishedAt: String(item.page_age).slice(0, 40) } : {})
+        ...(item.page_age ? { publishedAt: redact(item.page_age).slice(0, 40) } : {})
       });
       if (results.length >= maxResults) return results;
     }
@@ -320,15 +325,10 @@ export async function deepseekSearch(query, config = defaultConfig) {
     timeoutMs: config.timeoutMs || DEFAULT_TIMEOUT_MS
   });
   if (response.status < 200 || response.status >= 300) {
-    // 只回显 HTTP 状态与主体里的简短错误，绝不拼接请求头（里面是 key）。
-    let detail = '';
-    try {
-      const parsed = JSON.parse(response.text);
-      const message = typeof parsed?.error === 'string' ? parsed.error : parsed?.error?.message ?? parsed?.message;
-      if (typeof message === 'string') detail = message.slice(0, 200);
-    } catch {}
+    // 上游/代理的鉴权错误可能回显请求凭据。错误会进入模型上下文及兜底 note，
+    // 因此只返回可定位的 HTTP 状态，不能传播未经信任的响应主体。
     throw Object.assign(
-      new Error(`DeepSeek 搜索接口 HTTP ${response.status}${detail ? `：${detail}` : ''}`),
+      new Error(`DeepSeek 搜索接口 HTTP ${response.status}`),
       { code: 'HTTP_ERROR', status: response.status }
     );
   }
@@ -338,7 +338,7 @@ export async function deepseekSearch(query, config = defaultConfig) {
   } catch {
     throw Object.assign(new Error('DeepSeek 搜索接口返回了无法解析的响应'), { code: 'BAD_BODY' });
   }
-  return mapDeepSeekResponse(parsed, config.maxResults || defaultConfig.maxResults);
+  return mapDeepSeekResponse(parsed, config.maxResults || defaultConfig.maxResults, key);
 }
 
 function decodeEntities(text) {

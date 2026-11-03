@@ -53,7 +53,7 @@ export const QQMODE_NAMESPACE = 'qq-mode';
  * 但仓库里的静态测试会用它验证非法 mode 被拒绝，故保留。
  */
 export const QqModeSchema = z.object({
-  // `simulation` 是规范名（QSH_PLAN.md §2.1），`chat`/`reserved`/`reserved2` 是历史拼写。
+  // `simulation` 是规范名，`chat`/`reserved`/`reserved2` 是历史拼写。
   // 两者都必须能被**存进设置**：桥接在输入侧把它们归一到同一个内部值（见 bridge.js 的
   // MODE_INPUT_ALIASES），但这里如果只列历史名，用户在 DSH 设置里写 `simulation` 会被
   // schema 直接拒掉，而 schema 校验失败会把整个命名空间一起打掉 —— 连 ownerQQ 都读不到，

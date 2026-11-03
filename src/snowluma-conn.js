@@ -143,7 +143,7 @@ export async function discoverSnowLumaConnection({
   const tried = [];
   for (const c of candidates) {
     const r = await probe(c.url, c.token, timeoutMs);
-    tried.push({ source: c.source, url: c.url, token: c.token ? c.token.slice(0, 4) + '…' : '(空)', ok: r.ok, status: r.status, wording: r.wording });
+    tried.push({ source: c.source, url: c.url, token: c.token ? '(已配置)' : '(未配置)', ok: r.ok, status: r.status, wording: r.wording });
     if (r.ok) {
       // 找到有效 HTTP token 后，把**同一个账号**的 WS 信息也带回去：
       // 桥接走 WebSocket，用另一个 token、另一个端口 —— 只修 HTTP 的话桥接仍然 1006 重连。

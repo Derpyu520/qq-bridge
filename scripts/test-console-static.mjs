@@ -41,7 +41,7 @@ ok(/api\('\/api\/voice\/send'/.test(html), '面板调用 /api/voice/send');
 ok(/typeof loadVoiceLibrary === 'function'|async function loadVoiceLibrary/.test(html), 'loadVoiceLibrary 已定义');
 
 console.log('## JS 语法');
-const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/gi)].map((m) => m[1]);
 const big = scripts.sort((a, b) => b.length - a.length)[0];
 try { new Function(big); ok(true, '主 script 语法可解析', `${big.length} 字符`); }
 catch (e) { ok(false, '主 script 语法', e.message); }
@@ -63,7 +63,7 @@ if (!hasVoiceTool()) {
   ok(/previewBtn'\)\.addEventListener/.test(voice), '试听按钮已绑定');
   ok(/api\/preview/.test(voice), '试听调 /api/preview（听处理后的效果）');
   ok(/body\.normalize = true/.test(voice) && /body\.volume = volValue\(\)/.test(voice), '发送时带上音量设置');
-  const scripts = [...voice.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+  const scripts = [...voice.matchAll(/<script>([\s\S]*?)<\/script>/gi)].map((m) => m[1]);
   try { new Function(scripts[0]); ok(true, 'voice.html 前端 JS 可解析'); }
   catch (e) { ok(false, 'voice.html 前端 JS 可解析', e.message); }
 }

@@ -81,7 +81,7 @@ function readConsoleTokenFile() {
   }
 }
 
-const maskToken = (t) => (t ? `${t.slice(0, 4)}…${t.slice(-4)}（${t.length} 字符）` : '(未配置)');
+const maskToken = (t) => (t ? '(已配置)' : '(未配置)');
 const out = (...a) => { if (!quiet) console.log(...a); };
 const fail = (msg, code = 1) => { console.error(`❌ ${msg}`); process.exit(code); };
 

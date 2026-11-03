@@ -58,9 +58,13 @@ export function dshModulesDir() {
     }
   }
 
-  throw new Error(
+  const err = new Error(
     '无法定位 DSH 安装目录下的 node_modules。\n'
     + '  请设置 DSH_INSTALL_MODULES=<DSH 安装目录>/node_modules 后重试；\n'
     + `  或设置 DSH_HOME 指向 DSH 根目录（当前解析为 ${home}）。`
   );
+  // 给调用方一个可判定信号：这是"前提不满足"，不是"实现有 bug"。
+  // 干净 clone / CI 上没装 DSH 时应当跳过相关断言，而不是整套变红。
+  err.code = 'DSH_MODULES_NOT_FOUND';
+  throw err;
 }

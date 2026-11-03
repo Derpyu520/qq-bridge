@@ -17,7 +17,7 @@ for (const preset of ['qq-chat', 'qq-chat-v2']) {
   assert.ok(restricted.includes('dev_install_package'));
   for (const name of ['ask_user_question', 'todo_write', 'mcp__snowluma__qq_send_message',
     'mcp__snowluma-host__snowluma_status', 'mcp__web-search-safe__web_fetch']) {
-    assert.equal(guard({ name }), undefined, `${preset}: expected allowed ${name}`);
+    assert.equal(guard({ name, agent: { id: 'qqb-g-1' }, arguments: { key: 'group:1' } }), undefined, `${preset}: expected allowed ${name}`);
   }
   for (const name of ['web_fetch', 'web_search', 'bash', 'read_file', 'dev_future_tool',
     'mcp__untrusted__web_fetch', '', null, undefined]) {
@@ -48,8 +48,11 @@ import fs from 'node:fs';
   assert.equal(nonAscii, 0, 'start.bat 必须保持纯 ASCII（否则非 UTF-8 控制台会乱码）');
   assert.equal(batText.match(/(?<!\r)\n/g)?.length ?? 0, 0, 'start.bat 必须使用 CRLF');
   assert.ok(batText.includes('harden-state-acl.mjs'), 'start.bat 必须在启动桥接前调用 ACL 助手');
-  // 助手必须排在 node src/bridge.js 之前，否则"启动时收紧"就不成立
-  assert.ok(batText.indexOf('harden-state-acl.mjs') < batText.indexOf('node src/bridge.js'), 'ACL 助手必须先于桥接启动');
+  // 桥接与守护窗口都用绝对路径，重启脚本才能证明它们属于当前仓库。
+  assert.ok(batText.includes('node "%~dp0src\\bridge.js"'), 'start.bat 必须用绝对路径启动 bridge');
+  assert.ok(batText.indexOf('harden-state-acl.mjs') < batText.indexOf('node "%~dp0src\\bridge.js"'), 'ACL 助手必须先于桥接启动');
+  const restartText = fs.readFileSync(path.join(root, 'restart.bat'), 'latin1');
+  assert.ok(restartText.includes('start "" cmd /c "%~dp0start.bat"'), 'restart.bat 必须用绝对路径启动守护窗口');
   console.log('state ACL hardening: helper is non-blocking, recursion-guarded, and wired into start.bat');
 }
 
@@ -80,8 +83,17 @@ import fs from 'node:fs';
   // ④ 只读工具必须还在（别把整个 server 删空）
   assert.ok(host.includes("'snowluma_status'"), 'snowluma_status（只读探活）必须保留');
   // ⑤ 包元数据必须声明许可证（独立复核发现此前缺失）
+  // 断言具体值而不是"非空"：许可从 MIT 改成 PolyForm Noncommercial 是刻意的决定，
+  // 写死值才能在有人误改回去时立刻发现。
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-  assert.equal(pkg.license, 'MIT', 'package.json 必须声明 license 字段');
+  assert.equal(pkg.license, 'PolyForm-Noncommercial-1.0.0',
+    'package.json 的 license 必须是本仓库实际使用的许可（PolyForm Noncommercial 1.0.0，见 NOTICE.md）');
+  // 随仓库分发的子包也不能各自声明 MIT（曾与根清单冲突，见 NOTICE.md §1.3）。
+  for (const rel of ['plugins/qq-agent-presets/package.json', 'plugins/qq-mode-console/package.json']) {
+    const sub = JSON.parse(fs.readFileSync(path.join(root, rel), 'utf8'));
+    assert.equal(sub.license, 'PolyForm-Noncommercial-1.0.0',
+      `${rel} 的 license 必须与根清单一致（PolyForm Noncommercial 1.0.0）`);
+  }
   console.log('L6 compliance: no SnowLuma process control, no allowProcessControl, license declared');
 }
 

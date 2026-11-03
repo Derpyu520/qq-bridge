@@ -1,0 +1,54 @@
+name: 功能建议
+description: 想要一个新能力，或想改现有行为
+title: "[feat] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        建议先看一眼 [RULES.md](https://github.com/Derpyu520/qq-bridge/blob/main/RULES.md)
+        里的设计不变量（尤其是 L6「只探测不部署」和 L7「QQ 会话不得拥有本地执行能力」）——
+        与这两条冲突的提议不会被接受。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你想解决什么问题
+      description: 先说场景和痛点，不要一上来就说"加个 XX 配置项"
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 你设想的做法
+      description: 有具体方案就写；没有也没关系，说清问题就够了
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 你试过的替代方案
+      description: 现有配置/工具里有没有能凑合的办法，为什么不够
+    validations:
+      required: false
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: 影响面
+      options:
+        - 只影响我自己的部署（配置项 / 文档）
+        - 会影响所有使用者（默认行为变更）
+        - 不确定
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: willing
+    attributes:
+      label: 你愿意自己提 PR 吗
+      options:
+        - label: 愿意，我可以按 CONTRIBUTING.md 提 PR
+          required: false

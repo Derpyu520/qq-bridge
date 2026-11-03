@@ -109,7 +109,7 @@ console.log('## 4. bundle 声明与安全边界');
   canonicalMod.apply({ tools: { restrict: ({ deny }) => restricted.push(...deny), guard: (fn) => { guardFn = fn; } } });
   ok(restricted.includes('pwsh') && restricted.includes('dev_install_package'), 'restrict 名单含本地执行面与开发注入器工具');
   for (const name of ['ask_user_question', 'todo_write', 'mcp__snowluma__qq_send_message', 'mcp__web-search-safe__web_fetch']) {
-    assert.equal(guardFn({ name }), undefined, `白名单应放行 ${name}`);
+    assert.equal(guardFn({ name, agent: { id: 'qqb-g-1' }, arguments: { key: 'group:1' } }), undefined, `白名单应放行 ${name}`);
   }
   ok(true, '白名单放行 QQ MCP 与无害模型侧工具');
   let deniedAll = true;
