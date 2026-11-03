@@ -35,7 +35,7 @@ function call(port, pathname, { method = 'GET', headers = {}, body, connectHost 
         res.on('end', () => {
           let parsed = null;
           try { parsed = JSON.parse(data); } catch {}
-          resolve({ status: res.statusCode, body: parsed });
+          resolve({ status: res.statusCode, body: parsed, text: data });
         });
       },
     );
@@ -203,6 +203,26 @@ console.log('## /api/console/access');
 
     r = await call(port, '/api/console/access', { method: 'POST', body: { consoleHost: '10.0.0.1' } });
     ok(r.status === 401, '无控制台令牌 → 401', `HTTP ${r.status}`);
+    ok(r.body?.code === 'console-token-missing', '未带令牌 → code=console-token-missing', JSON.stringify(r.body));
+
+    // 令牌错误要和「没带令牌」分开：前端据此提示「令牌错误，请重新输入」。
+    r = await call(port, '/api/console/access', { method: 'POST', headers: { 'x-console-token': 'wrong-token-wrong-token' }, body: { consoleHost: '10.0.0.1' } });
+    ok(r.status === 401 && r.body?.code === 'console-token-invalid', '令牌错误 → code=console-token-invalid', JSON.stringify(r.body));
+    ok(/令牌错误/.test(r.body?.error || ''), '错误文案明确指出是令牌错误', String(r.body?.error));
+    ok(readCfg().consoleHost === '192.168.1.10', '令牌错误的请求没有改到配置', String(readCfg().consoleHost));
+
+    // 登录页：GET / 未通过鉴权时返回表单页，而不是一句 JSON 或 prompt()。
+    const loginMissing = await call(port, '/');
+    ok(loginMissing.status === 401 && /需要控制台令牌/.test(loginMissing.text || ''), 'GET / 无令牌 → 登录页（需要令牌）', `HTTP ${loginMissing.status}`);
+    ok(/name="token"/.test(loginMissing.text || ''), '登录页是令牌表单', '');
+    const loginInvalid = await call(port, '/?token=definitely-wrong-token');
+    ok(loginInvalid.status === 401 && /控制台令牌错误/.test(loginInvalid.text || ''), 'GET / 令牌错误 → 登录页（令牌错误）', `HTTP ${loginInvalid.status}`);
+    ok(!/definitely-wrong-token/.test(loginInvalid.text || ''), '登录页不回显用户输入的令牌', '');
+
+    // 通过 ?token= 引导进入时不再被鉴权层拦下（夹具没有 public/console.html，所以只断言
+    // 「不是登录页」；真实页面内容由 test-console-static / test-console 覆盖）。
+    const loginOk = await call(port, '/?token=fixture-console-token');
+    ok(loginOk.status === 200 && !/需要控制台令牌|控制台令牌错误/.test(loginOk.text || ''), '正确令牌 → 不再返回登录页', `HTTP ${loginOk.status}`);
 
     r = await call(port, '/api/console/access', { method: 'POST', headers: ADMIN, body: { consoleHost: '' } });
     ok(r.status === 200 && r.body.consoleHost === '', '清除（留空 = 只监听回环）成功', JSON.stringify(r.body));

@@ -211,6 +211,59 @@ function atomicWriteText(file, text) {
   }
 }
 
+/**
+ * 控制台登录页（未通过鉴权时 GET / 返回）。
+ *
+ * 为什么不用 `prompt()`：`prompt()` 里输错一次就只留下一个空对话框，既说不清
+ * 「是没填令牌」还是「令牌填错了」，也没法回显当前地址/提示。这里用一个最小
+ * 表单页：把原因写在标题下，输错后由服务端再返回同一页并标红。
+ *
+ * 令牌通过 `?token=` 带回控制台：控制台脚本会把它写进 localStorage 并
+ * `history.replaceState` 抹掉 URL，所以刷新/重开不用再输一次。
+ */
+function consoleLoginPage(reason) {
+  const invalid = reason === 'invalid';
+  const title = invalid ? '控制台令牌错误' : '需要控制台令牌';
+  const hint = invalid
+    ? '刚才填的令牌不对。请重新输入访问令牌。'
+    : '这个控制台启用了访问鉴权，请输入访问令牌。';
+  // 登录页自身不引入任何外部资源；错误原因只来自两个内部常量，不会把用户输入
+  // 回显进 HTML（避免在登录页制造反射型 XSS）。
+  return `<!doctype html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>${title}</title>
+<style>
+:root{color-scheme:light dark}
+body{margin:0;min-height:100vh;display:grid;place-items:center;font:14px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;background:#0f1115;color:#e6e8ee}
+form{width:min(360px,calc(100vw - 48px));background:#171a21;border:1px solid #2a2f3a;border-radius:14px;padding:22px}
+h1{margin:0 0 6px;font-size:17px}
+p{margin:0 0 16px;color:#9aa3b2;font-size:13px}
+p.err{color:#ff8a8a}
+input{width:100%;box-sizing:border-box;padding:10px 12px;border-radius:9px;border:1px solid #333a47;background:#0f1115;color:inherit;font-size:14px}
+input:focus{outline:2px solid #4a6cf7;outline-offset:1px;border-color:transparent}
+button{margin-top:12px;width:100%;padding:10px 12px;border:0;border-radius:9px;background:#4a6cf7;color:#fff;font-size:14px;cursor:pointer}
+button:disabled{opacity:.6;cursor:default}
+small{display:block;margin-top:12px;color:#6f7887;font-size:12px}
+</style></head>
+<body>
+<form method="get" action="/" autocomplete="on">
+  <h1>${title}</h1>
+  <p${invalid ? ' class="err"' : ''}>${hint}</p>
+  <input name="token" type="password" autocomplete="current-password" spellcheck="false" autofocus required aria-label="控制台访问令牌" placeholder="访问令牌">
+  <button type="submit">进入控制台</button>
+  <small>令牌只保存在这台浏览器里；刷新或重新打开都不用再输入。令牌可在 config.json 的 consoleToken 或 state/console-token 里查看。</small>
+</form>
+<script>
+// 输错的令牌不要留在地址栏/历史记录里（也避免刷新时自动重放）。
+// 表单用 GET 提交到 /，成功时由控制台脚本接管这个参数。
+if (location.search) history.replaceState({}, '', '/');
+</script>
+</body></html>`;
+}
+
 // 控制台鉴权 token：未配置时自动生成并持久化到 state/console-token，避免默认无鉴权。
 function loadOrCreateConsoleToken() {
   const tokenFile = path.join(STATE_DIR, 'console-token');
@@ -3903,11 +3956,20 @@ async function main() {
         return crypto.timingSafeEqual(a, b);
       })();
       if (consoleToken && !tokenMatches) {
+        // 把「没带令牌」和「令牌不对」分开：前端据此提示「请登录」还是「令牌错误」，
+        // 而不是统一丢一句「未授权」让人猜。code 是稳定契约，error 才是给人看的文案。
+        const missing = !suppliedToken;
         if (req.method === 'GET' && url.pathname === '/') {
           res.writeHead(401, { 'content-type': 'text/html; charset=utf-8', ...SECURITY_HEADERS });
-          res.end('<!doctype html><meta charset="utf-8"><title>需要令牌</title><script>const t=prompt(\'请输入控制台访问令牌\');if(t)location.href=\'/?token=\'+encodeURIComponent(t);</script>');
+          res.end(consoleLoginPage(missing ? 'missing' : 'invalid'));
         } else {
-          sendJson({ ok: false, error: '未授权：请提供控制台访问令牌' }, 401);
+          sendJson({
+            ok: false,
+            code: missing ? 'console-token-missing' : 'console-token-invalid',
+            error: missing
+              ? '未提供控制台令牌：请先登录控制台'
+              : '控制台令牌错误：请重新输入访问令牌',
+          }, 401);
         }
         return;
       }

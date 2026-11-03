@@ -76,6 +76,8 @@
 | 对外监听必须配显式令牌 | `startConsoleServer()` | `consoleHost` 非空但 `config.consoleToken` 未设置（或不合法）时**不开对外监听器**：自动生成的令牌只适合「只有本机能碰到控制台」的场景，它落在 `state/console-token`、靠文件系统权限兜底，一旦对外暴露这个前提就不成立。失败关闭（暴露更少才是安全的那一侧），本机回环控制台照常可用 |
 | 对外监听地址校验 | `normalizeConsoleHost()` + `/api/console/access` | 接受具体 IP、主机名（RFC 1123 标签）、`0.0.0.0` / `::`，或留空；带端口、下划线、空标签、首尾连字符、空格一律 400 拒绝。配置项非法时**退化成只监听回环**，而不是让整个桥接起不来 |
 | 令牌门 | 请求最前面 | **所有**路由（读+写）都要 `x-console-token` 或 `?token=`；未配置时启动自动生成 192 bit 随机值 |
+| 鉴权持久化 | 控制台前端 `CONSOLE_TOKEN_KEY` | 令牌存在浏览器 `localStorage`：`?token=` 引导或登录弹层输入后写入，刷新 / 重开 / 新标签页自动沿用。**只有**服务端明确返回 `console-token-invalid` 时才清除；网络抖动、服务重启造成的临时 401 不清除，避免「重启一次就要重新登录」。提供「退出登录」显式清除 |
+| 鉴权失败提示 | `consoleLoginPage()` + `requireConsoleToken()` | 401 带稳定原因码：`console-token-missing`（没带令牌）与 `console-token-invalid`（令牌错误），文案分别提示「请先登录」与「令牌错误，请重新输入」。未通过鉴权的 `GET /` 返回登录表单页（不回显用户输入，URL 里的 `?token=` 会被抹掉），不再使用 `prompt()` |
 | 定长比较 | `crypto.timingSafeEqual` | 比较前先比长度，避免 `!==` 短路带来的时延侧信道 |
 | Host 校验 | 请求最前面 | 按**监听器**分别判定：回环监听器只接受 `127.0.0.1:<port>` / `localhost:<port>` / `[::1]:<port>`，否则 403（DNS rebinding 硬化）；对外监听器放行配置里那个地址本身（IP 或主机名）。绑 `0.0.0.0` / `::` 时来路的本机地址与 Host 都可能是任意值，唯一门槛变成控制台令牌（而对外监听强制要求显式令牌）。判定依据是 `req.socket.localAddress` —— 所以「开了对外监听」不会顺带放松回环那条路 |
 | CSRF | 非 GET 请求 | 必须 `content-type: application/json`；若带 `Origin`，其 host 必须等于本机（配置了 `consoleHost` 时含该地址） |

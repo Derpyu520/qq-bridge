@@ -48,6 +48,17 @@ ok(/getElementById\('consoleHostClear'\)\.addEventListener/.test(html), '清除�
 ok(/api\('\/api\/console\/access'/.test(html), '面板调用 /api/console/access');
 ok(/refreshConsoleAccess\(\)/.test(html), 'refreshConsoleAccess 已定义并被调用');
 
+console.log('## 控制台鉴权（持久化 + 错误提示）');
+ok(/const CONSOLE_TOKEN_KEY = 'consoleToken'/.test(html), '令牌存储键集中定义');
+ok(/function storedConsoleToken\(\)/.test(html) && /localStorage\.getItem\(CONSOLE_TOKEN_KEY\)/.test(html), 'api() 从 localStorage 读取令牌');
+ok(/console-token-invalid/.test(html), '识别「令牌错误」的 401 原因码');
+ok(/console-token-missing|missing \? 'invalid'|invalid \? 'invalid'/.test(html), '区分「没带令牌」与「令牌错误」');
+ok(/function requireConsoleToken\(/.test(html), '未授权时走登录弹层而不是 prompt()');
+ok(!/(^|[^.\w])prompt\('请输入控制台访问令牌/.test(html), '不再用 prompt() 收集令牌');
+ok(/id="consoleTokenForget"/.test(html) && /forgetConsoleToken\(\)/.test(html), '提供「退出登录」（清除本机令牌）');
+ok(/id="consoleTokenState"/.test(html) && /refreshConsoleTokenState\(\)/.test(html), '明确显示本机是否已保存令牌');
+ok(/localStorage\.removeItem\(CONSOLE_TOKEN_KEY\)/.test(html), '只有令牌错误时才清除已保存令牌');
+
 console.log('## JS 语法');
 const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/gi)].map((m) => m[1]);
 const big = scripts.sort((a, b) => b.length - a.length)[0];
