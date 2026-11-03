@@ -530,25 +530,47 @@ try {
     await page.waitForFunction(() => document.getElementById('roleInjectMaxMsg').textContent.includes('6000'));
   });
 
-  if (!original) await test('思考强度：档位来自 DSH、默认 max、可切换并明示全局副作用', async () => {
+  if (!original) await test('思考强度：支持 DSH 自定义档位与显式不下发，默认 max 不变', async () => {
     await navigate('overview');
     await page.waitForFunction(() => document.getElementById('dshEffortSelect').options.length > 0);
     const options = await page.locator('#dshEffortSelect option').evaluateAll((nodes) => nodes.map((n) => n.value));
-    assert.deepEqual(options, ['low', 'high', 'max'], `档位应来自 DSH 公布的能力，实际 ${options.join(',')}`);
+    assert.deepEqual(options, ['low', 'medium', 'high', 'max', 'none'], `档位应来自 DSH 公布的能力，实际 ${options.join(',')}`);
+    assert.match(await page.locator('#dshEffortSelect option[value="none"]').textContent(), /不指定/);
     assert.equal(await page.locator('#dshEffortSelect').inputValue(), 'max', '默认应为 max');
     assert.match(await page.locator('#dshEffortSideEffect').textContent(), /全局默认/, '必须说明会连带改 DSH 全局默认');
-    await page.locator('#dshEffortSelect').selectOption('high');
+    await page.locator('#dshEffortSelect').selectOption('medium');
     const [saved] = await Promise.all([
       page.waitForResponse(r => new URL(r.url()).pathname === '/api/dsh/effort' && r.request().method() === 'POST'),
       page.locator('#dshEffortSave').click(),
     ]);
     assert.equal(saved.status(), 200);
-    assert.equal((await saved.json()).reasoningEffort, 'high');
-    assert.match(await page.locator('#dshEffortMsg').textContent(), /high/);
+    assert.equal((await saved.json()).reasoningEffort, 'medium');
+    assert.match(await page.locator('#dshEffortMsg').textContent(), /medium/);
+    await page.locator('#dshEffortSelect').selectOption('none');
+    const [noneSaved] = await Promise.all([
+      page.waitForResponse(r => new URL(r.url()).pathname === '/api/dsh/effort' && r.request().method() === 'POST'),
+      page.locator('#dshEffortSave').click(),
+    ]);
+    assert.equal(noneSaved.status(), 200);
+    assert.equal((await noneSaved.json()).reasoningEffort, 'none');
     // 改回默认，避免影响后续断言
     await page.locator('#dshEffortSelect').selectOption('max');
     await page.locator('#dshEffortSave').click();
     await page.waitForFunction(() => document.getElementById('dshEffortSelect').value === 'max');
+    await page.route('**/api/dsh/model', (route) => route.fulfill({ json: {
+      provider: 'fixture-provider', model: 'fixture-model', reasoningEffort: 'legacyHigh',
+      options: ['low', 'none'], labels: {}, default: 'max', providerDefault: 'low', catalogSource: 'dsh', globalSideEffect: true,
+    } }));
+    try {
+      await page.evaluate(() => refreshDshModel());
+      const current = page.locator('#dshEffortSelect option[value="legacyHigh"]');
+      assert.equal(await current.count(), 1);
+      assert.match(await current.textContent(), /当前配置，目录未列出/);
+      assert.equal(await page.locator('#dshEffortSelect').inputValue(), 'legacyHigh');
+    } finally {
+      await page.unroute('**/api/dsh/model');
+      await page.evaluate(() => refreshDshModel());
+    }
   });
 
   if (artifacts) {
