@@ -1,7 +1,7 @@
 {
   "label": "记录",
   "key": "records",
-  "landing": "adaptation/dsh-0.2.1.html",
+  "landing": "index.html",
   "order_priority": 30,
   "sections": [
     {

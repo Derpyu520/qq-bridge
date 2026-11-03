@@ -20,12 +20,14 @@ docs/
 ├── pages/
 │   ├── use/                # tab 使用指南 — for people who run the bot; flat
 │   ├── dev/                # tab Developer Guide — for people who change or review the code
+│   │   ├── index.html      #   tab landing: what each section holds
 │   │   ├── core/           #   the spine: blueprint · architecture · codebase-map · glossary
 │   │   ├── design-docs/    #   one page per mechanism in src/
 │   │   ├── security/       #   threat model · baseline · privacy scan · release checks · reporting
 │   │   ├── contributing/   #   setup · testing · pull requests · DSH upgrade checklist
 │   │   └── tmp/            #   discussion / proposal pages — gitignored, local dev server only
 │   └── records/            # tab 记录 — dated, frozen once written
+│       ├── index.html      #   tab landing
 │       ├── adaptation/     #   DSH version adaptation records
 │       └── reviews/        #   reviews of the repo on a given day
 ├── 404.html

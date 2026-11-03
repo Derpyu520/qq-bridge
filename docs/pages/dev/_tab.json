@@ -1,7 +1,7 @@
 {
   "label": "Developer Guide",
   "key": "dev",
-  "landing": "core/codebase-map.html",
+  "landing": "index.html",
   "order_priority": 20,
   "sections": [
     {

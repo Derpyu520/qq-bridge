@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>架构 — qq-bridge</title>
+<meta name="description" content="qq-bridge 由哪些进程组成、一条 QQ 消息怎么走到模型、回复怎么回到 QQ。as of 2026-11-03，对照上游 dev b80fa51 的代码。行内出处写作 文件 · 函数 ，未标文件的函数都在 src/bridge.js 。">
+<meta property="og:title" content="架构 — qq-bridge">
+<meta property="og:description" content="qq-bridge 由哪些进程组成、一条 QQ 消息怎么走到模型、回复怎么回到 QQ。as of 2026-11-03，对照上游 dev b80fa51 的代码。行内出处写作 文件 · 函数 ，未标文件的函数都在 src/bridge.js 。">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../../assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+<style>
+/* architecture page (pages/dev/core/architecture.html) */
+.ar-doc{--ar-line:#d9d7cf;--ar-card:#fffefb;--ar-soft:#f3f1ea;--ar-mute:#6b6b66;--ar-acc:#2f5d9a}
+html[data-theme="dark"] .ar-doc{--ar-line:#3a3a40;--ar-card:#1e1e22;--ar-soft:#24242a;--ar-mute:#9a9a94;--ar-acc:#7fa8e0}
+.ar-doc .lede{color:var(--ar-mute)}
+.ar-doc .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:1em 0 1.4em}
+.ar-doc .cards.three{grid-template-columns:repeat(3,1fr)}
+.ar-doc .cards.two{grid-template-columns:repeat(2,1fr)}
+@media (max-width:760px){.ar-doc .cards,.ar-doc .cards.three,.ar-doc .cards.two{grid-template-columns:1fr}}
+.ar-doc .card{background:var(--ar-card);border:1px solid var(--ar-line);border-radius:6px;padding:10px 13px}
+.ar-doc .card .k{font-size:.75rem;letter-spacing:.05em;color:var(--ar-mute);font-weight:700}
+.ar-doc .card .big{font-size:1.2rem;font-weight:700;margin:.1em 0}
+.ar-doc .card p{font-size:.88rem;margin:.25em 0 0}
+.ar-doc .card.main{border-color:var(--ar-acc)}
+.ar-doc .cite{color:var(--ar-mute);font-size:.85em}
+.ar-doc details.fold{border:1px solid var(--ar-line);border-radius:6px;margin:.7em 0;background:var(--ar-card)}
+.ar-doc details.fold>summary{cursor:pointer;padding:8px 12px;font-weight:600}
+.ar-doc details.fold>div{padding:0 12px 10px}
+.ar-doc td code,.ar-doc li code{white-space:nowrap}
+/* diagram */
+.ar-doc .dg{--dg-ink:#1f2328;--dg-mute:#6b6b66;--dg-line:#cfcdc4;--dg-card:#fffefb;--dg-call:#f1ecf6;--dg-ker:#eef2f7;--dg-api:#f6efe4;--dg-blu:#2f5d9a;margin:.4em 0 1.6em}
+html[data-theme="dark"] .ar-doc .dg{--dg-ink:#e6e6e3;--dg-mute:#9a9a94;--dg-line:#45454b;--dg-card:#1c1c20;--dg-call:#272130;--dg-ker:#202631;--dg-api:#2c261d;--dg-blu:#7fa8e0}
+.ar-doc .dg svg{width:100%;height:auto;display:block}
+.ar-doc .dg text{fill:var(--dg-ink);font-family:ui-sans-serif,system-ui,sans-serif;font-size:13px}
+.ar-doc .dg .h{font-weight:700;font-size:12px;letter-spacing:.08em}
+.ar-doc .dg .life{fill:var(--dg-mute);font-size:11.5px}
+.ar-doc .dg .t{font-weight:700;font-size:14px}
+.ar-doc .dg .c{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px}
+.ar-doc .dg .d{fill:var(--dg-mute);font-size:11.5px}
+.ar-doc .dg .lk{fill:var(--dg-blu);font-size:11.5px;paint-order:stroke;stroke:var(--bg,#fafaf7);stroke-width:5px;stroke-linejoin:round}
+.ar-doc .dg .band{stroke:var(--dg-line);stroke-width:1.2}
+.ar-doc .dg .call{fill:var(--dg-call)} .ar-doc .dg .ker{fill:var(--dg-ker)} .ar-doc .dg .api{fill:var(--dg-api)}
+.ar-doc .dg .box{fill:var(--dg-card);stroke:var(--dg-line);stroke-width:1.2}
+.ar-doc .dg .abc{fill:var(--dg-card);stroke:var(--dg-ink);stroke-width:1.6}
+.ar-doc .dg .ar{stroke:var(--dg-ink);stroke-width:1.4;fill:none;marker-end:url(#ar-a)}
+.ar-doc .dg .ar2{stroke:var(--dg-blu);stroke-width:1.6;fill:none;marker-end:url(#ar-b)}
+.ar-doc .dg .ar3{stroke:var(--dg-mute);stroke-width:1.2;fill:none;stroke-dasharray:5 4;marker-end:url(#ar-c)}
+.ar-doc .dg .m{fill:var(--dg-ink)} .ar-doc .dg .m2{fill:var(--dg-blu)} .ar-doc .dg .m3{fill:var(--dg-mute)}
+@media (max-width:760px){.ar-doc .dg{overflow-x:auto}.ar-doc .dg svg{min-width:720px}}
+</style>
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="../../../" data-tab="Developer Guide" data-page-rel="pages/dev/core/architecture.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../../../index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout has-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body architecture">
+  <div class="topbar">
+  <div class="crumbs">
+    <a href="../../../index.html">qq-bridge</a>
+    <span class="sep">/</span>
+    Pages
+    <span class="sep">/</span>
+    <a href="../index.html">Developer Guide</a>
+    <span class="sep">/</span>
+    Core
+    <span class="sep">/</span>
+    <span class="here">架构</span>
+  </div>
+</div>
+  <div class="ar-doc">
+<h1>架构</h1>
+<p class="lede">qq-bridge 由哪些进程组成、一条 QQ 消息怎么走到模型、回复怎么回到 QQ。as of 2026-11-03，对照上游 <code>dev</code> b80fa51 的代码。行内出处写作 <code>文件 · 函数</code>，未标文件的函数都在 <code>src/bridge.js</code>。</p>
+
+<div class="dg">
+<svg viewBox="0 0 1000 520" role="img" aria-label="qq-bridge 组件与消息流">
+  <defs>
+    <marker id="ar-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="m" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="ar-b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="m2" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="ar-c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="m3" d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs>
+
+  <rect class="band api" x="10" y="10" width="200" height="440" rx="8"/>
+  <text class="h" x="24" y="34">QQ 侧</text>
+  <text class="life" x="24" y="52">不归本项目管，独立运行</text>
+  <rect class="box" x="26" y="70" width="168" height="48" rx="5"/>
+  <text class="t" x="40" y="92">QQ 客户端</text>
+  <text class="d" x="40" y="109">真实 QQ 账号</text>
+  <rect class="abc" x="26" y="160" width="168" height="104" rx="5"/>
+  <text class="t" x="40" y="183">SnowLuma</text>
+  <text class="d" x="40" y="201">OneBot v11 实现</text>
+  <text class="c" x="40" y="224">WS   :3001  事件</text>
+  <text class="c" x="40" y="244">HTTP :3000  动作</text>
+
+  <rect class="band call" x="260" y="10" width="350" height="440" rx="8"/>
+  <text class="h" x="274" y="34">QQ-BRIDGE 进程</text>
+  <text class="life" x="274" y="52">node src/bridge.js · 单实例锁 state/bridge.lock</text>
+  <rect class="box" x="276" y="66" width="318" height="52" rx="5"/>
+  <text class="t" x="290" y="88">handleIncoming</text>
+  <text class="d" x="290" y="107">白名单 · 模式门 · 管理命令 · 按模式分流</text>
+  <rect class="box" x="276" y="134" width="318" height="52" rx="5"/>
+  <text class="t" x="290" y="156">deliverPrompt · sendWakePromptV2</text>
+  <text class="d" x="290" y="175">按会话 FIFO 投递 / 二代唤醒调度</text>
+  <rect class="box" x="276" y="202" width="318" height="52" rx="5"/>
+  <text class="t" x="290" y="224">pumpMux</text>
+  <text class="d" x="290" y="243">读 events.mux：回合文本、提问、审批</text>
+  <rect class="box" x="276" y="270" width="318" height="52" rx="5"/>
+  <text class="t" x="290" y="292">auditAndSend → sendToQQ</text>
+  <text class="d" x="290" y="311">敏感信息拦截 · 分段 · 经 WS 发出</text>
+  <rect class="abc" x="276" y="338" width="318" height="52" rx="5"/>
+  <text class="t" x="290" y="360">控制台 + agent API</text>
+  <text class="d" x="290" y="379">127.0.0.1:3100 · 发送端点走 onebotSend（HTTP）</text>
+  <rect class="box" x="276" y="404" width="318" height="36" rx="5"/>
+  <text class="c" x="290" y="427">state/  sessions.json · token-usage.jsonl …</text>
+
+  <rect class="band ker" x="660" y="10" width="330" height="440" rx="8"/>
+  <text class="h" x="674" y="34">DSH WEB</text>
+  <text class="life" x="674" y="52">DeepSeek Harness · 默认 :3080，可自动发现</text>
+  <rect class="abc" x="670" y="66" width="310" height="52" rx="5"/>
+  <text class="t" x="684" y="88">Web API</text>
+  <text class="d" x="684" y="107">sessions · events.mux · settings</text>
+  <rect class="box" x="670" y="134" width="310" height="52" rx="5"/>
+  <text class="t" x="684" y="156">qq-agent-presets</text>
+  <text class="d" x="684" y="175">qq-chat / qq-chat-v2 + 守卫 qq-tool-restrict</text>
+  <rect class="box" x="670" y="202" width="310" height="52" rx="5"/>
+  <text class="t" x="684" y="224">qq-mode-console</text>
+  <text class="d" x="684" y="243">设置命名空间 qq-mode：模式、ownerQQ</text>
+  <rect class="box" x="670" y="270" width="310" height="52" rx="5"/>
+  <text class="t" x="684" y="292">MCP server × 3（DSH spawn）</text>
+  <text class="d" x="684" y="311">snowluma · snowluma-host · web-search-safe</text>
+  <rect class="box" x="670" y="338" width="310" height="52" rx="5"/>
+  <text class="t" x="684" y="360">模型服务</text>
+  <text class="d" x="684" y="379">provider / model 由 config.dsh 指定</text>
+
+  <path class="ar3" d="M110,118 L110,158"/>
+  <path class="ar2" d="M194,198 L274,96"/>
+  <path class="ar2" d="M435,118 L435,132"/>
+  <path class="ar2" d="M594,164 L668,88"/>
+  <path class="ar2" d="M668,108 L596,226"/>
+  <path class="ar2" d="M435,254 L435,268"/>
+  <path class="ar2" d="M276,298 L196,232"/>
+  <path class="ar" d="M276,364 L196,254"/>
+  <path class="ar" d="M670,300 L596,364"/>
+  <path class="ar3" d="M825,322 L825,336"/>
+  <path class="ar3" d="M825,390 L825,480 L110,480 L110,266"/>
+  <text class="lk" x="235" y="150" text-anchor="middle">事件</text>
+  <text class="lk" x="631" y="122" text-anchor="middle">prompt</text>
+  <text class="lk" x="634" y="178" text-anchor="middle">事件流</text>
+  <text class="lk" x="235" y="270" text-anchor="middle">send_*</text>
+  <text class="lk" x="230" y="326" text-anchor="middle">HTTP</text>
+  <text class="lk" x="633" y="326" text-anchor="middle">发送</text>
+  <text class="lk" x="633" y="341" text-anchor="middle">/api/*</text>
+  <text class="d" x="300" y="500">snowluma 的只读工具（登录信息、群列表、群消息历史）直连 OneBot HTTP</text>
+</svg>
+</div>
+
+<div class="cards">
+  <div class="card main"><div class="k">进程</div><div class="big">3 个</div><p>SnowLuma、qq-bridge、DSH Web 各自独立运行；桥接不启动、不控制另外两个。</p></div>
+  <div class="card"><div class="k">端口</div><div class="big">3000 · 3001 · 3080 · 3100</div><p>OneBot HTTP · OneBot WS · DSH Web · 本地控制台。</p></div>
+  <div class="card"><div class="k">模式</div><div class="big">4 种</div><p><code>chat</code> · <code>closed-agent</code> · <code>reserved</code> · <code>reserved2</code>，真值存在 DSH 的 <code>qq-mode</code> 设置里。</p></div>
+  <div class="card"><div class="k">MCP server</div><div class="big">3 个</div><p>由 DSH 按 profile 的 <code>cordis.patch.yml</code> spawn，代码在本仓库 <code>src/</code>。</p></div>
+</div>
+
+<h2 id="components">组件</h2>
+<table>
+<thead><tr><th>组件</th><th>是什么</th><th>谁启动</th><th>代码</th></tr></thead>
+<tbody>
+<tr><td>qq-bridge 主进程</td><td>收 SnowLuma 事件、维护每个 QQ 会话对应的 DSH 会话、把回复发回 QQ；内含本地控制台和给 MCP 用的 agent API</td><td><code>npm start</code> 或 <code>start.bat</code> 守护</td><td><code>src/bridge.js · main</code></td></tr>
+<tr><td>SnowLuma</td><td>OneBot v11 实现，桥接通过 WS 收事件、通过 SDK 或 HTTP 发动作</td><td>用户自行安装运行</td><td>依赖 <code>@snowluma/sdk</code></td></tr>
+<tr><td>DSH Web</td><td>运行 agent 会话、调模型、执行工具；桥接用它的 Web API</td><td>用户自行运行</td><td><code>src/dsh-client.js · NodeApiClient</code></td></tr>
+<tr><td>bundle <code>qq-agent-presets</code></td><td>装进 DSH profile 的两个 preset（<code>qq-chat</code>、<code>qq-chat-v2</code>）和两者共用的工具守卫</td><td><code>scripts/setup-dsh.mjs</code> 安装，DSH 加载</td><td><code>plugins/qq-agent-presets/</code>，源在 <code>dsh/agent-presets/</code></td></tr>
+<tr><td>bundle <code>qq-mode-console</code></td><td>在 DSH 里注册设置命名空间 <code>qq-mode</code>，模式和 ownerQQ 存在这里</td><td>同上</td><td><code>plugins/qq-mode-console/</code></td></tr>
+<tr><td>MCP <code>snowluma</code></td><td>给模型的 QQ 工具：只读工具直连 OneBot HTTP，发送工具调桥接的 <code>/api/send/*</code>、<code>/api/socialV2/*</code></td><td>DSH 的 MCP 客户端 spawn</td><td><code>src/mcp-snowluma-safe.js</code></td></tr>
+<tr><td>MCP <code>snowluma-host</code></td><td>SnowLuma 网关状态查询</td><td>同上</td><td><code>src/mcp-host-server.js</code></td></tr>
+<tr><td>MCP <code>web-search-safe</code></td><td>联网搜索与只读抓取</td><td>同上</td><td><code>src/mcp-web-search-safe.js</code></td></tr>
+<tr><td>控制台页面</td><td>浏览器里的管理界面，由主进程在 <code>/</code> 提供</td><td>主进程</td><td><code>public/console.html</code>，<code>startConsoleServer</code></td></tr>
+</tbody>
+</table>
+<p>三个 MCP server 由 <code>setup-dsh.mjs</code> 写进 DSH profile 的 <code>cordis.patch.yml</code>（<code>MANAGED_MCP_IDS</code>），DSH 用 <code>@deepseek-ai/dsh-mcp-client</code> 以 <code>node &lt;仓库&gt;/src/…</code> 的命令行启动它们，所以它们和主进程是不同的进程。</p>
+
+<h2 id="inbound">一条消息怎么进来</h2>
+<p>SnowLuma 的 WS 事件由 <code>main</code> 里注册的回调接住：私聊、群聊交给 <code>handleIncoming</code>，拍一拍交给 <code>handlePokeNotice</code>，撤回交给 <code>handleRecallNotice</code>；机器人自己发的消息在回调里先被丢掉。<code>handleIncoming</code> 依次做：</p>
+<table>
+<thead><tr><th>步骤</th><th>做什么</th><th>出处</th></tr></thead>
+<tbody>
+<tr><td>准入</td><td>会话 key（<code>group:群号</code> / <code>private:QQ号</code>）先过白名单与当前模式，再过忽略名单</td><td><code>modeAllowed</code> · <code>allowed</code> · <code>isSessionAllowedInCurrentMode</code></td></tr>
+<tr><td>解析</td><td>消息段转成两份文本：带引用信息的给模型，只含本条文字的用来判命令；同时抽出图片等媒体</td><td><code>segmentsToText</code> · <code>extractMediaFromSegments</code></td></tr>
+<tr><td>挂起回答</td><td>该会话有 agent 的提问或审批在等时，管理员这条消息当作回答；群友消息不会被吞</td><td><code>handlePendingAnswer</code></td></tr>
+<tr><td>管理命令</td><td>以 <code>/</code> 开头且发送者是 <code>ownerQQ</code> 时由桥接直接执行（如 <code>/role</code>），不经过模型；其余 <code>/</code> 内容原样交给 DSH</td><td><code>handleIncoming</code> 内联</td></tr>
+<tr><td>分流</td><td>按模式走三条路之一，见下表</td><td></td></tr>
+</tbody>
+</table>
+<div class="cards three">
+  <div class="card"><div class="k">chat · closed-agent</div><p>拼上角色提示，进按会话 FIFO 的投递队列，<code>deliverPrompt</code> 调 <code>sessions.prompt</code>。模型回合结束时的文字由桥接自动发回 QQ。<code>closed-agent</code> 只放行管理员私聊。</p></div>
+  <div class="card"><div class="k">reserved（一代仿真）</div><p>同样走投递队列，但先过一个观望 / 活跃 / 试探 / 退场的状态机决定何时投递、投递什么；回合文字同样自动发回。<span class="cite"><code>isSocialEnabled</code> · <code>scheduleSocialReply</code></span></p></div>
+  <div class="card"><div class="k">reserved2（二代仿真）</div><p>消息只记进本地会话流水，由唤醒调度决定何时叫醒模型。模型的文字输出<b>不会</b>自动发送，要说话必须调 MCP 工具。<span class="cite"><code>appendSocialV2Message</code> · <code>scheduleWakeV2</code> · <code>sendWakePromptV2</code></span></p></div>
+</div>
+
+<h2 id="dsh">和 DSH 怎么对接</h2>
+<div class="cards two">
+  <div class="card"><div class="k">会话</div><p>每个 QQ 会话对应一个 DSH 会话，映射存在 <code>state/sessions.json</code>。建会话时挂到同一个 workspace，必须带上当前模式的 preset，并预分配一个把 QQ 会话 key 编码进去的 sessionId。<span class="cite"><code>ensureSession</code> · <code>modePreset</code></span></p></div>
+  <div class="card"><div class="k">事件</div><p>主进程常驻读 <code>events.mux</code>：<code>turn/start</code> 建回合收集器，回合结束时取文本；<code>question/requested</code>、<code>approval/requested</code> 转成发给管理员的 QQ 消息并登记挂起。<span class="cite"><code>pumpMux</code> · <code>registerPending</code></span></p></div>
+  <div class="card"><div class="k">设置</div><p>每 5 秒调一次 <code>settings.describe</code>：读 <code>qq-mode</code> 命名空间得到当前模式和 ownerQQ，读 <code>agent-presets</code> 的默认 preset；连不上就重新发现 DSH 端口。模式变化时清理旧模式的定时器和排队投递。<span class="cite"><code>startDshWatch</code> · <code>checkDsh</code> · <code>refreshMode</code></span></p></div>
+  <div class="card"><div class="k">preset</div><p><code>chat</code>、<code>reserved</code> 用 <code>agentPreset</code>（默认 <code>qq-chat</code>），<code>reserved2</code> 用 <code>socialV2.agentPreset</code>（默认 <code>qq-chat-v2</code>），两者都是 strict：preset 不在 DSH 清单里就拒绝建会话。<code>closed-agent</code> 用 <code>qq-mode</code> 里的 <code>closedAgentPreset</code>，空则用 DSH 默认 preset。<span class="cite"><code>modePreset</code> · <code>resolvePresetName</code></span></p></div>
+</div>
+
+<h2 id="outbound">回复怎么出去</h2>
+<p>发往 QQ 的路有两条，最后都落到 SnowLuma：</p>
+<table>
+<thead><tr><th></th><th>自动回复</th><th>工具发送</th></tr></thead>
+<tbody>
+<tr><td>用在</td><td><code>chat</code>、<code>closed-agent</code>、<code>reserved</code>：模型回合结束时的文字</td><td><code>reserved2</code> 的 <code>qq_send_message</code> 等工具，以及控制台手动发送</td></tr>
+<tr><td>路径</td><td><code>pumpMux</code> → <code>auditAndSend</code> → <code>sendToQQ</code> → SDK <code>sendGroupMessage</code> / <code>sendPrivateMessage</code>（WS）</td><td>MCP <code>snowluma</code> → 桥接 <code>/api/send/*</code>、<code>/api/socialV2/send-*</code> → <code>onebotSend</code> → OneBot HTTP <code>send_group_msg</code> / <code>send_private_msg</code></td></tr>
+<tr><td>出站检查</td><td><code>SENSITIVE_RE</code>（<code>src/sensitive.js</code>）与已知会话令牌片段，命中则拦下并按 <code>security.interceptNotify</code> 发一条拦截提示</td><td>端点侧做同口径检查；<code>onebotSend</code> 自己再拦一次含会话令牌的文本</td></tr>
+<tr><td>整形</td><td>Markdown 转纯文本、按长度分段、逐段间隔 <code>sendDelayMs</code></td><td>由工具参数决定分条（<code>messages</code> 数组）与引用、@</td></tr>
+</tbody>
+</table>
+
+<h2 id="choices">几个结构上的取舍</h2>
+<div class="cards two">
+  <div class="card"><div class="k">发送只经桥接</div><p>MCP 的发送工具不直连 OneBot，而是调桥接的 HTTP API，出站审计只在桥接实现一份。<span class="cite"><code>src/mcp-snowluma-safe.js</code> 文件头</span></p></div>
+  <div class="card"><div class="k">身份来自 sessionId，不来自参数</div><p>MCP 协议里没有「调用来自哪个会话」。守卫从 <code>exec.agent.id</code>（桥接预分配的 sessionId）解出会话 key，与工具参数里的 key 比对，不一致就拒绝。<span class="cite"><code>plugins/qq-agent-presets/qq-self-key.mjs</code> · <code>qq-tool-restrict.mjs</code></span></p></div>
+  <div class="card"><div class="k">群聊会话 fail-closed</div><p>非 <code>closed-agent</code> 的会话拿不到 <code>qq-chat*</code> preset 就不建，宁可不回也不让 DSH 默认 preset 把本地工具暴露给群。<span class="cite"><code>resolvePresetName</code></span></p></div>
+  <div class="card"><div class="k">控制台只在本机</div><p>只监听 <code>127.0.0.1</code>，必须带 <code>consoleToken</code>（未配置时自动生成存进 <code>state/console-token</code>）；MCP 调用另带每会话的 <code>x-agent-token</code>。<span class="cite"><code>startConsoleServer</code></span></p></div>
+</div>
+
+<h2 id="startup">启动顺序</h2>
+<p><code>main</code> 依次：读 <code>config.json</code>、建 <code>state/</code> 并收紧 ACL、拿单实例锁、读会话状态；加载黑话库与表情库；建 DSH 客户端；建 SnowLuma WS 客户端并注册事件回调；<code>bot.connect()</code>（失败不阻塞，SDK 后台重连，断线或报错时尝试重新发现 token）；预热表情库；启动 DSH 轮询、SnowLuma 健康轮询、控制台；最后进入 <code>pumpMux</code> 常驻读事件。<span class="cite"><code>main</code> · <code>healTokenIfStale</code></span></p>
+
+<details class="fold"><summary>state/ 下的主要文件</summary><div>
+<table>
+<thead><tr><th>文件</th><th>内容</th></tr></thead>
+<tbody>
+<tr><td><code>sessions.json</code></td><td>QQ 会话 key → DSH sessionId 等会话状态</td></tr>
+<tr><td><code>current-role.json</code></td><td>当前角色与角色模式</td></tr>
+<tr><td><code>slang.json</code> · <code>slang-session.json</code></td><td>黑话库、黑话学习用的 DSH 会话</td></tr>
+<tr><td><code>stickers.json</code></td><td>表情库</td></tr>
+<tr><td><code>initial-prompts.json</code></td><td>各会话的初始提示</td></tr>
+<tr><td><code>feedback.json</code> · <code>tool-calls.jsonl</code></td><td>模型反馈、工具调用日志</td></tr>
+<tr><td><code>token-usage.jsonl</code></td><td>用量账本</td></tr>
+<tr><td><code>console-token</code></td><td>自动生成的控制台令牌</td></tr>
+<tr><td><code>bridge.lock</code></td><td>单实例锁</td></tr>
+</tbody>
+</table>
+<p class="cite">常量定义在 <code>src/bridge.js</code> 文件头（<code>STATE_DIR</code>、<code>*_FILE</code>、<code>LOCK_FILE</code>）。</p>
+</div></details>
+
+<details class="fold"><summary>代码注释与实现不一致的两处</summary><div>
+<ul>
+<li><code>src/mcp-snowluma-safe.js</code> 的会话绑定注释说「桥接为每个 QQ 会话派生一个 MCP 进程，spawn 时注入 <code>QQ_BRIDGE_SELF_KEY</code>」。仓库里没有任何地方设置这个环境变量；MCP 由 DSH 按 profile 启动，实际生效的会话绑定在 preset 守卫一侧（见上文「身份来自 sessionId」）。</li>
+<li>同一文件头写「所有调用走 OneBot HTTP API」，但发送类工具实际调的是桥接的 <code>/api/*</code>（文件后文也这么写）；直连 OneBot HTTP 的只有只读工具。</li>
+</ul>
+</div></details>
+</div>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+<aside class="sidebar-right" aria-label="On this page">
+  <div class="sidebar-inner">
+    <span class="toc-label">On this page</span>
+    <nav class="toc-list">
+      <a class="toc-h2" href="#components">组件</a>
+      <a class="toc-h2" href="#inbound">一条消息怎么进来</a>
+      <a class="toc-h2" href="#dsh">和 DSH 怎么对接</a>
+      <a class="toc-h2" href="#outbound">回复怎么出去</a>
+      <a class="toc-h2" href="#choices">几个结构上的取舍</a>
+      <a class="toc-h2" href="#startup">启动顺序</a>
+    </nav>
+  </div>
+</aside>
+
+</div>
+
+<script src="../../../assets/nav.js"></script>
+
+</body>
+</html>

@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>术语表 — qq-bridge</title>
+<meta name="description" content="qq-bridge 的文档和代码里反复出现的词，按主题分组；每条给出它在代码里的定义处。as of 2026-11-03，对照上游 dev b80fa51 的代码。未标文件的函数都在 src/bridge.js 。组件之间怎么连见 架构 。">
+<meta property="og:title" content="术语表 — qq-bridge">
+<meta property="og:description" content="qq-bridge 的文档和代码里反复出现的词，按主题分组；每条给出它在代码里的定义处。as of 2026-11-03，对照上游 dev b80fa51 的代码。未标文件的函数都在 src/bridge.js 。组件之间怎么连见 架构 。">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../../assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+<style>
+/* glossary page (pages/dev/core/glossary.html) */
+.gl-doc{--gl-mute:#6b6b66}
+html[data-theme="dark"] .gl-doc{--gl-mute:#9a9a94}
+.gl-doc .lede{color:var(--gl-mute)}
+.gl-doc table td:first-child{white-space:nowrap;font-weight:600}
+.gl-doc table td:last-child{color:var(--gl-mute);font-size:.86em}
+.gl-doc table td:last-child code{white-space:nowrap}
+</style>
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="../../../" data-tab="Developer Guide" data-page-rel="pages/dev/core/glossary.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../../../index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout has-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body glossary">
+  <div class="topbar">
+  <div class="crumbs">
+    <a href="../../../index.html">qq-bridge</a>
+    <span class="sep">/</span>
+    Pages
+    <span class="sep">/</span>
+    <a href="../index.html">Developer Guide</a>
+    <span class="sep">/</span>
+    Core
+    <span class="sep">/</span>
+    <span class="here">术语表</span>
+  </div>
+</div>
+  <div class="gl-doc">
+<h1>术语表</h1>
+<p class="lede">qq-bridge 的文档和代码里反复出现的词，按主题分组；每条给出它在代码里的定义处。as of 2026-11-03，对照上游 <code>dev</code> b80fa51 的代码。未标文件的函数都在 <code>src/bridge.js</code>。组件之间怎么连见<a href="architecture.html">架构</a>。</p>
+
+<h2 id="systems">外部系统与组件</h2>
+<table>
+<thead><tr><th>术语</th><th>含义</th><th>出处</th></tr></thead>
+<tbody>
+<tr><td>SnowLuma</td><td>第三方的 OneBot v11 实现，负责接入真实 QQ 账号。qq-bridge 只通过它的 OneBot 接口通信，不启动、不控制它</td><td><code>@snowluma/sdk</code> · <code>main</code></td></tr>
+<tr><td>OneBot v11</td><td>公开的 QQ 机器人协议。桥接用它的 WebSocket（默认 3001）收事件、HTTP（默认 3000）发动作</td><td><code>config.example.json</code> 的 <code>snowluma.wsUrl</code> / <code>httpUrl</code></td></tr>
+<tr><td>[Hook]</td><td>SnowLuma 日志里对它挂进 QQ 客户端那一层的叫法，指 SnowLuma 的行为。qq-bridge 没有任何注入或挂钩</td><td><code>startSnowlumaWatch</code> 前的注释</td></tr>
+<tr><td>DSH</td><td>DeepSeek Harness：跑 agent 会话、调模型、执行工具的服务。桥接用它的 Web API（默认 3080）</td><td><code>src/dsh-client.js · NodeApiClient</code></td></tr>
+<tr><td>profile</td><td>DSH 的一套运行配置目录，默认 <code>web</code>；安装脚本往里写 bundle 和 MCP 条目</td><td><code>scripts/setup-dsh.mjs</code></td></tr>
+<tr><td>bundle</td><td>装进 DSH profile 的插件包。本项目有两个：<code>qq-agent-presets</code>（两个 preset + 工具守卫）、<code>qq-mode-console</code>（<code>qq-mode</code> 设置命名空间）</td><td><code>plugins/*/package.json</code></td></tr>
+<tr><td>preset</td><td>DSH 里一套 agent 配置（提示词、工具面、守卫）。本项目的是 <code>qq-chat</code>（一代、普通聊天）和 <code>qq-chat-v2</code>（二代）</td><td><code>dsh/agent-presets/</code> · <code>modePreset</code></td></tr>
+<tr><td>MCP server</td><td>给模型提供工具的进程，由 DSH spawn。本项目三个：<code>snowluma</code>（QQ 工具）、<code>snowluma-host</code>（网关状态）、<code>web-search-safe</code>（搜索与抓取）</td><td><code>scripts/setup-dsh.mjs · MANAGED_MCP_IDS</code></td></tr>
+<tr><td><code>cordis.patch.yml</code></td><td>DSH profile 里的补丁文件，三个 MCP server 和 <code>qq-mode</code> 条目写在这里</td><td><code>scripts/setup-dsh.mjs</code> · <code>plugins/qq-mode-console/cordis.patch.yml</code></td></tr>
+</tbody>
+</table>
+
+<h2 id="identity">会话与身份</h2>
+<table>
+<thead><tr><th>术语</th><th>含义</th><th>出处</th></tr></thead>
+<tbody>
+<tr><td>会话 key</td><td>一个 QQ 会话的标识：<code>group:群号</code> 或 <code>private:QQ号</code>，号码必须是正整数</td><td><code>convKey</code> · <code>plugins/qq-agent-presets/qq-self-key.mjs</code></td></tr>
+<tr><td>DSH 会话</td><td>每个 QQ 会话对应一个 DSH 会话，映射存在 <code>state/sessions.json</code>；所有 QQ 会话挂在同一个 workspace 下（标题默认「QQ 聊天」）</td><td><code>ensureSession</code> · <code>config.example.json</code> 的 <code>workspaceTitle</code></td></tr>
+<tr><td>sessionId 自带身份</td><td>桥接建 DSH 会话时预分配的 sessionId 里编码了会话 key；模型看不到也改不了，守卫用它判断工具调用属于哪个会话</td><td><code>qq-self-key.mjs</code> · <code>ensureSession</code></td></tr>
+<tr><td>会话绑定</td><td>守卫把工具参数里的 <code>key</code> 和 sessionId 解出的 key 比对，不一致就拒绝；防止模型或被注入的群友文本读写别的会话</td><td><code>plugins/qq-agent-presets/qq-tool-restrict.mjs</code></td></tr>
+<tr><td>管理员 / ownerQQ</td><td><code>config.json</code> 的 <code>ownerQQ</code>（也可在 DSH <code>qq-mode</code> 设置里配）。只有管理员能下管理命令、回答提问与审批、使用 <code>closed-agent</code></td><td><code>handleIncoming</code> · <code>refreshMode</code></td></tr>
+<tr><td>白名单 / 黑名单</td><td><code>allow.private</code> / <code>allow.groups</code> 放行，<code>deny</code> 优先于 <code>allow</code>；两份白名单都空时默认谁都不响应，除非 <code>allowAllWhenEmpty: true</code></td><td><code>allowed</code> · <code>loadConfig</code></td></tr>
+<tr><td>忽略名单</td><td><code>ignore.sendQQ</code>：这些 QQ 号发的消息直接丢掉；管理员不受影响</td><td><code>ignoredSender</code></td></tr>
+<tr><td>会话令牌（agentToken）</td><td>二代会话里给模型的每会话令牌，调状态和发送工具时作为 <code>token</code> 参数传入，经 <code>x-agent-token</code> 头交给桥接校验</td><td><code>startConsoleServer</code> · <code>rememberAgentToken</code></td></tr>
+<tr><td>控制台令牌（consoleToken）</td><td>本地控制台的管理令牌；未配置时自动生成存进 <code>state/console-token</code></td><td><code>startConsoleServer</code></td></tr>
+</tbody>
+</table>
+
+<h2 id="modes">模式</h2>
+<p>当前模式的真值存在 DSH 的 <code>qq-mode</code> 设置命名空间，桥接每 5 秒读一次。各模式的用法见<a href="../../use/modes.html">模式与权限</a>。</p>
+<table>
+<thead><tr><th>术语</th><th>含义</th><th>出处</th></tr></thead>
+<tbody>
+<tr><td><code>chat</code></td><td>普通聊天：每条放行的消息都交给模型，回合文字自动发回 QQ；用 <code>qq-chat</code></td><td><code>handleIncoming</code> · <code>modePreset</code></td></tr>
+<tr><td><code>closed-agent</code></td><td>只放行管理员私聊，用 <code>qq-mode</code> 的 <code>closedAgentPreset</code>，空则用 DSH 默认 preset（完整工具面）</td><td><code>modePreset</code> · <code>src/core/session-router.mjs</code></td></tr>
+<tr><td><code>reserved</code>（一代仿真）</td><td>仿真群友：由一代状态机决定何时投递、何时收尾；回合文字自动发回；用 <code>qq-chat</code></td><td><code>isSocialEnabled</code> · <code>socialLoopTick</code></td></tr>
+<tr><td><code>reserved2</code>（二代仿真）</td><td>模型的文字输出不发送，看消息、发言、等待、设唤醒全靠工具；用 <code>qq-chat-v2</code></td><td><code>sendWakePromptV2</code> · <code>pumpMux</code></td></tr>
+<tr><td><code>simulation</code></td><td><code>reserved2</code> 的规范名，输入时接受；进程内部仍用 <code>reserved2</code> 存储与比较</td><td><code>MODE_INPUT_ALIASES</code> · <code>normalizeModeInput</code></td></tr>
+<tr><td>一代 / 二代</td><td>两代仿真的简称：一代 = <code>reserved</code>，二代 = <code>reserved2</code>。两代的 preset、工具协议、分条方式都不同</td><td><code>src/role-card.js</code> 文件头</td></tr>
+<tr><td>静默</td><td>角色状态的一种（不是模式）：群友消息只记录、不交给模型，管理员消息照常；<code>/silent</code> 开、<code>/active</code> 关</td><td><code>handleIncoming</code> · <code>state/current-role.json</code></td></tr>
+<tr><td>管理命令</td><td>管理员发、桥接直接执行、不经过模型：<code>/role &lt;名&gt;</code> · <code>/role off</code> · <code>/status</code> · <code>/reset</code>（别名 <code>/new</code>）· <code>/silent</code>（<code>/quiet</code>）· <code>/active</code>（<code>/speak</code>）；其余 <code>/</code> 开头的内容原样交给 DSH</td><td><code>handleIncoming</code></td></tr>
+</tbody>
+</table>
+
+<h2 id="prompts">提示词与人格</h2>
+<table>
+<thead><tr><th>术语</th><th>含义</th><th>出处</th></tr></thead>
+<tbody>
+<tr><td>仿真提示词</td><td>每代一份，写在 preset 里 <code>@deepseek-ai/dsh-persona</code> 行的 <code>prefix</code>：怎么调工具、怎么参与群聊</td><td><code>dsh/agent-presets/*/agent.cordis.yml</code> · <code>src/preset-prompt.js</code></td></tr>
+<tr><td>人格提示词 / 人格卡</td><td><code>roles/&lt;名&gt;.md</code>：AI 是谁、什么性格、怎么说话；由桥接注入。拼装顺序是仿真提示词 → 人格提示词 → 本轮消息</td><td><code>src/role-card.js</code> · <code>roleForWake</code></td></tr>
+<tr><td>〔一代〕/〔二代〕标记</td><td>写在人格卡小节标题里，桥接只注入当前模式适用的小节；未标记的小节两代都注入。<code>[v2]</code>、<code>（reserved2）</code> 等写法也认</td><td><code>src/role-card.js · parseRoleSections</code></td></tr>
+<tr><td>注入上限</td><td>人格卡单次最多注入的字符数，<code>role.maxInjectChars</code>，默认 8000，限定在 1000–20000</td><td><code>ROLE_INJECT_MAX_CHARS_DEFAULT</code> · <code>applyRoleInjectLimit</code></td></tr>
+<tr><td>注入节奏</td><td>首次唤醒、人格卡变化、DSH 会话重建时注入完整人格卡，之后每 <code>role.injectEveryNWakes</code> 次（默认 4）再全量一次，其余只给一行提醒</td><td><code>roleForWake</code> · <code>state/role-inject.json</code></td></tr>
+</tbody>
+</table>
+
+<h2 id="gen1">一代仿真</h2>
+<table>
+<thead><tr><th>术语</th><th>含义</th><th>出处</th></tr></thead>
+<tbody>
+<tr><td>phase</td><td>每个会话的一代状态：<code>idle</code>（观望）· <code>active</code>（活跃）· <code>probing</code>（试探：冷场时给模型一个开口机会）· <code>exiting</code>（退场：活跃超时后让模型收尾，说完回到观望）</td><td><code>socialState</code> · <code>enterActive</code> · <code>buildProbePrompt</code> · <code>triggerActiveDurationExit</code></td></tr>
+<tr><td><code>[SILENT]</code></td><td>静默标记：模型只输出它时，桥接不往 QQ 发任何东西；一代专用，二代没有</td><td><code>SILENT_MARKER</code> · <code>isSilentMarker</code></td></tr>
+<tr><td>空格分条</td><td>一代回复里用空格把一句话切成几条 QQ 消息发出</td><td><code>splitByCjkSpaces</code> · <code>planSocialTimeline</code></td></tr>
+</tbody>
+</table>
+
+<h2 id="gen2">二代仿真</h2>
+<table>
+<thead><tr><th>术语</th><th>含义</th><th>出处</th></tr></thead>
+<tbody>
+<tr><td>唤醒</td><td>桥接叫醒模型处理某个会话的一次机会，带原因（@、提问、拍一拍、定时等）和本次消息快照；被唤醒不等于必须说话</td><td><code>scheduleWakeV2</code> · <code>buildWakePromptV2</code></td></tr>
+<tr><td>唤醒配置（wakeConfig）</td><td>模型用 <code>qq_set_wake_config</code> 设的下一次唤醒条件：<code>mode</code>（<code>diving</code> 潜水 / <code>active</code> 活跃）、无限或有限睡眠（<code>sleepUntil</code>）、<code>triggers</code>（<code>atMention</code> · <code>nameMention</code> · <code>speakerIds</code> · <code>keywords</code> · <code>question</code> · <code>poke</code> · <code>anyMessage</code> · <code>probability</code>）</td><td><code>defaultWakeConfigV2</code></td></tr>
+<tr><td>潜水</td><td>唤醒配置的默认 <code>mode</code>（<code>diving</code>）：只在触发条件命中时醒</td><td><code>defaultWakeConfigV2</code></td></tr>
+<tr><td>已读水位（readThroughSeq）</td><td>模型本次读到的位置，桥接本地的消息序号，不是 QQ messageId；收尾时用 <code>qq_mark_read</code> 或 <code>qq_set_wake_config</code> 提交</td><td><code>acknowledgeMessagesV2</code> · <code>readThroughSeqV2</code></td></tr>
+<tr><td>无行动兜底</td><td>一次唤醒回合既没发言也没收尾时计数；连续多次后桥接重置唤醒配置</td><td><code>pumpMux</code>（<code>noActionCount</code>）</td></tr>
+</tbody>
+</table>
+
+<h2 id="turns">回合与事件</h2>
+<table>
+<thead><tr><th>术语</th><th>含义</th><th>出处</th></tr></thead>
+<tbody>
+<tr><td>回合（turn）</td><td>DSH 会话里模型处理一次输入的过程，以 <code>turn/start</code> 开始、<code>turn/end</code> 结束；结束原因有 completed / error / aborted</td><td><code>pumpMux</code> · <code>trackTurnEvent</code></td></tr>
+<tr><td><code>events.mux</code></td><td>DSH 的事件流，桥接常驻读它拿回合文本、工具调用、提问与审批</td><td><code>pumpMux</code></td></tr>
+<tr><td>提问 / 审批</td><td>agent 向人发起的 <code>question/requested</code> 与 <code>approval/requested</code>，桥接转成发给管理员的 QQ 消息并登记为挂起，管理员的下一条消息当作回答</td><td><code>registerPending</code> · <code>handlePendingAnswer</code></td></tr>
+<tr><td>出站审计</td><td>发往 QQ 之前查 <code>SENSITIVE_RE</code>（本机路径、凭据等）和已知会话令牌片段，命中就拦下</td><td><code>auditAndSend</code> · <code>src/sensitive.js</code></td></tr>
+</tbody>
+</table>
+
+<h2 id="slang">黑话</h2>
+<table>
+<thead><tr><th>术语</th><th>含义</th><th>出处</th></tr></thead>
+<tbody>
+<tr><td>黑话词条</td><td>从群聊里学到的网络用语，状态为 <code>candidate</code>（候选）· <code>confirmed</code>（已确认）· <code>rejected</code>（已否决）；确认后进入唤醒和提示词里的黑话提示</td><td><code>src/slang-learner.js · SLANG_STATUS</code></td></tr>
+<tr><td>学习会话</td><td>专门用来抽取和研究黑话的 DSH 会话，不对应任何 QQ 会话、不往 QQ 发东西；挂在 workspace「QQ 黑话学习」下</td><td><code>ensureSlangLearnerSession</code> · <code>config.example.json</code> 的 <code>slang</code></td></tr>
+</tbody>
+</table>
+</div>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+<aside class="sidebar-right" aria-label="On this page">
+  <div class="sidebar-inner">
+    <span class="toc-label">On this page</span>
+    <nav class="toc-list">
+      <a class="toc-h2" href="#systems">外部系统与组件</a>
+      <a class="toc-h2" href="#identity">会话与身份</a>
+      <a class="toc-h2" href="#modes">模式</a>
+      <a class="toc-h2" href="#prompts">提示词与人格</a>
+      <a class="toc-h2" href="#gen1">一代仿真</a>
+      <a class="toc-h2" href="#gen2">二代仿真</a>
+      <a class="toc-h2" href="#turns">回合与事件</a>
+      <a class="toc-h2" href="#slang">黑话</a>
+    </nav>
+  </div>
+</aside>
+
+</div>
+
+<script src="../../../assets/nav.js"></script>
+
+</body>
+</html>
