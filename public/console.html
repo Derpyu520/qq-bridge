@@ -2507,8 +2507,10 @@ button:active:not(:disabled) {
       <div class="row" style="margin-top:8px">
         <button id="consoleTokenSave" class="small">保存令牌</button>
         <button id="consoleTokenRandom" class="small">生成随机令牌</button>
+        <button id="consoleTokenForget" class="small" type="button">退出登录</button>
         <span class="meta" id="consoleTokenMsg"></span>
       </div>
+      <div class="meta" id="consoleTokenState" style="margin-top:8px"></div>
     </section>
     <section id="section-console-access" data-page="access" class="card">
       <h2>控制台对外访问</h2>
@@ -2670,23 +2672,97 @@ button:active:not(:disabled) {
   }
 })();
 
+// ── 控制台鉴权 ───────────────────────────────────────────────────────────
+// 令牌存在 localStorage：通过 ?token= 首次进入、或在登录弹层里输入后写入，
+// 之后刷新 / 重开 / 新标签页都直接复用 —— 这就是「鉴权持久化」。
+// 只有服务端明确回 console-token-invalid（令牌真的不对）时才清掉它；
+// 网络抖动、服务重启导致的临时 401 不会把已保存的令牌抹掉。
+const CONSOLE_TOKEN_KEY = 'consoleToken';
+function storedConsoleToken() { try { return localStorage.getItem(CONSOLE_TOKEN_KEY) || ''; } catch { return ''; } }
+function rememberConsoleToken(token) { try { localStorage.setItem(CONSOLE_TOKEN_KEY, token); } catch {} }
+function forgetConsoleToken() { try { localStorage.removeItem(CONSOLE_TOKEN_KEY); } catch {} }
+
+// 登录弹层：并发多个 401 只开一个，所有请求等同一个 Promise，登录成功后各自重试。
+let authGate = null;
+function requireConsoleToken(reason) {
+  if (authGate) { authGate.setReason(reason); return authGate.promise; }
+  let setReason = () => {};
+  const promise = new Promise((resolve, reject) => {
+    const overlay = document.createElement('div');
+    overlay.id = 'consoleAuthGate';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'consoleAuthTitle');
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:2000;display:grid;place-items:center;background:rgba(8,10,14,.62);padding:20px';
+    overlay.innerHTML = '<form style="width:min(380px,100%);background:var(--card-bg,#171a21);border:1px solid var(--card-border,#2a2f3a);border-radius:14px;padding:22px;box-shadow:0 18px 48px rgba(0,0,0,.35)">'
+      + '<h2 id="consoleAuthTitle" style="margin:0 0 6px;font-size:17px">请输入控制台访问令牌</h2>'
+      + '<p id="consoleAuthHint" class="meta" style="margin:0 0 14px"></p>'
+      + '<input id="consoleAuthInput" type="password" autocomplete="current-password" spellcheck="false" style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:9px;border:1px solid var(--card-border,#333a47);background:transparent;color:inherit;font-size:14px" aria-label="控制台访问令牌" placeholder="访问令牌">'
+      + '<div class="row" style="margin-top:12px"><button id="consoleAuthSubmit" class="small" type="submit">进入控制台</button><button id="consoleAuthCancel" class="small" type="button">稍后</button></div>'
+      + '</form>';
+    document.body.appendChild(overlay);
+    const form = overlay.querySelector('form');
+    const input = overlay.querySelector('#consoleAuthInput');
+    const hint = overlay.querySelector('#consoleAuthHint');
+    const submit = overlay.querySelector('#consoleAuthSubmit');
+    const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); cancel(); } };
+    const cancel = () => { close(); reject(new Error('未授权')); };
+    setReason = (r) => {
+      const invalid = r === 'invalid';
+      hint.textContent = invalid ? '令牌错误，请重新输入。' : '控制台已启用访问鉴权，请输入访问令牌。';
+      hint.className = invalid ? 'meta err' : 'meta';
+      if (invalid) { input.value = ''; }
+    };
+    setReason(reason || 'missing');
+    document.addEventListener('keydown', onKey);
+    overlay.querySelector('#consoleAuthCancel').addEventListener('click', cancel);
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const token = input.value.trim();
+      if (!token) { hint.textContent = '请输入访问令牌。'; hint.className = 'meta err'; input.focus(); return; }
+      submit.disabled = true;
+      hint.textContent = '正在验证…'; hint.className = 'meta';
+      try {
+        // 拿一个只读接口验证令牌：401 说明错了，其它状态说明过了鉴权这一关。
+        const res = await fetch('/api/status', { headers: { 'x-console-token': token } });
+        if (res.status === 401) {
+          hint.textContent = '令牌错误，请重新输入。'; hint.className = 'meta err';
+          input.value = ''; input.focus();
+          return;
+        }
+        rememberConsoleToken(token);
+        close();
+        resolve();
+      } catch {
+        hint.textContent = '无法连接桥接，请确认服务在运行。'; hint.className = 'meta err';
+      } finally {
+        submit.disabled = false;
+      }
+    });
+    input.focus();
+  });
+  authGate = { promise, setReason };
+  promise.finally(() => { if (authGate && authGate.promise === promise) authGate = null; }).catch(() => {});
+  return promise;
+}
+
 async function api(path, method, body, _retried = 0) {
   const headers = body ? {'content-type':'application/json'} : {};
-  const token = localStorage.getItem('consoleToken');
+  const token = storedConsoleToken();
   if (token) headers['x-console-token'] = token;
   const res = await fetch(path, { method: method || 'GET', headers, body: body ? JSON.stringify(body) : undefined });
   if (res.status === 401) {
-    if (_retried >= 2) {
-      localStorage.removeItem('consoleToken');
-      throw new Error('未授权');
+    let payload = {};
+    try { payload = await res.json(); } catch {}
+    const invalid = payload.code === 'console-token-invalid';
+    // 令牌真的错了才清；「没带令牌」不用清（本来就没有）。
+    if (invalid) forgetConsoleToken();
+    if (_retried >= 1) {
+      throw new Error(payload.error || (invalid ? '控制台令牌错误' : '未授权：请先登录控制台'));
     }
-    const t = prompt('请输入控制台访问令牌：');
-    if (t) {
-      localStorage.setItem('consoleToken', t.trim());
-      return api(path, method, body, _retried + 1);
-    }
-    localStorage.removeItem('consoleToken');
-    throw new Error('未授权');
+    await requireConsoleToken(invalid ? 'invalid' : 'missing');
+    return api(path, method, body, _retried + 1);
   }
   return res.json();
 }
@@ -4519,11 +4595,38 @@ async function changeConsoleToken(generate) {
   // 保存到 localStorage，当前页面继续使用新令牌
   localStorage.setItem('consoleToken', r.token);
   input.value = r.token;
+  refreshConsoleTokenState();
   msg.textContent = r.generated ? '已生成随机令牌，当前页面已自动使用。可点击显示后复制。' : '已保存新令牌';
   msg.className = 'meta ok';
 }
+
+/** 令牌区的状态行：把「本机是否已记住令牌」明确写出来，别让人猜刷新后要不要再输。 */
+function refreshConsoleTokenState() {
+  const el = document.getElementById('consoleTokenState');
+  if (!el) return;
+  const saved = storedConsoleToken();
+  el.textContent = saved
+    ? '✅ 本机已保存令牌：刷新 / 重开 / 新标签页都会自动沿用，无需再次输入。'
+    : '⚠️ 本机还没有保存令牌：下一次请求会弹出登录框。';
+  el.className = saved ? 'meta ok' : 'meta err';
+}
+
 document.getElementById('consoleTokenSave').addEventListener('click', () => changeConsoleToken(false));
 document.getElementById('consoleTokenRandom').addEventListener('click', () => changeConsoleToken(true));
+document.getElementById('consoleTokenForget').addEventListener('click', () => {
+  if (!confirm('退出登录会清除本机保存的令牌；下次打开控制台需要重新输入。确定继续？')) return;
+  forgetConsoleToken();
+  location.href = '/';
+});
+
+// 进入页面时把已保存的令牌回填到输入框，并刷新状态行。
+// 回填的是本机 localStorage 里的令牌，不是 config 里的值：两者在「另一个标签页
+// 刚改过令牌」时会短暂不一致，以本机这份为准才能让「显示令牌」有东西可看。
+(function initConsoleTokenField() {
+  const input = document.getElementById('consoleTokenInput');
+  if (input) input.value = storedConsoleToken();
+  refreshConsoleTokenState();
+})();
 
 // Presentation layer: keep every existing control mounted so drafts and API contracts survive navigation.
 const consolePages = {
