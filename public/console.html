@@ -1813,7 +1813,7 @@ button:active:not(:disabled) {
     </section>
 <section id="section-sessions" data-page="sessions" class="card span-all">
       <h2>会话映射</h2>
-      <div class="meta">每个会话可以单独设<b>运行模式</b>（「跟随全局」= 不覆盖，用顶部那个全局模式）。改动会在下一次消息时重建该会话：<b>上下文会重新开始</b>。封闭 Agent（完整本地工具）只允许管理员私聊。</div>
+      <div class="meta">每个会话可以单独设<b>运行模式</b>（「跟随全局」= 不覆盖，用顶部那个全局模式）。只有切换后<b>工具预设变了</b>才会重建该会话（上下文重新开始）——例如聊天 ↔ 一代仿真共用同一个预设，会话会保留；涉及二代仿真 / 全工具 / 封闭 Agent 的切换必须换预设，DSH 只能在建会话时绑定预设，因此会重建。封闭 Agent（完整本地工具）只允许管理员私聊。</div>
       <div id="sessionList">加载中…</div>
     </section>
 <section id="section-pending" data-page="sessions" class="card span-all">
@@ -3012,7 +3012,7 @@ async function refreshSessions() {
       const ownerTag = x.owner ? ' <span class="pill r">管理员</span>' : '';
       const overrideTag = x.modeOverride ? ' <span class="pill">已覆盖</span>' : '';
       html += `<tr><td>${esc(x.key)}${ownerTag}</td><td><code>${esc(x.sessionId)}</code></td><td>${type}</td>`
-        + `<td><select class="small session-mode" data-mode-key="${esc(x.key)}" title="只影响这一个会话；改动会在下次消息时重建该会话">${modeOptions(x.modeOverride)}</select>${overrideTag}</td>`
+        + `<td><select class="small session-mode" data-mode-key="${esc(x.key)}" title="只影响这一个会话；只有工具预设变化时才会重建该会话">${modeOptions(x.modeOverride)}</select>${overrideTag}</td>`
         + `<td><button class="small" data-reset-key="${esc(x.key)}">清除上下文</button></td></tr>`;
     }
     box.innerHTML = html + '</table>';
@@ -3027,7 +3027,10 @@ async function refreshSessions() {
       const mode = sel.value || null; // 空 = 删除覆盖，回到全局
       const r = await api('/api/conversation/mode', 'POST', { key, mode });
       if (!r.ok) { alert('❌ ' + (r.error || '设置失败')); refreshSessions(); return; }
-      // 模式变了，旧 DSH 会话会被退役；下一次消息按新模式重建。
+      // 只有换了 preset 才会退役旧 DSH 会话；同一个 preset 的模式切换（如聊天 ↔ 一代仿真）保留上下文。
+      if (r.rebuildRequired) {
+        alert(`✅ 已切换为「${MODE_LABELS[r.mode] || r.mode}」。\n\n该模式需要不同的工具预设，旧 DSH 会话已退役：下一次消息会重建会话，上下文重新开始。`);
+      }
       refreshSessions();
     }));
   } catch {}

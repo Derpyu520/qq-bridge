@@ -5,7 +5,7 @@
 模式由**桥接控制台**（默认 `http://127.0.0.1:3100`）顶部的模式按钮切换，也可直接改 DSH 设置的 `qq-mode` 命名空间；
 控制台会**同时**写穿到 DSH 设置与本地 `qq-bridge/state/mode.json`，两者保持一致。
 （DSH 设置页目前**没有** `qq-mode` 卡片：该插件只有 host 半，未实现浏览器半。详见 docs/guides/DSH_SETUP.md。）
-桥接每 5 秒读取一次；控制台切换立即应用。会话持久化记录创建时的模式、preset 和管理员边界，权限变化时自动撤销旧会话映射和二代 token，并在下次消息到达时重建，避免继续使用旧的高权限 preset。升级前没有这些权限元数据的旧会话也会重建一次，历史仍保留在 DSH。
+桥接每 5 秒读取一次；控制台切换立即应用。会话持久化记录创建时的 preset 和管理员边界，**只有 preset（或 closed-agent 的 owner）变化时**才撤销旧会话映射和二代 token，并在下次消息到达时重建，避免继续使用旧的高权限 preset。`chat` 与 `reserved` 共用 `qq-chat`，互相切换**不会**重建会话（上下文保留）。升级前没有这些权限元数据的旧会话也会重建一次，历史仍保留在 DSH。
 全新安装运行 `scripts/setup-dsh.mjs` 后，DSH 设置与本地兜底默认均为 `reserved2`；若已存在 `state/mode.json` 或 DSH 设置旧值，脚本不会覆盖。
 
 | 模式 | 允许通道 | agent preset | 用途 |
@@ -38,7 +38,11 @@
 - 不设置覆盖 = 跟随全局（默认行为，和以前完全一样）；
 - 设置了覆盖 = 该会话按自己的模式运行，白名单准入、preset、会话策略指纹都按它自己的模式计算；
 - 覆盖存在 `state/conversation-modes.json`（与 `sessions.json` 分开：它属于管理配置，不随会话映射清空）；
-- 改覆盖会改变该会话的策略指纹 → **旧 DSH 会话退役**，下次消息按新模式重建（上下文重新开始）。
+- 策略指纹只由 **preset**（和 `closed-agent` 的 owner）决定：DSH 在 `sessions.create` 时绑定 preset，
+  之后无法替换（`sessions.fork` 也只继承源会话的 preset），所以 preset 变化是重建的**唯一**硬理由。
+  - `chat` ↔ `reserved` 共用 `qq-chat`：切换只改变桥接侧的转发/退场语义，**同一个 DSH 会话继续使用，上下文保留**；
+  - 涉及 `reserved2` / `reserved2-full` / `closed-agent` 的切换会换 preset → **旧 DSH 会话退役**，
+    下次消息按新模式重建（上下文重新开始）；控制台只在这种情况提示「会话已重建」。
 
 安全边界（与全局模式同一套硬约束，不因「按会话」而放宽）：
 

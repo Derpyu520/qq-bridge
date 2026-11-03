@@ -3255,9 +3255,42 @@ async function main() {
     return modeAllowed(key, m[1], Number(m[2]), cfg, modeFor(key));
   }
 
+  /**
+   * 会话策略指纹：只有**需要重建 DSH 会话**的变化才应该改变它。
+   *
+   * preset 是会话创建时绑死的（DSH 的 `sessions.create` 之后无法换 preset，
+   * `sessions.fork` 也只继承源会话的 preset），所以「preset 变了」是重建的
+   * 唯一硬理由。模式本身不进指纹：`chat` 与 `reserved` 用的是同一个 `qq-chat`，
+   * 切换它们只是桥接侧的转发/退场语义变化，同一个 DSH 会话可以继续用 ——
+   * 把模式算进去会让一次「聊天 ↔ 一代仿真」的切换白白丢掉上下文。
+   *
+   * `closed-agent` 的 owner 仍然进指纹：owner 换了，同一个 `standard` 会话
+   * 不该继续给新 owner 用（旧 owner 的历史与工具面都不该被继承）。
+   */
   function sessionPolicy(key) {
-    const mode = modeFor(key);
-    return JSON.stringify([mode, presetForConversation(key) ?? '', mode === 'closed-agent' ? cfg.ownerQQ : null]);
+    const preset = presetForConversation(key) ?? '';
+    return JSON.stringify([preset, modeFor(key) === 'closed-agent' ? cfg.ownerQQ : null]);
+  }
+
+  /**
+   * 已存指纹是否仍然等于当前策略。
+   *
+   * 兼容升级前的旧格式 `[mode, preset, owner]`：那版把模式也算进指纹，如果
+   * 直接按新格式比较，升级后第一次 reconcile 会把**所有**在线会话当成
+   * 「策略已变化」一次性退役。旧格式只要能取出同样的 preset/owner 就视为匹配，
+   * 真正的模式切换（preset 变了）仍然会触发重建。
+   */
+  function sessionPolicyMatches(key, stored) {
+    const current = sessionPolicy(key);
+    if (stored === current) return true;
+    try {
+      const old = JSON.parse(stored);
+      const next = JSON.parse(current);
+      if (Array.isArray(old) && old.length === 3 && Array.isArray(next) && next.length === 2) {
+        return old[1] === next[0] && (old[2] ?? null) === next[1];
+      }
+    } catch {}
+    return false;
   }
 
   function saveConversationModes() {
@@ -3314,7 +3347,7 @@ async function main() {
 
   function isCurrentSession(key, sessionId) {
     return isSessionAllowedInCurrentMode(key) && state.sessions[key] === sessionId
-      && state.sessionPolicies[key] === sessionPolicy(key);
+      && sessionPolicyMatches(key, state.sessionPolicies[key]);
   }
 
   /**
@@ -3400,17 +3433,23 @@ async function main() {
   function reconcileSessionPolicies() {
     // DSH preset 清单未知时**绝不能**做退役判定。
     //
-    // 为什么：`sessionPolicy()` 包含 `modePreset()` 的结果，而 `modePreset()` 依赖
+    // 为什么：`sessionPolicy()` 包含 `presetForConversation()` 的结果，而它依赖
     // `dshPresetIds`（来自 DSH 的 `agentPresets/list`）。启动瞬间或一次瞬时失败时
     // 这个清单可能是空的，`resolvePresetName(strict)` 于是返回 ''，算出来的策略就变成
-    // `["reserved2","",null]` —— 与已存的 `["reserved2","qq-chat-v2",null]` 不等，
+    // `["",null]` —— 与已存的 `["qq-chat-v2",null]` 不等，
     // 于是**所有** QQ 会话在这一个 tick 里被集体退役：DSH 会话被停掉归档、agentToken 轮换、
     // 映射删除，每个群的上下文全丢，日志里只有一句「会话权限已变化」。
     // 一次网络抖动换来全体失忆，代价完全不成比例。清单为空时宁可不判定，等下一轮。
     if (dshPresetIds.length === 0) return;
+    let normalized = false;
     for (const [key, sessionId] of Object.entries(state.sessions)) {
-      if (!isCurrentSession(key, sessionId)) retireSession(key);
+      if (!isCurrentSession(key, sessionId)) { retireSession(key); continue; }
+      // 指纹可能是升级前的旧格式（`[mode, preset, owner]`）：匹配上就顺手改写成
+      // 新格式，避免每次 reconcile 都走兼容分支，也让下次真的变化时能直接比对。
+      const current = sessionPolicy(key);
+      if (state.sessionPolicies[key] !== current) { state.sessionPolicies[key] = current; normalized = true; }
     }
+    if (normalized) saveState();
   }
 
   let flushingQueue = false;
@@ -4717,6 +4756,9 @@ async function main() {
             const body = await readBody();
             const key = String(body?.key ?? '').trim();
             if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
+            // 只有「该会话本来就有 DSH 会话、且这次改动换了 preset」才会重建，
+            // 前端据此提示用户上下文是否会重开。
+            const hadSession = Boolean(state.sessions[key]);
             let result;
             try {
               if (body.mode === null || body.mode === undefined || body.mode === '') {
@@ -4745,7 +4787,8 @@ async function main() {
             // 策略指纹变了就要退役旧会话（下次消息按新模式重建）：走既有的统一判定，
             // 不依赖 result.changedKeys（那个是审计用、以兜底 preset 计算）。
             reconcileSessionPolicies();
-            log(`控制台：${result.key} 的运行模式已设为 ${modeFor(result.key)}${conversationModes.overrideFor(result.key) ? '（会话覆盖）' : '（跟随全局）'}`);
+            const rebuildRequired = hadSession && !state.sessions[key];
+            log(`控制台：${result.key} 的运行模式已设为 ${modeFor(result.key)}${conversationModes.overrideFor(result.key) ? '（会话覆盖）' : '（跟随全局）'}${rebuildRequired ? '（preset 变化，旧会话已退役）' : ''}`);
             sendJson({
               ok: true,
               key: result.key,
@@ -4754,6 +4797,7 @@ async function main() {
               override: conversationModes.overrideFor(result.key) ? { ...conversationModes.overrideFor(result.key) } : null,
               globalMode: currentMode,
               changedKeys: result.changedKeys,
+              rebuildRequired,
             });
             return;
           }

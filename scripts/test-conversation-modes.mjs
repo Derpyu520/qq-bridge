@@ -1,6 +1,6 @@
 // 会话级运行模式（每个会话各自设置）的回归：
 //   A) 端点 /api/conversation/mode（GET/POST/删除覆盖）+ /api/sessions 的 mode 字段；
-//   B) 生效模式真的作用于建会话（preset 选择）与会话策略指纹（改模式 → 旧会话退役）；
+//   B) 生效模式真的作用于建会话（preset 选择）与会话策略指纹（preset 变化才退役）；
 //   C) 校验与鉴权：非法模式 400、closed-agent 只允许当前 owner 私聊、
 //      没有安全 preset 时 409、agent token 403、无控制台令牌 401；
 //   D) 落盘 + 管理员变更时作废旧 closed-agent 覆盖。
@@ -78,6 +78,40 @@ try {
     ok(h.state.sessions['group:456'] == null, '改模式后旧会话被退役');
     await h.ensureSession('group:456');
     ok(h.calls.created.at(-1)?.agentPreset === 'qq-chat', '重建后的会话使用 chat 的 preset', String(h.calls.created.at(-1)?.agentPreset));
+  }
+
+  // ── B1) 同一个 preset 的模式切换不重建会话 ────────────────────────────────
+  console.log('## 模式切换与会话保留');
+  {
+    // chat 与 reserved 共用 qq-chat：模式语义变了，但 DSH 会话可以继续用 ——
+    // 上下文不该因为一次「聊天 ↔ 一代仿真」切换而重新开始。
+    const sessionId = h.state.sessions['group:456'];
+    ok(sessionId != null, '前置：group:456 已有 chat 会话');
+
+    let r = await call(port, '/api/conversation/mode', { method: 'POST', headers: ADMIN, body: { key: 'group:456', mode: 'reserved' } });
+    ok(r.status === 200 && r.body?.mode === 'reserved', '切换到 reserved 成功', `HTTP ${r.status}`);
+    ok(r.body?.rebuildRequired === false, 'chat → reserved 不要求重建（同一 preset）', JSON.stringify(r.body?.rebuildRequired));
+    ok(h.state.sessions['group:456'] === sessionId, 'chat → reserved 保留原 DSH 会话', String(h.state.sessions['group:456']));
+
+    r = await call(port, '/api/conversation/mode', { method: 'POST', headers: ADMIN, body: { key: 'group:456', mode: 'chat' } });
+    ok(r.body?.rebuildRequired === false && h.state.sessions['group:456'] === sessionId, 'reserved → chat 同样保留会话');
+
+    // 升级前的旧指纹是 [mode, preset, owner]：只要 preset/owner 一样就视为未变化，
+    // 不能因为格式变了就把在线会话全部退役（那等于升级一次全员失忆）。
+    h.state.sessionPolicies['group:456'] = JSON.stringify(['chat', 'qq-chat', null]);
+    r = await call(port, '/api/conversation/mode', { method: 'POST', headers: ADMIN, body: { key: 'group:456', mode: 'reserved' } });
+    ok(r.body?.rebuildRequired === false && h.state.sessions['group:456'] === sessionId, '旧格式指纹仍视为匹配（升级不丢会话）');
+    ok(h.state.sessionPolicies['group:456'] === JSON.stringify(['qq-chat', null]), '旧格式指纹被改写为新格式', String(h.state.sessionPolicies['group:456']));
+
+    // preset 真变了才重建：reserved → reserved2 把 qq-chat 换成 qq-chat-v2。
+    r = await call(port, '/api/conversation/mode', { method: 'POST', headers: ADMIN, body: { key: 'group:456', mode: 'reserved2' } });
+    ok(r.body?.rebuildRequired === true, 'preset 变化时 rebuildRequired=true', JSON.stringify(r.body?.rebuildRequired));
+    ok(h.state.sessions['group:456'] == null, 'preset 变化后旧会话被退役');
+
+    // 没有会话时的切换不该报告重建；恢复成 chat 供后面几段使用。
+    r = await call(port, '/api/conversation/mode', { method: 'POST', headers: ADMIN, body: { key: 'group:456', mode: 'chat' } });
+    ok(r.status === 200 && r.body?.rebuildRequired === false, '没有会话时切换不算重建');
+    await h.ensureSession('group:456');
   }
 
   // ── B2) reserved2-full：二代仿真语义 + 全工具 preset ──────────────────────

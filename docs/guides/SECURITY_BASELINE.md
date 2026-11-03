@@ -183,7 +183,7 @@ node --check src/bridge.js  # 语法门禁（大文件改动后必跑）
 安全专项必须覆盖（缺一不可）：
 
 - [x] 白名单/黑名单/空白名单 fail-closed（含单复数与字符串/数字两种写法）
-- [x] `closed-agent` 只对 `private:<ownerQQ>` 放行；模式切换会退役旧会话
+- [x] `closed-agent` 只对 `private:<ownerQQ>` 放行；preset（或 owner）变化才退役旧会话（`chat` ↔ `reserved` 共用 preset，保留上下文）
 - [x] 预设清单不可用时**拒绝**建群聊会话（不回退到默认预设）
 - [x] agent token 无法访问任何管理端点；空 agent token 被拒
 - [x] 控制台伪造 `Host` 被拒；错令牌（含错长度、大小写、尾空格）被拒
