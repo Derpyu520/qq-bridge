@@ -244,9 +244,11 @@ console.log('## /api/console/access');
     r2 = await call(port, '/api/console/access', { headers: { 'x-console-token': 'fixture-console-token' } });
     ok(r2.status === 200 && r2.setCookie.some((c) => /qq_bridge_console=fixture-console-token/.test(c)), '令牌头仍可用，并顺手下发 cookie', `HTTP ${r2.status}`);
 
-    // 退出登录：Max-Age=0 让浏览器丢弃 cookie。
+    // 退出登录：Max-Age=0 让浏览器丢弃 cookie。响应里不透露令牌。
     r2 = await call(port, '/api/console/logout', { method: 'POST', body: {} });
     ok(r2.status === 200 && /Max-Age=0/.test(r2.setCookie[0] || ''), '登出下发 Max-Age=0 的 cookie', JSON.stringify(r2.setCookie));
+    r2 = await call(port, '/api/console/logout');
+    ok(r2.status === 405, 'GET 登出被拒绝（防 <img> 登出 CSRF）', `HTTP ${r2.status}`);
 
     // 通过 ?token= 引导进入时：303 到不带参数的路径，并直接种 cookie（令牌不进历史记录）。
     const loginOk = await call(port, '/?token=fixture-console-token');
