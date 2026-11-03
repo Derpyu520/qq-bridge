@@ -211,15 +211,61 @@ function atomicWriteText(file, text) {
   }
 }
 
+// ── 控制台登录凭证（HttpOnly cookie） ──────────────────────────────────────
+//
+// 为什么用 cookie 而不是 localStorage：localStorage 里的令牌任何脚本都读得到，
+// 控制台一旦出现一次 XSS（哪怕是依赖里的、或是哪天内联脚本里拼错了一个模板），
+// 拿到的就是**持久**的最高权限凭证。HttpOnly 让 JS 读不到它，凭证只在浏览器
+// 与桥接之间传递；JS 想发管理请求仍然可以（浏览器会自动带 cookie），但读不走。
+//
+// 为什么没有 Secure：控制台默认跑在 http://127.0.0.1:3100（明文回环），加了
+// Secure 浏览器会直接丢弃 cookie，登录会永远失败。要上 TLS 就由反代负责，
+// 那时再考虑给这个属性加开关（目前没有反代场景）。
+//
+// SameSite=Strict 兜住了写操作的 CSRF：跨站请求根本不会带上这个 cookie。
+// 这是与下面「非 GET 必须 application/json + Origin 校验」并行的第二道。
+const CONSOLE_COOKIE = 'qq_bridge_console';
+const CONSOLE_COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 天：免得每天开一次控制台就要重新登录
+
+/** 从 Cookie 头里取一个值。只做最小解析，够控制台用。 */
+function readCookieValue(header, name) {
+  for (const part of String(header ?? '').split(';')) {
+    const eq = part.indexOf('=');
+    if (eq < 0) continue;
+    if (part.slice(0, eq).trim() !== name) continue;
+    try { return decodeURIComponent(part.slice(eq + 1).trim()); } catch { return ''; }
+  }
+  return '';
+}
+
+/**
+ * 生成 Set-Cookie 值。
+ *
+ * Path=/ 让静态页和 /api/* 都带上；令牌字符集是 [A-Za-z0-9_-]，不需要编码。
+ * 传 maxAge=0 表示删除（退出登录）。
+ */
+function consoleCookieHeader(token, maxAge = CONSOLE_COOKIE_MAX_AGE) {
+  return `${CONSOLE_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}`;
+}
+
+/** 定长比较；长度不同直接返回 false（timingSafeEqual 对不等长会抛错）。 */
+function timingSafeStringEqual(a, b) {
+  const x = Buffer.from(String(a ?? ''), 'utf8');
+  const y = Buffer.from(String(b ?? ''), 'utf8');
+  return x.length === y.length && x.length > 0 && crypto.timingSafeEqual(x, y);
+}
+
 /**
  * 控制台登录页（未通过鉴权时 GET / 返回）。
  *
  * 为什么不用 `prompt()`：`prompt()` 里输错一次就只留下一个空对话框，既说不清
- * 「是没填令牌」还是「令牌填错了」，也没法回显当前地址/提示。这里用一个最小
- * 表单页：把原因写在标题下，输错后由服务端再返回同一页并标红。
+ * 「是没填令牌」还是「令牌填错了」，也没法回显提示。
  *
- * 令牌通过 `?token=` 带回控制台：控制台脚本会把它写进 localStorage 并
- * `history.replaceState` 抹掉 URL，所以刷新/重开不用再输一次。
+ * 表单不把令牌放进 URL：这里用 JSON POST 到 /api/console/login 换取一个
+ * HttpOnly cookie，再 `location.replace('/')` 进控制台。所以令牌不会留在
+ * 地址栏、历史记录或任何 JS 可读的存储里。
+ * 另外保留 `?token=` 引导（方便把入口链接发给自己）：服务端校验通过后
+ * 直接 303 到不带参数的路径并下发 cookie，同样不会把令牌留进历史记录。
  */
 function consoleLoginPage(reason) {
   const invalid = reason === 'invalid';
@@ -249,17 +295,44 @@ button:disabled{opacity:.6;cursor:default}
 small{display:block;margin-top:12px;color:#6f7887;font-size:12px}
 </style></head>
 <body>
-<form method="get" action="/" autocomplete="on">
+<form id="loginForm" autocomplete="on">
   <h1>${title}</h1>
-  <p${invalid ? ' class="err"' : ''}>${hint}</p>
-  <input name="token" type="password" autocomplete="current-password" spellcheck="false" autofocus required aria-label="控制台访问令牌" placeholder="访问令牌">
-  <button type="submit">进入控制台</button>
-  <small>令牌只保存在这台浏览器里；刷新或重新打开都不用再输入。令牌可在 config.json 的 consoleToken 或 state/console-token 里查看。</small>
+  <p id="loginHint"${invalid ? ' class="err"' : ''}>${hint}</p>
+  <input id="loginToken" name="token" type="password" autocomplete="current-password" spellcheck="false" autofocus required aria-label="控制台访问令牌" placeholder="访问令牌">
+  <button id="loginSubmit" type="submit">进入控制台</button>
+  <small>登录凭证保存在 HttpOnly cookie 里（页面脚本读不到），刷新 / 重开 / 新标签页都不用再输入。令牌本身可在 config.json 的 consoleToken 或 state/console-token 里查看。</small>
 </form>
 <script>
-// 输错的令牌不要留在地址栏/历史记录里（也避免刷新时自动重放）。
-// 表单用 GET 提交到 /，成功时由控制台脚本接管这个参数。
-if (location.search) history.replaceState({}, '', '/');
+(() => {
+  const form = document.getElementById('loginForm');
+  const input = document.getElementById('loginToken');
+  const hint = document.getElementById('loginHint');
+  const submit = document.getElementById('loginSubmit');
+  const fail = (msg) => { hint.textContent = msg; hint.className = 'err'; input.value = ''; input.focus(); };
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const token = input.value.trim();
+    if (!token) { fail('请输入访问令牌。'); return; }
+    submit.disabled = true;
+    hint.textContent = '正在验证…';
+    hint.className = '';
+    try {
+      const res = await fetch('/api/console/login', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ token }),
+      });
+      if (res.ok) { location.replace('/'); return; }
+      if (res.status === 401) { fail('令牌错误，请重新输入。'); return; }
+      fail('登录失败（HTTP ' + res.status + '），请稍后重试。');
+    } catch {
+      fail('无法连接桥接，请确认服务在运行。');
+    } finally {
+      submit.disabled = false;
+    }
+  });
+})();
 </script>
 </body></html>`;
 }
@@ -3944,17 +4017,73 @@ async function main() {
         sendJson({ ok: false, error: `Host 头不被允许（${hostHeader || '缺失'}）：控制台只接受本机回环访问` }, 403);
         return;
       }
-      // 控制台鉴权：所有请求需带 x-console-token 或 ?token=
+      // 写请求的 CSRF 门槛：必须是 application/json，且（若带 Origin）来自本机页面。
+      // 默认未配 consoleToken 时，这可阻止任意网页用表单/跨站请求触发
+      // /api/restart、/api/workspace/reset、/api/role 等破坏性接口。
+      // 抽成函数是因为登录 / 登出发生在令牌门**之前**（它们本身就是在建立/销毁凭证），
+      // 也必须过同一道门槛。
+      const writeRequestBlocked = () => {
+        if (req.method === 'GET') return null;
+        const ctype = String(req.headers['content-type'] ?? '');
+        if (!ctype.toLowerCase().includes('application/json')) {
+          return { status: 415, error: '请求必须是 application/json' };
+        }
+        const origin = req.headers['origin'];
+        if (!origin) return null;
+        let originHost = '';
+        try { originHost = new URL(String(origin)).host.toLowerCase(); } catch {}
+        // 与 Host 白名单同一口径，按监听器分别判定（回环监听器只认回环三形态；
+        // 对外监听器才放行配置里那个地址；绑通配地址时 Origin 不再限制，
+        // 令牌是唯一门槛）。
+        let originAllowed;
+        if (onLoopbackListener) {
+          originAllowed = loopbackHosts.includes(originHost);
+        } else if (lanHost && isWildcardHost(lanHost)) {
+          originAllowed = true;
+        } else if (lanHost) {
+          const bare = lanHost.includes(':') ? `[${lanHost}]` : lanHost;
+          originAllowed = [`${bare}:${boundPort}`, bare].includes(originHost);
+        } else {
+          originAllowed = false;
+        }
+        return originAllowed ? null : { status: 403, error: '跨站请求被拒绝' };
+      };
+
+      // ── 登录 / 登出 ────────────────────────────────────────────────────────
+      // 这两个端点必须在令牌门**之前**处理：它们的作用就是获得 / 丢弃凭证。
+      if (url.pathname === '/api/console/login' || url.pathname === '/api/console/logout') {
+        const blocked = writeRequestBlocked();
+        if (blocked) { sendJson({ ok: false, error: blocked.error }, blocked.status); return; }
+        if (url.pathname === '/api/console/login') {
+          const body = await readBody();
+          // 与令牌门同一口径：逐字节比较，不做 trim（页面表单已在客户端 trim）。
+          const token = String(body?.token ?? '');
+          if (!timingSafeStringEqual(token, consoleToken)) {
+            // 登录失败只说「令牌错误」：这里没有「没带令牌」的歧义，空输入直接算错。
+            sendJson({ ok: false, code: 'console-token-invalid', error: '控制台令牌错误：请重新输入访问令牌' }, 401);
+            return;
+          }
+          res.setHeader('Set-Cookie', consoleCookieHeader(consoleToken));
+          sendJson({ ok: true });
+          return;
+        }
+        // 登出：Max-Age=0 让浏览器立刻丢弃这个 cookie。响应里不透露令牌。
+        res.setHeader('Set-Cookie', consoleCookieHeader('', 0));
+        sendJson({ ok: true });
+        return;
+      }
+
+      // ── 令牌门 ────────────────────────────────────────────────────────────
+      // 三个来源，优先级：显式头（脚本 / CLI / 测试）> ?token=（首次引导）> cookie（浏览器）。
       // 定长比较：`!==` 会在第一个不同的字符处短路，理论上可被本机进程用响应时延逐字节试探。
-      // 令牌是 192 bit 随机值且只监听回环，所以这是纵深防御而非在野漏洞。
-      const suppliedToken = String(url.searchParams.get('token') ?? req.headers['x-console-token'] ?? '');
-      const tokenMatches = (() => {
-        if (!consoleToken) return false; // 上面已拒绝空令牌；真出现也只许失败关闭，绝不 return true
-        const a = Buffer.from(suppliedToken, 'utf8');
-        const b = Buffer.from(consoleToken, 'utf8');
-        if (a.length !== b.length) return false;
-        return crypto.timingSafeEqual(a, b);
-      })();
+      // 令牌是 192 bit 随机值且默认只监听回环，所以这是纵深防御而非在野漏洞。
+      // 不做 trim：令牌必须逐字节相等，`"token "` 这种变体不能被当成同一个令牌。
+      const headerToken = String(req.headers['x-console-token'] ?? '');
+      const queryToken = String(url.searchParams.get('token') ?? '');
+      const cookieToken = readCookieValue(req.headers.cookie, CONSOLE_COOKIE);
+      const suppliedToken = headerToken || queryToken || cookieToken;
+      const tokenSource = headerToken ? 'header' : queryToken ? 'query' : cookieToken ? 'cookie' : '';
+      const tokenMatches = Boolean(consoleToken) && timingSafeStringEqual(suppliedToken, consoleToken);
       if (consoleToken && !tokenMatches) {
         // 把「没带令牌」和「令牌不对」分开：前端据此提示「请登录」还是「令牌错误」，
         // 而不是统一丢一句「未授权」让人猜。code 是稳定契约，error 才是给人看的文案。
@@ -3972,6 +4101,18 @@ async function main() {
           }, 401);
         }
         return;
+      }
+      // 通过 `?token=` 引导进来时，立刻 303 到不带参数的同一路径并下发 cookie：
+      // 令牌不进地址栏历史，也不用依赖前端脚本去抹。
+      if (tokenSource === 'query' && req.method === 'GET' && !url.pathname.startsWith('/api/')) {
+        res.writeHead(303, { location: url.pathname, 'Set-Cookie': consoleCookieHeader(consoleToken), ...SECURITY_HEADERS });
+        res.end();
+        return;
+      }
+      // 用头或 query 验证通过（或 cookie 与当前令牌不一致，比如刚在别的标签页改过令牌）时，
+      // 顺手把 cookie 刷成当前值。cookie 本身已经对就不重发，免得每个请求都带一个 Set-Cookie。
+      if (tokenSource !== 'cookie' && cookieToken !== consoleToken) {
+        res.setHeader('Set-Cookie', consoleCookieHeader(consoleToken));
       }
       // 智能体调用隔离（集中关卡）。
       //
@@ -4009,38 +4150,10 @@ async function main() {
           }
         }
       }
-      // CSRF 防护：所有写操作必须是 application/json，且（若带 Origin）必须来自本机页面。
-      // 默认未配 consoleToken 时，这可阻止任意网页用表单/跨站请求触发
-      // /api/restart、/api/workspace/reset、/api/role 等破坏性接口。
-      if (req.method !== 'GET') {
-        const ctype = String(req.headers['content-type'] ?? '');
-        if (!ctype.toLowerCase().includes('application/json')) {
-          sendJson({ ok: false, error: '请求必须是 application/json' }, 415);
-          return;
-        }
-        const origin = req.headers['origin'];
-        if (origin) {
-          let originHost = '';
-          try { originHost = new URL(String(origin)).host.toLowerCase(); } catch {}
-          // 与 Host 白名单同一口径，按监听器分别判定（回环监听器只认回环三形态；
-          // 对外监听器才放行配置里那个地址；绑通配地址时 Origin 不再限制，
-          // 令牌是唯一门槛）。
-          let originAllowed;
-          if (onLoopbackListener) {
-            originAllowed = loopbackHosts.includes(originHost);
-          } else if (lanHost && isWildcardHost(lanHost)) {
-            originAllowed = true;
-          } else if (lanHost) {
-            const bare = lanHost.includes(':') ? `[${lanHost}]` : lanHost;
-            originAllowed = [`${bare}:${boundPort}`, bare].includes(originHost);
-          } else {
-            originAllowed = false;
-          }
-          if (!originAllowed) {
-            sendJson({ ok: false, error: '跨站请求被拒绝' }, 403);
-            return;
-          }
-        }
+      // CSRF 防护：走与登录/登出同一个门槛（非 GET 必须 application/json + Origin 校验）。
+      {
+        const blocked = writeRequestBlocked();
+        if (blocked) { sendJson({ ok: false, error: blocked.error }, blocked.status); return; }
       }
       try {
         // 空 agent token 一律拒绝，防止 MCP 传入空字符串时被当作“管理端/无 token”绕过校验
@@ -4975,6 +5088,9 @@ async function main() {
           cfg.consoleToken = generated ? '' : newToken;
           atomicWriteText(path.join(STATE_DIR, 'console-token'), newToken);
           consoleToken = newToken;
+          // 当前这个浏览器如果是用 cookie 登录的，它的 cookie 里还是旧令牌 ——
+          // 顺手换成新的，否则改完令牌下一个请求就把自己踢下线。
+          res.setHeader('Set-Cookie', consoleCookieHeader(newToken));
           log(`控制台：访问令牌已${generated ? '重新生成' : '手动修改'}（不记录完整值）`);
           sendJson({ ok: true, token: newToken, generated });
           return;
