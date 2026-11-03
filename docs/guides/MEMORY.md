@@ -1,28 +1,37 @@
-# 记忆（拟人记忆）
+# 拟人记忆
 
-> 小鲸鱼有自己的长期/短期记忆。**记不记、记多久，由它自己判断**（不是规则替它决定）；
-> 遗忘也按重要度自动进行——像人一样，重要的事留着，琐碎的忘掉。
+> 小鲸鱼有自己的长期/短期记忆。**记不记、记多久、要不要忘、怎么合并，全由它自己判断**——
+> 代码只负责存取和"提醒它该复核了"，不替它做任何语义决定。
+
+![拟人记忆控制台](../images/console-memory.png)
 
 ---
 
-## 1. 谁来决定记什么
+## 1. 核心思路：AI 自己管记忆
 
-**AI 自己决定。** 唤醒提示里只给它一份索引和规则，不塞记忆正文：
+与「把记忆塞进提示词」的区别：
+
+| | 旧做法（上下文注入） | 现在（拟人记忆） |
+| --- | --- | --- |
+| 唤醒时 | 把记忆正文按字符预算拼进 prompt | 只给一份**索引**：有多少条、最近记了什么 |
+| 回忆 | 被动接收，无法"想起来" | 主动调 `qq_memory_recall` 查 |
+| 记忆内容 | 规则按显著度自动记 | AI 判断"这值不值得记"再写 |
+| 遗忘 | 规则按 ★ 和天数删 | 规则只标记「待复核」，AI 决定去留 |
+| 整理 | 规则自动合并/压缩 | 点「睡眠」主动调模型巩固 |
+
+唤醒提示里给它的索引大致是：
 
 ```
-【你的记忆】你有自己的长期记忆（按会话分开，别人看不到）。
-- 聊天流水 196 条，涉及 3 个人，跨 5 天。
-【记什么由你判断】觉得这件事有长期/短期记忆价值时，自己写进去：
-  qq_memory_save(key, text, scope="long"|"short", importance=1~5)
-  约定/偏好/重要经历写 long；一时的话题/对方当下状态写 short。
-  不写也不会丢细节（流水仍在，recall 查得到），但只有写下的才被当作"记得"。
-【牵扯到过去就先查】先 qq_memory_recall(key, question) 查，再开口，别凭印象编。
+【你的记忆】两层：共享记忆（跨群/私聊共享）+ 本会话记忆（只在这里有效）。
+- 本会话 6 条（长期 6/短期 0），共享 4 条，流水 394 条 / 12 人 / 5 天。
+【记不记由你判断】值得记就自己写：qq_memory_save(key, text, scope, importance, who, layer)
+  · layer=global → 共享记忆；layer=session（默认）→ 只在本会话有效。
+  · scope=long 约定/偏好/重要经历；scope=short 一时话题（3 天后进复核队列）。
+  · 不写也不丢细节（流水仍在、recall 查得到），但只有写下的才算"记得"。
+【牵扯到过去就先查】先 qq_memory_recall(key, question)，再开口。
 ```
 
-于是它遇到「阿草说她在学吉他」会自己判断：这值得记 → `qq_memory_save(..., scope="long", importance=3, who="阿草")`。
-闲聊「今天吃啥」它可能就不写。
-
-## 1.5 两层记忆：共享 + 本会话
+## 2. 两层记忆
 
 | 层 | 放什么 | 谁能查 |
 | --- | --- | --- |
@@ -30,81 +39,98 @@
 | **本会话记忆**（`layer="session"`，默认） | 只属于这个群/私聊的事：本群周五团建、这轮话题聊到一半 | 只有本会话 |
 
 - 存储分开：`state/memory/_global/`（共享层）+ `state/memory/<会话>/`（各会话）。
-- 检索时两层一起查，命中标注 `[共享]` / `[本会话]`；共享层排前面（"这个人本身"比某个群的上下文更该被想起）。
-- **隐私边界**：A 群的具体聊天内容不会出现在 B 群；只有明确写成 `layer="global"` 的才跨会话共享。
-- 控制台「查看共享记忆」按钮，或 `GET /api/memory/file?key=_global` 可直接读共享层。
+- 检索时两层一起查，命中标注 `[共享]` / `[本会话]`；共享层排前面。
+- **隐私边界**：A 群的具体聊天内容不会出现在 B 群；只有明确写成 `layer="global"` 才跨会话共享。
+- 会话层与共享层各自从 `m1` 编号，所以对外用带层前缀的 `ref`（`session:m1` / `shared:m1`）区分。
 
-## 2. 遗忘：规则只提醒，判断交给 AI
+## 3. 记什么、怎么合并：先读后写
 
-**规则不替 AI 删记忆。** 到期条目只会被标记「待复核」，进队列等 AI 自己判断：
+写之前先看已有条目，避免重复：
+
+1. `qq_memory_candidates(key, who?, layer?)` —— 看候选（id / 文本 / ★ / 层）
+2. 如果其中已有同一件事：`qq_memory_save(..., replaceId=那条的 id, text=合并后的完整版本)`
+3. 否则正常新增
+
+服务端只做一件事机械保护：**归一化后完全相同**的内容不重复新增（防工具重试）。
+
+## 4. 遗忘：规则只提醒，判断交给 AI
 
 | 触发 | 规则动作 |
 | --- | --- |
 | 短期记忆满 3 天 | 标记 `needsReview`，进复核队列 |
 | 长期记忆 90 天没被想起 | 标记 `needsReview`，进复核队列 |
-| 完全重复的条目 | 自动合并（保留 ★ 高的那条）——纯机械，不需要判断 |
-| 已遗忘条目超过 7 天 | 物理删除（可追溯期结束） |
-| 超过单会话容量（默认 400 条） | 按 ★ + 新旧丢尾部 |
+| 超过单会话容量（默认 400） | 把最不重要且最旧的若干条标记 `needsReview`（**不删**） |
+| 已遗忘条目超过 7 天 | 物理删除（可追溯期结束，存储清理） |
 
-**AI 怎么处理队列**（`qq_memory_review(key)`）：
+**AI 用 `qq_memory_review` 处理队列**：
 
 | action | 含义 |
 | --- | --- |
 | `keep` | 保留并重新计时（之后不再催） |
 | `forget` | 遗忘 |
-| `compress` | 压缩到指定字数（保留核心） |
+| `compress` | 压缩到指定字数 |
 | `promote` | 短期升为长期 |
-| `update` | 改写内容（也用于把多条合并成一条） |
+| `update` | 改写内容（也用于合并多条） |
 
-关键原则写进提示词：**不要因为"旧"就删事实**——某人的身份、长期喜好不会过期，
+关键原则（写进提示词）：**不要因为"旧"就删事实**——某人的身份、长期喜好不会过期；
 该忘的是过时的话题和已失效的约定。这是纯规则做不到的判断。
 
-队列条目的 `id` 用带层前缀的 `ref`（`session:m1` / `shared:m1`），
-因为会话层与共享层各自从 `m1` 编号，不带前缀会串。
-
-**执行时机**：每小时自动跑一次标记；控制台「整理记忆（标记到期）」可手动触发。
 被 `qq_memory_recall` 命中会刷新 `lastAccess`——常被想起的事不会进队列。
-## 3. 存储
+
+## 5. 睡眠：记忆整理巩固
+
+控制台点「睡眠（记忆整理巩固）」→ `POST /api/memory/sleep`：
+
+```
+遍历有记忆的会话
+  → 向 DSH agent 投递一条静默整理指令（silent，不发 QQ 消息）
+  → 模型自己：
+     · qq_memory_review 看待复核队列，逐条 keep/forget/compress/update
+     · qq_memory_candidates 检查共享记忆的重复与矛盾，用 replaceId 合并成一条
+     · 顺手补记这段时间值得长期记住的事
+```
+
+**代码侧不做任何整理判断**：没有自动合并、没有自动压缩、没有自动删除。
+每小时自动检查一次（有到期条目才触发，20 小时内最多一次）。
+
+## 6. 存储
 
 ```
 state/memory/<会话 key 冒号转横线>/
-  memories.json   AI 自己写的记忆（scope/importance/lastAccess/status）——权威数据
-  MEMORY.md       上面那份的可读视图（长期在前、短期在后、★ 表示重要度）
-  events-*.jsonl  聊天流水（自动记录，供 recall 查细节与审计）
-  profiles.json   群友画像   index.json 锚点索引   meta.json 水位
+  MEMORY.md         可读正文（按天分节、最新在上、★ 表示重要度、⏳ 表示待复核）
+  memories.json     AI 自己写的记忆（scope/importance/lastAccess/status/needsReview）
+  events-*.jsonl    聊天流水（供 recall 查细节与审计）
+  profiles.json     群友画像   index.json 锚点索引   meta.json 水位
+state/memory/_global/   共享记忆（同样的结构）
+state/names.json        群名/好友昵称缓存（6 小时过期）
 ```
 
-会话之间**完全隔离**：A 群的记忆不会出现在 B 群，私聊也不会串到群里。
+`MEMORY.md` 可以直接用编辑器打开查看、修正；改坏了在控制台点「从流水重建」还原。
 
-## 4. 工具（MCP）
+## 7. 控制台
 
-| 工具 | 用途 |
-| --- | --- |
-| **`qq_memory_save(key, text, scope, importance, who)`** | AI 自己写记忆（长期/短期 + 重要度） |
-| **`qq_memory_recall(key, question, limit?)`** | 主动回忆：先查自己写的记忆，再查聊天流水；带日期与上下文 |
-| **`qq_memory_forget(key, id)`** | 删掉写错/过时的记忆 |
-| `qq_memory_append` / `query` / `remove` / `clear` | 旧的轻量便签（话题/想说未说的话/群友印象），保留兼容 |
+「聊天行为 → 拟人记忆」：
 
-`qq_memory_recall` 的检索：2-gram BM25 + 时间衰减 + **上下文扩展**（命中一条会把同一段对话前后几分钟一起带回），
-整句提问查不到时退化为关键词再查；完全无重合时返回空（宁可说不知道，也不塞无关记忆）。
-
-## 5. 控制台
-
-「聊天行为 → 记忆」：启用开关、统计（流水/画像/AI 自己写的记忆/文件大小）、
-**按会话读取 MEMORY.md**、**从事件重建**、**执行记忆整理**、清空。
+- **启用记忆**（开关，写 `config.json` 即时生效）
+- 统计：会话 / 聊天流水 / 群友画像 / 记忆条目 / 待复核 / 记忆文件大小
+- **睡眠（记忆整理巩固）** —— 主动调模型整理
+- **按会话查看**：显示**群名 / 好友昵称**（不是 `group:123`）、类型、条目数、画像数
+- 按钮：查看会话记忆 / 查看共享记忆 / 从流水重建 / 清空全部记忆
 
 | 接口 | 用途 |
 | --- | --- |
-| GET `/api/memory` | 开关、统计、按会话明细 |
-| GET `/api/memory/file?key=` | 读 MEMORY.md |
-| POST `/api/memory/retention` | 手动跑保留策略（`{}` 全部会话，`{key}` 单个） |
-| POST `/api/memory/rebuild` | 从事件重建 MEMORY.md |
-| POST `/api/memory/enabled` | 开关（写 config.json，即时生效） |
-| POST `/api/memory/reset` | 清空（`{}` 全部 / `{key}` 单个） |
+| GET `/api/memory` | 开关、统计、按会话明细（含 displayName/kind） |
+| GET `/api/memory/file?key=` | 读 MEMORY.md（`key=_global` 读共享层） |
+| POST `/api/memory/sleep` | 触发睡眠整理（`{}` 全部有记忆的会话，`{key}` 单个） |
+| POST `/api/memory/retention` | 只标记到期条目（兼容旧路径，不整理） |
+| POST `/api/memory/rebuild` | 从事件流重建 MEMORY.md |
+| POST `/api/memory/enabled` | 开关 |
+| POST `/api/memory/reset` | 清空 |
 
-模型侧：`/api/socialV2/memory-save`、`memory-forget`、`memory-recall`（会话令牌鉴权）。
+模型侧（会话令牌鉴权）：`memory-save` / `memory-recall` / `memory-candidates` /
+`memory-review` / `memory-forget`。
 
-## 6. 配置
+## 8. 配置
 
 ```json
 {
@@ -115,19 +141,20 @@ state/memory/<会话 key 冒号转横线>/
     "recentDays": 7,
     "retention": {
       "shortTermDays": 3,
-      "promoteImportance": 3,
       "longStaleDays": 90,
-      "longForgetImportance": 2,
-      "longCompressChars": 80
+      "capacityPerSession": 400,
+      "forgottenGraceDays": 7
     }
   }
 }
 ```
 
-## 7. 运维
+`retention` 只控制**什么时候提醒 AI 复核**，不控制删除——删除永远是 AI 的决定。
+
+## 9. 运维
 
 ```bash
-npm run test:memory                        # 29 项：检索、记忆写入、遗忘策略、Markdown、控制台
+npm run test:memory                        # 31 项：检索、写入合并、复核队列、Markdown、控制台
 node scripts/migrate-memory-markdown.mjs   # 把聊天流水重建成可读 MEMORY.md
 node scripts/probe-memory-limits.mjs <key> # 看某会话的检索效果
 ```
@@ -135,17 +162,15 @@ node scripts/probe-memory-limits.mjs <key> # 看某会话的检索效果
 - 觉得它记太碎：调高 `eventThreshold`，或在提示词里强调"只记以后会用到的"。
 - 觉得它忘太快：调大 `retention.shortTermDays` / `longStaleDays`。
 - 想让它重新认识某个群：控制台清空该会话记忆。
+- 群名/昵称没刷新：删 `state/names.json` 后重启。
 
-## 8. 如何移除
+## 10. 如何移除
 
 1. 控制台关掉开关；
-2. 删 `src/memory/`、`scripts/*memory*`；
-3. 删 `bridge.js` 里 `createMemoryPlugin` 的接入、`/api/memory*`、`/api/socialV2/memory-*` 路由，
-   `public/console.html` 的记忆页，`config.json` 的 `memory` 段。
+2. 删 `src/memory/`、`src/name-resolver.js`、`scripts/*memory*`；
+3. 删 `bridge.js` 里 `createMemoryPlugin` / `createNameResolver` 的接入、
+   `/api/memory*`、`/api/socialV2/memory-*` 路由、`buildSleepPromptV2`，
+   `public/console.html` 的拟人记忆页，`config.json` 的 `memory` 段。
 
 桥接对记忆的依赖只有几处 `memoryPlugin?.` 软调用，删掉后其余功能不受影响。
-
-
-
-
 
