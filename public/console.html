@@ -1813,6 +1813,7 @@ button:active:not(:disabled) {
     </section>
 <section id="section-sessions" data-page="sessions" class="card span-all">
       <h2>会话映射</h2>
+      <div class="meta">每个会话可以单独设<b>运行模式</b>（「跟随全局」= 不覆盖，用顶部那个全局模式）。改动会在下一次消息时重建该会话：<b>上下文会重新开始</b>。封闭 Agent（完整本地工具）只允许管理员私聊。</div>
       <div id="sessionList">加载中…</div>
     </section>
 <section id="section-pending" data-page="sessions" class="card span-all">
@@ -3051,18 +3052,38 @@ async function refreshSessions() {
     const box = document.getElementById('sessionList');
     document.getElementById('metricSessions').textContent = s.sessions.length;
     if (!s.sessions.length) { box.innerHTML = '<div class="empty-state"><strong>还没有会话</strong><p>白名单中的群或好友发来消息后，会话会显示在这里。</p></div>'; return; }
-    let html = '<table><tr><th>QQ 会话</th><th>DSH 会话 ID</th><th>类型</th><th></th></tr>';
+    // 每个会话可以单独设运行模式；「跟随全局」= 没有覆盖。
+    const MODE_LABELS = { chat: '聊天模式', 'closed-agent': '封闭 Agent', reserved: '一代仿真', reserved2: '二代仿真' };
+    const modeOptions = (selected) => {
+      let opts = `<option value=""${selected ? '' : ' selected'}>跟随全局（${esc(MODE_LABELS[s.globalMode] || s.globalMode)}）</option>`;
+      for (const m of (s.modes || Object.keys(MODE_LABELS))) {
+        opts += `<option value="${esc(m)}"${selected === m ? ' selected' : ''}>${esc(MODE_LABELS[m] || m)}</option>`;
+      }
+      return opts;
+    };
+    let html = '<table><tr><th>QQ 会话</th><th>DSH 会话 ID</th><th>类型</th><th>运行模式</th><th></th></tr>';
     for (const x of s.sessions) {
       const isP = x.key.startsWith('private:');
       const type = isP ? '<span class="pill b">私聊</span>' : '<span class="pill g">群</span>';
       const ownerTag = x.owner ? ' <span class="pill r">管理员</span>' : '';
-      html += `<tr><td>${esc(x.key)}${ownerTag}</td><td><code>${esc(x.sessionId)}</code></td><td>${type}</td><td><button class="small" data-reset-key="${esc(x.key)}">清除上下文</button></td></tr>`;
+      const overrideTag = x.modeOverride ? ' <span class="pill">已覆盖</span>' : '';
+      html += `<tr><td>${esc(x.key)}${ownerTag}</td><td><code>${esc(x.sessionId)}</code></td><td>${type}</td>`
+        + `<td><select class="small session-mode" data-mode-key="${esc(x.key)}" title="只影响这一个会话；改动会在下次消息时重建该会话">${modeOptions(x.modeOverride)}</select>${overrideTag}</td>`
+        + `<td><button class="small" data-reset-key="${esc(x.key)}">清除上下文</button></td></tr>`;
     }
     box.innerHTML = html + '</table>';
     box.querySelectorAll('[data-reset-key]').forEach(btn => btn.addEventListener('click', async () => {
       if (!confirm('确定清除该会话的上下文？下次消息将开新会话。')) return;
       const r = await api('/api/session/reset', 'POST', { key: btn.dataset.resetKey });
       alert(r.ok ? '✅ 已清除上下文' : ('❌ ' + (r.error || '失败')));
+      refreshSessions();
+    }));
+    box.querySelectorAll('[data-mode-key]').forEach(sel => sel.addEventListener('change', async () => {
+      const key = sel.dataset.modeKey;
+      const mode = sel.value || null; // 空 = 删除覆盖，回到全局
+      const r = await api('/api/conversation/mode', 'POST', { key, mode });
+      if (!r.ok) { alert('❌ ' + (r.error || '设置失败')); refreshSessions(); return; }
+      // 模式变了，旧 DSH 会话会被退役；下一次消息按新模式重建。
       refreshSessions();
     }));
   } catch {}

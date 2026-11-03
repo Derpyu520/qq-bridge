@@ -59,6 +59,10 @@ const tests = [
   //   一个监听器并放行该 IP 的 Host（外来 Host 依旧 403，DNS rebinding 硬化不能因此失效）；
   //   管理端点 /api/console/access 只接受具体 IP、落盘、且 agent 令牌碰不到它。
   'test-console-access.mjs',
+  // 会话级运行模式（每个会话单独设 chat/reserved/reserved2/closed-agent）：
+  //   端点 /api/conversation/mode（含删除覆盖）、建会话用该会话的 preset、
+  //   改模式后旧会话退役、closed-agent 只允许当前 owner 私聊、缺安全 preset 409。
+  'test-conversation-modes.mjs',
   // 语音系统整体结构检查（入口/依赖/端点/开关/文档一致性）
   'test-voice-system.mjs',
   // SnowLuma 账号/token 自发现（换 QQ 账号后 token 会变，写死的工具会 401）
