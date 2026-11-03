@@ -72,11 +72,13 @@
 
 | 机制 | 位置 | 行为 |
 | --- | --- | --- |
-| 只监听回环 | `server.listen(port, '127.0.0.1')` | 永不绑 `0.0.0.0` |
+| 默认只监听回环 | `server.listen(port, '127.0.0.1')` | 默认永不绑 `0.0.0.0`；配置 `consoleHost` 时**额外**开一个绑该地址的监听器，回环监听器始终保留（MCP 工具进程走 127.0.0.1）。绑 `0.0.0.0` / `::` 时只开通配监听器（同一端口不能再单独绑回环），它覆盖回环也覆盖所有网卡。局域网监听失败不致命，回环控制台仍可用 |
+| 对外监听必须配显式令牌 | `startConsoleServer()` | `consoleHost` 非空但 `config.consoleToken` 未设置（或不合法）时**不开对外监听器**：自动生成的令牌只适合「只有本机能碰到控制台」的场景，它落在 `state/console-token`、靠文件系统权限兜底，一旦对外暴露这个前提就不成立。失败关闭（暴露更少才是安全的那一侧），本机回环控制台照常可用 |
+| 对外监听地址校验 | `normalizeConsoleHost()` + `/api/console/access` | 接受具体 IP、主机名（RFC 1123 标签）、`0.0.0.0` / `::`，或留空；带端口、下划线、空标签、首尾连字符、空格一律 400 拒绝。配置项非法时**退化成只监听回环**，而不是让整个桥接起不来 |
 | 令牌门 | 请求最前面 | **所有**路由（读+写）都要 `x-console-token` 或 `?token=`；未配置时启动自动生成 192 bit 随机值 |
 | 定长比较 | `crypto.timingSafeEqual` | 比较前先比长度，避免 `!==` 短路带来的时延侧信道 |
-| Host 校验 | 请求最前面 | Host 必须是 `127.0.0.1:<port>` / `localhost:<port>` / `[::1]:<port>`，否则 403（DNS rebinding 硬化） |
-| CSRF | 非 GET 请求 | 必须 `content-type: application/json`；若带 `Origin`，其 host 必须等于本机 |
+| Host 校验 | 请求最前面 | 按**监听器**分别判定：回环监听器只接受 `127.0.0.1:<port>` / `localhost:<port>` / `[::1]:<port>`，否则 403（DNS rebinding 硬化）；对外监听器放行配置里那个地址本身（IP 或主机名）。绑 `0.0.0.0` / `::` 时来路的本机地址与 Host 都可能是任意值，唯一门槛变成控制台令牌（而对外监听强制要求显式令牌）。判定依据是 `req.socket.localAddress` —— 所以「开了对外监听」不会顺带放松回环那条路 |
+| CSRF | 非 GET 请求 | 必须 `content-type: application/json`；若带 `Origin`，其 host 必须等于本机（配置了 `consoleHost` 时含该地址） |
 | agent 令牌隔离 | 请求前缀白名单 | 带 `x-agent-token` 的请求默认拒绝，仅放行 `/api/status`、`/api/socialV2/*`、`/api/send/*`、`/api/images/*`、`/api/authorize/read`；管理端点（人格/提示词/思考强度/白名单/重启/令牌）一律 403 |
 | 空令牌拒绝 | `x-agent-token === ''` | 一律 403，避免"空 = 管理端"的绕过 |
 | 写操作不挂 GET | 全路由审查 | 会触发副作用的接口（表情强制同步、语音同步）一律 POST；GET 只读 |
