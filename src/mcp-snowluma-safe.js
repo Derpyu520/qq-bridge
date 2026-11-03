@@ -1374,7 +1374,7 @@ if (cfg.socialV2?.voice?.enabled !== false && cfg.socialV2?.tools?.sendVoice !==
 if (cfg.socialV2?.tools?.getSelfImage !== false) {
   server.tool(
     'qq_get_self_image',
-    '查看你自己的默认 Q 版形象图片（DeepSeek 小鲸鱼形象）。当你被问“你长什么样/发张自拍/你是什么形象”时，可以调用这个工具看自己的样子；返回的图片会直接进入你的视觉上下文。',
+    '查看你自己的默认 Q 版形象图片（形象图跟随当前角色，每个角色一张 assets/<角色名>.png）。当你被问“你长什么样/发张自拍/你是什么形象”时，可以调用这个工具看自己的样子；返回的图片会直接进入你的视觉上下文。若返回“没有配图”，说明当前角色还没上传形象图：按角色卡描述自己即可，不要臆测，也不要套用别家形象。',
     {
       key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
       token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）')
