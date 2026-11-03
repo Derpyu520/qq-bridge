@@ -30,7 +30,7 @@ import {
 } from './markdown.js';
 import { recallMemory, describeMemory } from './recall.js';
 import {
-  addMemory, applyRetention, consolidateMemories, forgetMemory, listCandidates, loadMemories, touchMemory,
+  addMemory, applyRetention, consolidateMemories, forgetMemory, listCandidates, listReviewQueue, loadMemories, reviewMemory, touchMemory,
 } from './memories.js';
 
 export const MEMORY_VERSION = 2;
@@ -489,7 +489,7 @@ export function createMemoryPlugin(opts = {}) {
     return forgetMemory(globalDir(), id);
   }
 
-  /** 执行保留/压缩/遗忘（控制台或定时调用）：只整理本会话。 */
+  /** 到期检查：只标记"该复核了"（不删除），并做机械兜底。 */
   function runRetention(key) {
     return applyRetention(keyDir(key), { now: now(), retention: cfg.retention });
   }
@@ -497,6 +497,39 @@ export function createMemoryPlugin(opts = {}) {
   /** 整理共享记忆（跨会话共享层）。与会话层分开跑，避免每个会话重复处理同一份数据。 */
   function runRetentionGlobal() {
     return applyRetention(globalDir(), { now: now(), retention: cfg.retention });
+  }
+
+  /** 复核队列：本会话 + 共享层里被标记为"该复核"的条目，交给模型判断去留。 */
+  function reviewQueue(key, opts = {}) {
+    if (!enabled) return [];
+    const limit = Number(opts.limit) || 20;
+    const session = listReviewQueue(keyDir(key), { now: now(), limit });
+    const global = listReviewQueue(globalDir(), { now: now(), limit });
+    // id 在两个层里可能重名（各自从 m1 开始编号），所以对外给出带层前缀的 ref，
+    // 模型回传 ref 时就能精确定位，不会误删另一层同 id 的条目。
+    return [
+      ...global.map((e) => ({ ...e, from: 'shared', ref: `shared:${e.id}` })),
+      ...session.map((e) => ({ ...e, from: 'session', ref: `session:${e.id}` })),
+    ].slice(0, Math.max(1, Math.min(50, limit)));
+  }
+
+  /** 模型对一条记忆做复核决定（keep/forget/compress/promote/update）。 */
+  function reviewMemoryEntry(key, id, action, opts = {}) {
+    if (!enabled) return null;
+    const args = { text: opts.text, maxChars: opts.maxChars, now: now() };
+    const raw = String(id ?? '').trim();
+    // 支持 `shared:m1` / `session:m1` 精确指定；不带宽前缀时按"先本会话再共享层"兜底
+    if (raw.includes(':')) {
+      const [layerName, entryId] = raw.split(':', 2);
+      const dir = layerName === 'shared' ? globalDir() : keyDir(key);
+      const hit = reviewMemory(dir, entryId, action, args);
+      return hit ? { ...hit, from: layerName === 'shared' ? 'shared' : 'session' } : null;
+    }
+    const inSession = reviewMemory(keyDir(key), raw, action, args);
+    if (inSession) return { ...inSession, from: 'session' };
+    const inGlobal = reviewMemory(globalDir(), raw, action, args);
+    if (inGlobal) return { ...inGlobal, from: 'shared' };
+    return null;
   }
 
   /** 主动整理：把重复/高度相似的记忆合并（会话层 + 共享层）。 */
@@ -665,6 +698,7 @@ export function createMemoryPlugin(opts = {}) {
         memories: activeMem.length,
         longMemories: activeMem.filter((e) => e.scope === 'long').length,
         shortMemories: activeMem.filter((e) => e.scope === 'short').length,
+        reviewCount: activeMem.filter((e) => e.needsReview).length,
         memoryChars,
         lastEventAt: lastEventAt || null,
       });
@@ -680,6 +714,7 @@ export function createMemoryPlugin(opts = {}) {
         memories: sessions.reduce((sum, x) => sum + x.memories, 0),
         longMemories: sessions.reduce((sum, x) => sum + x.longMemories, 0),
         shortMemories: sessions.reduce((sum, x) => sum + x.shortMemories, 0),
+        reviewCount: sessions.reduce((sum, x) => sum + (x.reviewCount || 0), 0),
         memoryChars: sessions.reduce((sum, x) => sum + x.memoryChars, 0),
       },
     };
@@ -732,6 +767,8 @@ export function createMemoryPlugin(opts = {}) {
     forgetMemoryById,
     runRetention,
     runRetentionGlobal,
+    reviewQueue,
+    reviewMemoryEntry,
     runConsolidate,
     runConsolidateGlobal,
     query,
@@ -747,6 +784,8 @@ export function createMemoryPlugin(opts = {}) {
     resetAll,
   };
 }
+
+
 
 
 

@@ -1444,25 +1444,25 @@ async function main() {
   const memoryRetentionTimer = setInterval(() => {
     if (!memoryPlugin.enabled) return;
     try {
-      let promoted = 0; let forgot = 0; let compressed = 0; let merged = 0;
+      let flagged = 0; let merged = 0; let purged = 0; let trimmed = 0;
       for (const key of socialV2.conversations.keys()) {
-        // 先合并重复/相似记忆（主动整理），再按重要度保留/压缩/遗忘
+        // 机械兜底：清完全重复 + 容量超限；到期条目只标记待复核，不自动删
         const c = memoryPlugin.runConsolidate(key);
         merged += c.merged || 0;
         const r = memoryPlugin.runRetention(key);
-        promoted += r.promoted || 0;
-        forgot += r.forgot || 0;
-        compressed += r.compressed || 0;
+        flagged += r.flagged || 0;
+        purged += r.purged || 0;
+        trimmed += r.trimmed || 0;
       }
       // 共享记忆（跨会话共享层）单独整理一次
       const cg = memoryPlugin.runConsolidateGlobal();
       merged += cg.merged || 0;
       const g = memoryPlugin.runRetentionGlobal();
-      promoted += g.promoted || 0;
-      forgot += g.forgot || 0;
-      compressed += g.compressed || 0;
-      if (merged || promoted || forgot || compressed) {
-        log(`🧠 记忆整理：合并 ${merged}，升长期 ${promoted}，压缩 ${compressed}，遗忘 ${forgot}`);
+      flagged += g.flagged || 0;
+      purged += g.purged || 0;
+      trimmed += g.trimmed || 0;
+      if (merged || flagged || purged || trimmed) {
+        log(`🧠 记忆整理：合并 ${merged}，待复核 ${flagged}，清理 ${purged + trimmed}`);
       }
     } catch (error) {
       log(`⚠️ 记忆整理失败：${error?.message ?? error}`);
@@ -4313,7 +4313,7 @@ async function main() {
           sendJson({ ok: true, config: applied });
           return;
         }
-        // 手动执行「整理 + 保留 / 压缩 / 遗忘」（也可由定时任务自动跑）
+        // 手动执行「整理」（合并完全重复 + 标记到期条目；不自动遗忘，由 AI 复核）
         if (req.method === 'POST' && url.pathname === '/api/memory/retention') {
           const body = await readBody();
           const key = String(body.key ?? '').trim();
@@ -4322,20 +4322,33 @@ async function main() {
           const results = [];
           for (const k of keys) {
             try {
-              // 先合并重复/相似记忆，再跑保留策略（顺序重要：先合并能减少后续要处理的分支）
+              // 先清完全重复（机械兜底），再标记到期条目（不做自动遗忘）
               const c = memoryPlugin.runConsolidate(k);
               results.push({ key: k, merged: c.merged || 0, ...memoryPlugin.runRetention(k) });
             } catch (error) { results.push({ key: k, error: String(error?.message ?? error) }); }
           }
+          // 共享层单独整理一次
+          try {
+            const cg = memoryPlugin.runConsolidateGlobal();
+            const rg = memoryPlugin.runRetentionGlobal();
+            results.push({ key: '共享记忆', merged: cg.merged || 0, ...rg });
+          } catch (error) { results.push({ key: '共享记忆', error: String(error?.message ?? error) }); }
           const total = results.reduce((acc, r) => ({
             merged: acc.merged + (r.merged || 0),
-            promoted: acc.promoted + (r.promoted || 0),
-            forgot: acc.forgot + (r.forgot || 0),
-            compressed: acc.compressed + (r.compressed || 0),
+            flagged: acc.flagged + (r.flagged || 0),
+            purged: acc.purged + (r.purged || 0),
+            trimmed: acc.trimmed + (r.trimmed || 0),
             kept: acc.kept + (r.kept || 0),
-          }), { merged: 0, promoted: 0, forgot: 0, compressed: 0, kept: 0 });
-          log(`控制台：记忆整理完成（合并 ${total.merged}，升长期 ${total.promoted}，压缩 ${total.compressed}，遗忘 ${total.forgot}）`);
-          sendJson({ ok: true, total, results });
+          }), { merged: 0, flagged: 0, purged: 0, trimmed: 0, kept: 0 });
+          log(`控制台：记忆整理完成（合并 ${total.merged}，待复核 ${total.flagged}，清理 ${total.purged + total.trimmed}）`);
+          sendJson({
+            ok: true,
+            total,
+            results,
+            hint: total.flagged
+              ? `有 ${total.flagged} 条记忆到期，已进入待复核队列——由 AI 自己判断留还是忘（不是规则自动删）。`
+              : '没有新的到期条目。',
+          });
           return;
         }
         if (req.method === 'POST' && url.pathname === '/api/memory/reset') {
@@ -7031,6 +7044,49 @@ async function main() {
               ? '如果其中有同一件事，用 qq_memory_save 的 replaceId 把那条改写成合并后的版本；否则正常新增。'
               : '还没有相关记忆，可以正常新增。'
           });
+          return;
+        }
+        // 记忆复核：遗忘机制的核心。不传 id 返回待复核队列；传 id+action 执行模型的判断。
+        if (req.method === 'POST' && url.pathname === '/api/socialV2/memory-review') {
+          const body = await readBody();
+          const key = String(body.key ?? '').trim();
+          const id = String(body.id ?? '').trim();
+          const action = String(body.action ?? '').trim();
+          if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
+          if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2ToolEnabled('memory')) { sendJson({ ok: false, error: '工具未启用：qq_memory_review' }, 403); return; }
+
+          // 只查队列
+          if (!id) {
+            const queue = memoryPlugin.reviewQueue(key, { limit: Number(body.limit) || 20 });
+            sendJson({
+              ok: true,
+              key,
+              count: queue.length,
+              queue,
+              hint: queue.length
+                ? '逐条判断：事实/约定/长期偏好 → keep（或 promote 升长期）；一时话题、已过时的事 → forget；太啰嗦但还有价值 → compress；内容需要更正/合并 → update(text=新内容)。'
+                : '没有需要复核的记忆。',
+            });
+            return;
+          }
+
+          if (!['keep', 'forget', 'compress', 'promote', 'update'].includes(action)) {
+            sendJson({ ok: false, error: `action 必须是 keep/forget/compress/promote/update（收到 "${action}"）` }, 400);
+            return;
+          }
+          if (action === 'update' && !String(body.text ?? '').trim()) {
+            sendJson({ ok: false, error: 'action=update 需要 text' }, 400);
+            return;
+          }
+          const entry = memoryPlugin.reviewMemoryEntry(key, id, action, {
+            text: body.text,
+            maxChars: Number(body.maxChars) || 80,
+          });
+          if (!entry) { sendJson({ ok: false, error: `找不到记忆 ${id}` }, 404); return; }
+          log(`记忆复核 ${key}：${id} → ${action}（${entry.text.slice(0, 40)}）`);
+          sendJson({ ok: true, id, action, entry });
           return;
         }
         if (req.method === 'POST' && url.pathname === '/api/socialV2/memory-forget') {

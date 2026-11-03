@@ -19,13 +19,13 @@ export const SCOPE = { LONG: 'long', SHORT: 'short' };
 // session = 只在这个会话里有效（群梗、本群约定、这里发生的事）。
 export const LAYER = { GLOBAL: 'global', SESSION: 'session' };
 
-// 保留/压缩/遗忘策略（可按需在 config.memory.retention 覆盖）
+// 保留策略：**只决定"什么时候该复核"，不替模型做删除/压缩的决定**。
+// 到期条目会被标记 needsReview，由模型（qq_memory_review）判断留、改、合并还是忘。
 export const DEFAULT_RETENTION = {
-  shortTermDays: 3,        // 短期记忆默认保留 3 天
-  promoteImportance: 3,    // 短期到期时，重要度 >=3 升为长期，否则遗忘
-  longStaleDays: 90,       // 长期记忆多久没被回忆算"陈旧"
-  longForgetImportance: 2, // 陈旧且重要度 <=2 → 遗忘
-  longCompressChars: 80,   // 压缩时保留的字数
+  shortTermDays: 3,        // 短期记忆 3 天后进入复核队列
+  longStaleDays: 90,       // 长期记忆 90 天没被想起 → 进入复核队列
+  capacityPerSession: 400, // 单会话硬上限（超出时按 ★+新旧丢尾部，这是纯机械兜底）
+  forgottenGraceDays: 7,   // 已遗忘条目保留几天便于追溯
 };
 
 const IMPORTANCE_LABEL = ['', '随口', '一般', '值得记', '重要', '很重要'];
@@ -223,15 +223,22 @@ export function touchMemory(dir, id, now = Date.now()) {
 }
 
 /**
- * 执行遗忘策略：短期到期 → 重要的升长期、其余遗忘；长期陈旧 → 压缩或遗忘。
- * 纯规则、可解释；不调模型。返回本次动作统计。
+ * 到期检查：**只标记"该复核了"，不删除、不压缩**。
+ *
+ * 为什么不再自动遗忘：判断一条记忆"还重不重要、是否已过时、该并到哪条"
+ * 需要语义理解，纯规则（★ + 天数）会误删事实（"载舟是徐文杰"当时给了 ★2，
+ * 90 天后就被删了，但它是事实而不是"不重要"）。所以这里只把到期条目放进
+ * 复核队列（needsReview），由模型用 qq_memory_review 决定去留。
+ *
+ * 纯机械的兜底仍在这里做（不需要判断）：已遗忘条目过期物理删除、容量超限丢尾部。
  */
 export function applyRetention(dir, { now = Date.now(), retention = DEFAULT_RETENTION } = {}) {
   const r = { ...DEFAULT_RETENTION, ...(retention ?? {}) };
   const store = loadMemories(dir);
-  const stats = { promoted: 0, forgot: 0, compressed: 0, kept: 0 };
+  const stats = { flagged: 0, purged: 0, trimmed: 0, kept: 0 };
   const nowMs = Number(now) || Date.now();
   const shortMs = Math.max(1, Number(r.shortTermDays) || 3) * DAY_MS;
+  const staleMs = Math.max(1, Number(r.longStaleDays) || 90) * DAY_MS;
 
   for (const entry of store.entries) {
     if (entry.status !== 'active') continue;
@@ -239,44 +246,115 @@ export function applyRetention(dir, { now = Date.now(), retention = DEFAULT_RETE
     const lastSeen = Math.max(Number(entry.lastAccess) || 0, Number(entry.t) || 0);
     const idle = nowMs - lastSeen;
 
-    if (entry.scope === SCOPE.SHORT) {
-      if (age < shortMs) { stats.kept += 1; continue; }
-      // 短期到期：够重要就升长期（同时压缩成一行摘要），否则忘掉
-      if (Number(entry.importance) >= Number(r.promoteImportance)) {
-        entry.scope = SCOPE.LONG;
-        entry.text = compressText(entry.text, Math.max(Number(r.longCompressChars) || 80, 120));
-        entry.promotedAt = nowMs;
-        stats.promoted += 1;
-      } else {
-        entry.status = 'forgotten';
-        entry.forgottenAt = nowMs;
-        stats.forgot += 1;
-      }
-      continue;
-    }
-
-    // 长期：长时间没被回忆 + 重要度不高 → 先压缩，再遗忘。
-    // 重要度 >=4 的不压缩（约定、重要经历压缩掉细节就失去价值了）。
-    if (idle > Number(r.longStaleDays) * DAY_MS && Number(entry.importance) <= Number(r.longForgetImportance)) {
-      entry.status = 'forgotten';
-      entry.forgottenAt = nowMs;
-      stats.forgot += 1;
-    } else if (idle > Number(r.longStaleDays) * DAY_MS && Number(entry.importance) < 4 && !entry.compressed) {
-      entry.text = compressText(entry.text, Number(r.longCompressChars) || 80);
-      entry.compressed = true;
-      stats.compressed += 1;
-    } else {
+    // 短期到期 / 长期陈旧 → 进复核队列（不自动处理）
+    const due = entry.scope === SCOPE.SHORT ? age >= shortMs : idle >= staleMs;
+    if (due && !entry.needsReview) {
+      entry.needsReview = true;
+      entry.reviewFlaggedAt = nowMs;
+      entry.reviewReason = entry.scope === SCOPE.SHORT ? '短期到期' : '长期已久未想起';
+      stats.flagged += 1;
+    } else if (!due) {
       stats.kept += 1;
     }
   }
 
-  // 已遗忘的条目保留 7 天便于追溯，之后物理删除
-  const cutoff = nowMs - 7 * DAY_MS;
+  // 机械兜底 1：已遗忘条目过了宽限期就物理删除
+  const cutoff = nowMs - Math.max(0, Number(r.forgottenGraceDays) || 7) * DAY_MS;
+  const before = store.entries.length;
   store.entries = store.entries.filter((e) => !(e.status === 'forgotten' && Number(e.forgottenAt) < cutoff));
+  stats.purged = before - store.entries.length;
+
+  // 机械兜底 2：容量上限（按 ★ + 新旧排，丢最不重要且最旧的）
+  const cap = Math.max(1, Number(r.capacityPerSession) || 400);
+  const activeCount = store.entries.filter((e) => e.status === 'active').length;
+  if (activeCount > cap) {
+    const active = store.entries.filter((e) => e.status === 'active');
+    active.sort((a, b) => (a.importance * 100 + (a.t / DAY_MS)) - (b.importance * 100 + (b.t / DAY_MS)));
+    const drop = new Set(active.slice(0, activeCount - cap).map((e) => e.id));
+    store.entries = store.entries.filter((e) => !drop.has(e.id));
+    stats.trimmed = drop.size;
+  }
 
   saveMemories(dir, store);
   writeMemoryMarkdown(dir, store);
   return stats;
+}
+
+/** 复核队列：列出到期条目，交给模型判断去留。 */
+export function listReviewQueue(dir, { now = Date.now(), limit = 20 } = {}) {
+  const store = loadMemories(dir);
+  const nowMs = Number(now) || Date.now();
+  return store.entries
+    .filter((e) => e.status === 'active' && e.needsReview)
+    .sort((a, b) => (Number(a.importance) || 3) - (Number(b.importance) || 3))
+    .slice(0, Math.max(1, Math.min(50, Number(limit) || 20)))
+    .map((e) => ({
+      id: e.id,
+      text: e.text,
+      scope: e.scope,
+      layer: normalizeLayer(e.layer),
+      importance: e.importance,
+      who: e.who || '',
+      ageDays: Math.round((nowMs - Number(e.t)) / DAY_MS),
+      idleDays: Math.round((nowMs - Math.max(Number(e.lastAccess) || 0, Number(e.t))) / DAY_MS),
+      reviewReason: e.reviewReason || '',
+    }));
+}
+
+/**
+ * 模型对一条记忆做复核决定。
+ * action:
+ *   · 'keep'     保留（清掉复核标记，刷新"被想起"时间 → 重新计时）
+ *   · 'forget'   遗忘（标记 forgotten，宽限期后物理删除）
+ *   · 'compress' 压缩到 maxChars（保留核心信息）
+ *   · 'promote'  短期升为长期
+ *   · 'update'   改写内容（模型给新 text，也用于合并后的版本）
+ */
+export function reviewMemory(dir, id, action, { text, maxChars = 80, now = Date.now() } = {}) {
+  const store = loadMemories(dir);
+  const entry = store.entries.find((e) => e.id === String(id));
+  if (!entry || entry.status !== 'active') return null;
+  const nowMs = Number(now) || Date.now();
+
+  switch (String(action || '').toLowerCase()) {
+    case 'keep':
+      entry.needsReview = false;
+      entry.reviewedAt = nowMs;
+      entry.lastAccess = nowMs;
+      break;
+    case 'forget':
+      entry.status = 'forgotten';
+      entry.forgottenAt = nowMs;
+      entry.needsReview = false;
+      break;
+    case 'compress':
+      entry.text = compressText(entry.text, Math.max(20, Number(maxChars) || 80));
+      entry.compressed = true;
+      entry.needsReview = false;
+      entry.reviewedAt = nowMs;
+      break;
+    case 'promote':
+      entry.scope = SCOPE.LONG;
+      entry.promotedAt = nowMs;
+      entry.needsReview = false;
+      entry.reviewedAt = nowMs;
+      break;
+    case 'update': {
+      const clean = String(text ?? '').replace(/\s+/g, ' ').trim();
+      if (!clean) throw new Error('update 需要新的 text');
+      entry.text = truncate(clean, 400);
+      entry.needsReview = false;
+      entry.reviewedAt = nowMs;
+      entry.lastAccess = nowMs;
+      break;
+    }
+    default:
+      throw new Error(`未知的复核动作：${action}（可用 keep/forget/compress/promote/update）`);
+  }
+
+  saveMemories(dir, store);
+  writeMemoryMarkdown(dir, store);
+  return entry;
 }
 
 function compressText(text, maxChars) {
@@ -316,7 +394,9 @@ export function writeMemoryMarkdown(dir, store = loadMemories(dir)) {
         const star = '★'.repeat(Math.min(5, Number(e.importance) || 3));
         const who = e.who ? `${e.who}：` : '';
         const comp = e.compressed ? '（已压缩）' : '';
-        lines.push(`- [${e.id}] ${date} ${star} ${who}${e.text}${comp}`);
+        // 待复核的条目在文件里也标出来，方便人/模型一眼看到
+        const review = e.needsReview ? ' `⏳待复核`' : '';
+        lines.push(`- [${e.id}] ${date} ${star} ${who}${e.text}${comp}${review}`);
       }
     }
     lines.push('');

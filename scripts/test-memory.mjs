@@ -495,38 +495,96 @@ test('模型写记忆：save/forget + 长期短期 + 重要度', () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('遗忘策略：短期到期按重要度升长期或遗忘；长期陈旧压缩/遗忘', () => {
+test('遗忘：规则只标记"该复核"，由模型决定去留', () => {
   const dir = tmpDir();
   let clock = { v: Date.parse('2026-09-01T12:00:00+08:00') };
   const plugin = createMemoryPlugin({ stateDir: dir, config: {}, now: () => clock.v });
 
-  // 三条短期：重要(4)、一般(2)，外加长期：重要约定(5) 与 低重要度的旧事(2)
-  plugin.saveMemory('group:910', { text: '阿草说她在学吉他，手指疼', scope: 'short', importance: 4, who: '阿草' });
-  plugin.saveMemory('group:910', { text: '今天群里在聊外卖', scope: 'short', importance: 2 });
-  plugin.saveMemory('group:910', { text: '很重要的约定：下周三给他带咖啡，要少糖', scope: 'long', importance: 5, who: '老爹' });
-  plugin.saveMemory('group:910', { text: '以前聊过的那部番，具体剧情细节都记不清了只记得好看', scope: 'long', importance: 2 });
+  // 短期 3 天到期、长期 90 天没被想起 → 都只进复核队列，**不被自动删除**
+  plugin.saveMemory('group:910', { text: '今天群里在聊外卖', scope: 'short', importance: 1 });
+  plugin.saveMemory('group:910', { text: '载舟就是徐文杰', scope: 'long', importance: 2, who: '载舟', layer: 'global' });
+  plugin.saveMemory('group:910', { text: '很重要的约定：下周三给他带咖啡', scope: 'long', importance: 5, who: '老爹' });
 
-  // 推进 4 天（短期到期）
   clock.v += 4 * DAY;
   const r1 = plugin.runRetention('group:910');
-  assert.equal(r1.promoted, 1, JSON.stringify(r1));   // 重要度 4 的升长期
-  assert.equal(r1.forgot, 1, JSON.stringify(r1));     // 重要度 2 的短期遗忘
-  const md1 = plugin.readFile('group:910');
-  assert.ok(!md1.includes('外卖'), '不重要的短期应被遗忘：' + md1);
-  assert.ok(md1.includes('吉他'), '重要的短期应升长期并保留：' + md1);
+  plugin.runRetentionGlobal();
+  assert.equal(r1.flagged, 1, '只有短期到期的那条该被标记：' + JSON.stringify(r1));
+  assert.equal(r1.forgot, undefined, '规则不该自己遗忘');
+  // 内容仍在（没被规则删掉）
+  assert.ok(plugin.readFile('group:910').includes('外卖'), '到期不等于删除：' + plugin.readFile('group:910'));
 
-  // 再推进 120 天：长期里「重要度 <4」的陈旧条目会被压缩或遗忘；
-  // 重要度 4/5 的（约定、重要经历）必须原样保留——压缩掉细节就失去价值了。
+  // 复核队列能拿到到期条目（含原因、多久没想起、带层前缀的 ref）
+  const queue = plugin.reviewQueue('group:910');
+  assert.ok(queue.length >= 1, JSON.stringify(queue));
+  const shortItem = queue.find((e) => e.text.includes('外卖'));
+  assert.ok(shortItem, JSON.stringify(queue));
+  assert.ok(shortItem.reviewReason.includes('短期'), JSON.stringify(shortItem));
+  assert.equal(shortItem.from, 'session', JSON.stringify(shortItem));
+  // id 在会话层与共享层各自编号（都从 m1 开始），所以对外用 ref 区分
+  assert.equal(shortItem.ref, `session:${shortItem.id}`, JSON.stringify(shortItem));
+
+  // 模型判断：外卖这种一时话题 → forget（用 ref 精确定位）
+  plugin.reviewMemoryEntry('group:910', shortItem.ref, 'forget');
+  assert.ok(!plugin.readFile('group:910').includes('外卖'), '模型判定遗忘后才消失：' + plugin.readFile('group:910'));
+
+  // 长期事实（★2）过了 90 天也只会被标记，不会因"重要度低"被删
   clock.v += 120 * DAY;
-  const r2 = plugin.runRetention('group:910');
-  assert.ok(r2.compressed + r2.forgot >= 1, JSON.stringify(r2));
-  const md2 = plugin.readFile('group:910');
-  assert.ok(md2.includes('咖啡') && md2.includes('少糖'), '重要度 5 的约定不该被压缩/遗忘：' + md2);
-  assert.ok(md2.includes('吉他'), '重要度 4 的长期记忆不该被压缩/遗忘：' + md2);
-  assert.ok(!md2.includes('具体剧情细节'), '重要度 2 的陈旧长期记忆应被压缩：' + md2);
+  plugin.runRetention('group:910');
+  plugin.runRetentionGlobal();
+  const q2 = plugin.reviewQueue('group:910');
+  const factItem = q2.find((e) => e.text.includes('徐文杰'));
+  assert.ok(factItem, '长期事实应进入复核队列：' + JSON.stringify(q2));
+  assert.equal(factItem.from, 'shared', JSON.stringify(factItem));
+  assert.ok(plugin.readGlobalFile().includes('徐文杰'), '事实类内容不该被规则删掉：' + plugin.readGlobalFile());
+
+  // 模型判断：这是事实 → keep（重新计时，之后不再催）
+  plugin.reviewMemoryEntry('group:910', factItem.ref, 'keep');
+  const q3 = plugin.reviewQueue('group:910');
+  assert.ok(!q3.some((e) => e.text.includes('徐文杰')), 'keep 后不该再出现在队列：' + JSON.stringify(q3));
+
+  // 其他动作：compress（会话层的咖啡约定）/ update（共享层的事实）
+  const coffee = plugin.reviewQueue('group:910').find((e) => e.text.includes('咖啡'))
+    || { ref: 'session:m2' };
+  plugin.reviewMemoryEntry('group:910', coffee.ref, 'compress', { maxChars: 20 });
+  assert.ok(plugin.readFile('group:910').includes('已压缩'), plugin.readFile('group:910'));
+  plugin.reviewMemoryEntry('group:910', factItem.ref, 'update', { text: '载舟=徐文杰，男，24岁' });
+  assert.ok(plugin.readGlobalFile().includes('24岁'), plugin.readGlobalFile());
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('遗忘兜底：完全重复自动清、容量超限丢尾部、遗忘条目宽限期后物理删除', () => {
+  const dir = tmpDir();
+  let clock = { v: Date.now() };
+  const plugin = createMemoryPlugin({ stateDir: dir, config: { retention: { capacityPerSession: 5, forgottenGraceDays: 7 } }, now: () => clock.v });
+
+  // 完全重复 → 整理时自动合并（机械兜底，不需要模型判断）
+  // 这里直接塞 store，模拟"历史遗留的重复"（正常写入路径已去重）
+  fs.mkdirSync(path.join(dir, 'group-920'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'group-920', 'memories.json'), JSON.stringify({ version: 1, nextId: 3, entries: [
+    { id: 'm1', t: clock.v, text: '载舟就是徐文杰', scope: 'long', layer: 'session', importance: 3, who: '载舟', status: 'active' },
+    { id: 'm2', t: clock.v, text: '载舟就是徐文杰', scope: 'long', layer: 'session', importance: 3, who: '载舟', status: 'active' },
+  ] }), 'utf8');
+  const c = plugin.runConsolidate('group:920');
+  assert.equal(c.merged, 1, JSON.stringify(c));
+
+  // 容量超限：超过 5 条时丢最不重要/最旧的
+  for (let i = 0; i < 8; i += 1) {
+    plugin.saveMemory('group:920', { text: `琐事${i}`, scope: 'short', importance: 1 });
+  }
+  const r = plugin.runRetention('group:920');
+  assert.ok(r.trimmed >= 1, '超容量应丢尾部：' + JSON.stringify(r));
+  const store = JSON.parse(fs.readFileSync(path.join(dir, 'group-920', 'memories.json'), 'utf8'));
+  assert.ok(store.entries.filter((e) => e.status === 'active').length <= 5, JSON.stringify(store.entries.length));
+
+  // 已遗忘条目：宽限期内还在（可追溯），过了就物理删除
+  plugin.reviewMemoryEntry('group:920', 'm1', 'forget');
+  let s1 = JSON.parse(fs.readFileSync(path.join(dir, 'group-920', 'memories.json'), 'utf8'));
+  assert.ok(s1.entries.some((e) => e.status === 'forgotten'), '遗忘后应先保留可追溯');
+  clock.v += 10 * DAY;
+  const r2 = plugin.runRetention('group:920');
+  assert.ok(r2.purged >= 1, '超过宽限期应物理删除：' + JSON.stringify(r2));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
 test('共享记忆：跨会话共享，本会话记忆不外泄', () => {
   const dir = tmpDir();
   const clock = { v: Date.now() };
@@ -629,6 +687,10 @@ if (fail) {
   for (const { name, error } of failures) console.error(`\nFAILED: ${name}\n${error?.stack ?? error}`);
   process.exit(1);
 }
+
+
+
+
 
 
 

@@ -325,6 +325,7 @@ const TOOL_CONFIG_FLAGS = {
   qq_memory_recall: 'memory',
   qq_memory_save: 'memory',
   qq_memory_candidates: 'memory',
+  qq_memory_review: 'memory',
   qq_memory_forget: 'memory',
   qq_memory_append: 'memory',
   qq_memory_query: 'memory',
@@ -1010,6 +1011,32 @@ server.tool(
 );
 
 server.tool(
+  'qq_memory_review',
+  '整理记忆（遗忘机制的核心）。不带 id 时返回「待复核队列」：到期（短期满 3 天 / 长期 90 天没被想起）的记忆条目，含 id、文本、★、多久没被想起。**要不要留、压缩、升长期、还是忘掉，由你判断**——事实类内容（某人的身份、长期喜好）不该因为"旧"就被删，一时的话题/已过时的约定才该忘。带 id + action 时对某条执行决定。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    id: z.string().optional().describe('要处理的记忆 id：用队列返回的 ref（形如 session:m1 / shared:m1），可精确区分本会话与共享层。不传则只返回队列'),
+    action: z.enum(['keep', 'forget', 'compress', 'promote', 'update']).optional().describe('keep=保留并重新计时 / forget=遗忘 / compress=压缩 / promote=短期升长期 / update=改写（需 text）'),
+    text: z.string().optional().describe('action=update 时的新内容（也可用于把多条合并成一条后写入）'),
+    maxChars: z.number().optional().describe('action=compress 时保留多少字，默认 80'),
+    limit: z.number().optional().describe('队列最多返回几条，默认 20')
+  },
+  async ({ key, token, id, action, text, maxChars, limit }) => {
+    try {
+      const data = await agentApi('/api/socialV2/memory-review', {
+        method: 'POST',
+        body: JSON.stringify({ key, id: id || '', action: action || '', text: text || '', maxChars: maxChars || 80, limit: limit || 20 }),
+        headers: { 'x-agent-token': token }
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `记忆复核失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
   'qq_memory_forget',
   '删掉一条自己写错的/过时的记忆（按 qq_memory_recall 返回的 id）。聊天流水不会被删，只是不再当作"记得"。',
   {
@@ -1504,5 +1531,7 @@ if (cfg.socialV2?.tools?.getForwardMsg !== false) {
 }
 
 await server.connect(new StdioServerTransport());
+
+
 
 

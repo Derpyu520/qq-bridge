@@ -2499,11 +2499,12 @@ button:active:not(:disabled) {
         <tr><td>聊天流水</td><td id="memStatEvents">—</td></tr>
         <tr><td>群友画像</td><td id="memStatProfiles">—</td></tr>
         <tr><td>记忆条目</td><td id="memStatMemories">—</td></tr>
+        <tr><td>待复核</td><td id="memStatReview">—</td></tr>
         <tr><td>记忆文件</td><td id="memStatFile">—</td></tr>
       </table>
 
       <div class="row" style="margin-top:12px">
-        <button id="memRetentionBtn" class="small">整理记忆</button>
+        <button id="memRetentionBtn" class="small">整理记忆（标记到期）</button>
         <span class="meta" id="memRetentionMsg" role="status"></span>
       </div>
 
@@ -4556,6 +4557,7 @@ function loadMemory() {
     const totalChars = sessions.reduce((sum, s) => sum + (Number(s.memoryChars) || 0), 0);
     document.getElementById('memStatFile').textContent = totalChars ? (totalChars + ' 字符') : '—';
     const totalMems = sessions.reduce((sum, s) => sum + (Number(s.memories) || 0), 0);
+    document.getElementById('memStatReview').textContent = (totals.reviewCount ?? 0) + ' 条（由 AI 判断留还是忘）';
     document.getElementById('memStatMemories').textContent = totalMems
       ? `${totalMems} 条（长期 ${sessions.reduce((n, s) => n + (Number(s.longMemories) || 0), 0)} / 短期 ${sessions.reduce((n, s) => n + (Number(s.shortMemories) || 0), 0)}）`
       : '0 条（等 AI 自己写）';
@@ -5336,5 +5338,7 @@ setInterval(() => { if (currentConsolePage !== 'usage') return; refreshUsage(); 
 </script>
 </body>
 </html>
+
+
 
 
