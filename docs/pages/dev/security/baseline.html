@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>安全基线 — qq-bridge</title>
+<meta name="description" content="黑话按「内容 + 会话 scope」分别保存；查询、提示词、提交和研究回写都按归属过滤。 无法识别/写错的归属一律隔离（ invalid: 前缀，任何会话都不可见），不退回 global ；只有缺失归属的旧条目按 global 兼容。 研究按 scope 分批，切换 scope 时退役旧学习会话，避免模型上下文混入其他群的资料。 贴纸本身和 QQ 收藏描述仍属于账号共享资料；AI…">
+<meta property="og:title" content="安全基线 — qq-bridge">
+<meta property="og:description" content="黑话按「内容 + 会话 scope」分别保存；查询、提示词、提交和研究回写都按归属过滤。 无法识别/写错的归属一律隔离（ invalid: 前缀，任何会话都不可见），不退回 global ；只有缺失归属的旧条目按 global 兼容。 研究按 scope 分批，切换 scope 时退役旧学习会话，避免模型上下文混入其他群的资料。 贴纸本身和 QQ 收藏描述仍属于账号共享资料；AI…">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../../assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="../../../" data-tab="Developer Guide" data-page-rel="pages/dev/security/baseline.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../../../index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout has-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body decisions">
+  <div class="topbar">
+  <div class="crumbs">
+    <a href="../../../index.html">qq-bridge</a>
+    <span class="sep">/</span>
+    Pages
+    <span class="sep">/</span>
+    Developer Guide
+    <span class="sep">/</span>
+    Security
+    <span class="sep">/</span>
+    <span class="here">安全基线</span>
+  </div>
+</div>
+  <h1>安全基线</h1>
+<!-- moved verbatim from pages/ops/security-baseline.html [h2:二] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="二已实现的边界按攻击面">二、已实现的边界（按攻击面）</h2>
+<h3 id="1-准入谁能触发-agent">1. 准入（谁能触发 agent）</h3>
+<table>
+<thead><tr><th>机制</th><th>位置</th><th>行为</th></tr></thead>
+<tbody>
+<tr><td>白名单</td><td><code>src/bridge.js</code> <code>allowed()</code></td><td><code>deny</code> 优先于 <code>allow</code>；两侧统一 <code>String()</code> 比较（兼容 OneBot int64 的数字/字符串差异）；allow 为空时返回 <code>allowAllWhenEmpty</code>（<strong>默认 false</strong>）</td></tr>
+<tr><td>模式门</td><td><code>modeAllowed()</code> / <code>isSessionAllowedInCurrentMode()</code></td><td>会话 key 必须严格匹配 <code>^(group|private):\d+$</code>；<code>closed-agent</code> 只放行 <code>private:&lt;ownerQQ&gt;</code></td></tr>
+<tr><td>配置失败</td><td><code>loadConfig()</code></td><td><code>config.json</code> 缺失/解析失败 → <strong>fail-fast 退出</strong>（不是"用默认值继续跑"）</td></tr>
+<tr><td>管理员识别</td><td><code>handleIncoming()</code></td><td><code>String(event.user_id) === String(cfg.ownerQQ ?? &#x27;&#x27;)</code>；未配置 <code>ownerQQ</code> 时启动日志明确告警（审批/管理命令/封闭 agent 全部不可用）</td></tr>
+</tbody>
+</table>
+<h3 id="2-工具面agent-能做什么">2. 工具面（agent 能做什么）</h3>
+<table>
+<thead><tr><th>机制</th><th>位置</th><th>行为</th></tr></thead>
+<tbody>
+<tr><td>预设工具守卫</td><td><code>plugins/qq-agent-presets/qq-tool-restrict.mjs</code>（唯一权威实现，<code>dsh/agent-presets/*/qq-tool-restrict.mjs</code> 只是 re-export 壳）</td><td>两道闸门：① 注册期 <code>tools.restrict({deny})</code> 把本地执行/宿主运行期工具<strong>从模型 schema 里隐藏</strong>（具体名单以当前守卫实现和 <code>npm run scan:tool-names</code> 对账为准）；② 执行期 <code>tools.guard</code> 精确白名单：仅 <code>mcp__snowluma__*</code> / <code>mcp__snowluma-host__*</code> / <code>mcp__web-search-safe__*</code> + <code>ask_user_question</code> / <code>todo_write</code>；空/未知名字一律拒绝；内置 <code>tool-web</code> 的 search/fetch 关闭。<strong>每次升级 DSH 后应重新对账</strong>：不存在的名字可能被静默跳过，新能力若未补进名单则可能漏隐藏</td></tr>
+<tr><td>预设 fail-closed</td><td><code>resolvePresetName()</code> + <code>ensureSession()</code></td><td>群聊/仿真会话拿不到受限预设时<strong>拒绝建会话</strong>，绝不回退到含本地工具的 DSH 默认预设；只有 <code>closed-agent</code>（管理员私聊）允许回退</td></tr>
+<tr><td>发送强制白名单</td><td>所有 <code>/api/send/*</code>、<code>/api/socialV2/send-*</code></td><td>目标必须命中 <code>allow.groups</code> / <code>allow.private</code>（每次都重新校验，不做缓存）</td></tr>
+<tr><td>动态 ACL</td><td><code>resolveVoicePathForV2()</code> / <code>voicePathInsideLibrary()</code></td><td>语音只能取语音库目录内的文件；贴纸只能发收藏库内的表情；图片只能读 SnowLuma home 内的本地文件（realpath 复核防符号链接逃逸）</td></tr>
+<tr><td>工具参数</td><td>MCP 注册与执行期会话守卫</td><td>未知键严格拒绝；支持的别名须显式声明、无冲突并归一化，目标别名同样接受可信会话绑定检查</td></tr>
+<tr><td><strong>只探测、不部署</strong>（L6 设计不变量）</td><td><code>mcp-host-server.js</code></td><td>该 MCP server <strong>只提供 <code>snowluma_status</code>（只读探活 <code>get_login_info</code>）</strong>。⚠️ <strong>v0.1.5 起删除了 <code>start_snowluma</code> / <code>stop_snowluma</code> 与 <code>snowluma.allowProcessControl</code></strong>：SnowLuma EULA §5.4 规定「将其并入第三方安装包或 Docker 镜像、<strong>通过自动化脚本部署</strong>」须事先书面授权，原生组件属<strong>专有组件</strong>。⇒ 本程序不安装、不复制、不打包、不程序化启停 SnowLuma；用户自行安装与启动。详见 <a href="../../use/license.html">NOTICE</a></td></tr>
+</tbody>
+</table>
+<h3 id="3-出站内容模型能说什么能发什么">3. 出站内容（模型能说什么、能发什么）</h3>
+<table>
+<thead><tr><th>机制</th><th>位置</th><th>行为</th></tr></thead>
+<tbody>
+<tr><td>敏感信息拦截</td><td><code>auditAndSend()</code> / <code>SENSITIVE_RE</code> / <code>assertOutboundAuditOk()</code></td><td>回复含本机路径、UNC、凭据赋值形态 → <strong>整条拦截不发</strong>；语音按文件名审计；错误文本、审批理由、工具名同样过审</td></tr>
+<tr><td>会话令牌防外发</td><td><code>redactKnownTokensOnly()</code> + <code>onebotSend()</code></td><td>所有已知 agent token 在发送前脱敏；文本里若仍出现已知令牌则<strong>直接抛错不发</strong></td></tr>
+<tr><td>CQ 注入</td><td><code>onebotSend()</code></td><td>出站文本一律包成 <code>{type:&#x27;text&#x27;}</code> 段并做 <code>[CQ:</code> → <code>[CQ：</code> 转义，杜绝 CQ 码注入</td></tr>
+<tr><td>@ 限制</td><td><code>onebotSend()</code></td><td><code>atUserId</code> 只接受正整数，禁止 <code>@all</code></td></tr>
+<tr><td>发送限流</td><td><code>socialV2.send.*</code> / <code>voice.*</code> / <code>sticker.collect.*</code></td><td>每分钟/每小时硬上限，超限拒绝并退避</td></tr>
+<tr><td>回合错误通知</td><td><code>reportTurnFailure()</code></td><td>二代错误只保留本地诊断；其他模式只发通用提示并节流，不把上游异常正文直接送到 QQ</td></tr>
+<tr><td>排队期间撤权</td><td><code>captureSendGuard()</code></td><td>AI 文本、语音、表情和拍一拍在异步准备前捕获权限，并在实际发送前重查会话、模式、白名单、暂停与静默状态</td></tr>
+</tbody>
+</table>
+<p>黑话按「内容 + 会话 scope」分别保存；查询、提示词、提交和研究回写都按归属过滤。
+无法识别/写错的归属一律隔离（<code>invalid:</code> 前缀，任何会话都不可见），不退回 <code>global</code>；只有缺失归属的旧条目按 <code>global</code> 兼容。
+研究按 scope 分批，切换 scope 时退役旧学习会话，避免模型上下文混入其他群的资料。
+贴纸本身和 QQ 收藏描述仍属于账号共享资料；AI 备注、标签、用途在返回 API 结果和搜索前按 scope 净化，
+切换备注归属时清空未被本次覆盖的旧私有字段。旧版本已经丢失归属的数据见下表 R12。</p>
+<p><code>socialV2.privacy.exposeUserId</code> 是<strong>局部开关</strong>，不是全局脱敏：设为 <code>false</code> 时只隐藏
+<code>/api/socialV2/active-members</code> 返回给 agent 的 <code>userId</code> / <code>isOwner</code>；<code>group-members</code>
+（按设计需要 <code>userId</code> 才能用 <code>atUserId</code> 点名）、<code>message-detail</code> 以及普通消息/工具返回
+仍会带 <code>userId</code>。如果目标是「模型完全看不到 QQ 号」，需要另行改造这些出口，不能只依赖该开关。</p>
+<h3 id="4-控制台本机最高权限入口">4. 控制台（本机最高权限入口）</h3>
+<table>
+<thead><tr><th>机制</th><th>位置</th><th>行为</th></tr></thead>
+<tbody>
+<tr><td>只监听回环</td><td><code>server.listen(port, &#x27;127.0.0.1&#x27;)</code></td><td>永不绑 <code>0.0.0.0</code></td></tr>
+<tr><td>令牌门</td><td>请求最前面</td><td><strong>所有</strong>路由（读+写）都要 <code>x-console-token</code> 或 <code>?token=</code>；未配置时启动自动生成 192 bit 随机值</td></tr>
+<tr><td>定长比较</td><td><code>crypto.timingSafeEqual</code></td><td>比较前先比长度，避免 <code>!==</code> 短路带来的时延侧信道</td></tr>
+<tr><td>Host 校验</td><td>请求最前面</td><td>Host 必须是 <code>127.0.0.1:&lt;port&gt;</code> / <code>localhost:&lt;port&gt;</code> / <code>[::1]:&lt;port&gt;</code>，否则 403（DNS rebinding 硬化）</td></tr>
+<tr><td>CSRF</td><td>非 GET 请求</td><td>必须 <code>content-type: application/json</code>；若带 <code>Origin</code>，其 host 必须等于本机</td></tr>
+<tr><td>agent 令牌隔离</td><td>请求前缀白名单</td><td>带 <code>x-agent-token</code> 的请求默认拒绝，仅放行 <code>/api/status</code>、<code>/api/socialV2/*</code>、<code>/api/send/*</code>、<code>/api/images/*</code>、<code>/api/authorize/read</code>；管理端点（人格/提示词/思考强度/白名单/重启/令牌）一律 403</td></tr>
+<tr><td>空令牌拒绝</td><td><code>x-agent-token === &#x27;&#x27;</code></td><td>一律 403，避免"空 = 管理端"的绕过</td></tr>
+<tr><td>写操作不挂 GET</td><td>全路由审查</td><td>会触发副作用的接口（表情强制同步、语音同步）一律 POST；GET 只读</td></tr>
+<tr><td>请求体限制</td><td><code>readBody()</code></td><td>声明长度或实际累计超过 1 MB → 413；30 秒读取超时</td></tr>
+<tr><td>安全响应头</td><td>全部响应</td><td><code>X-Frame-Options: DENY</code>、CSP、<code>nosniff</code>、<code>Referrer-Policy: no-referrer</code>、<code>Cache-Control: no-store</code></td></tr>
+</tbody>
+</table>
+<h3 id="5-秘密与落盘">5. 秘密与落盘</h3>
+<table>
+<thead><tr><th>机制</th><th>位置</th><th>行为</th></tr></thead>
+<tbody>
+<tr><td>原子写</td><td><code>atomicWriteJson/Text()</code></td><td>唯一随机临时名 + rename（Windows EPERM 退避重试），不会写坏配置</td></tr>
+<tr><td>Windows ACL 收紧</td><td><code>hardenStateDirAcl()</code> + <code>scripts/harden-state-acl.mjs</code></td><td>Windows 上 <code>mode: 0o600</code> 是<strong>空操作</strong>，因此启动时切断 <code>state/</code> 的继承链，只保留当前用户/SYSTEM/Administrators。改 ACL 需要 WRITE_DAC —— <strong>目录属主通常本来就有，所以一般不弹 UAC</strong>；失败时用 <code>Start-Process -Verb RunAs</code> 提权重试一次（<code>--elevated</code> 短路自身，杜绝递归），再失败就打印可复制命令并<strong>以 0 退出、绝不阻断启动</strong>。控制台「访问与安全」页显示告警条与「重新检测」按钮</td></tr>
+<tr><td>ACL 防自锁</td><td><code>src/state-acl.mjs</code></td><td>先为现有条目显式授权，再断继承，最后移除宽松主体；命令失败即停止，每步回读验证，空 DACL 不作为成功</td></tr>
+<tr><td>令牌不回显</td><td>日志/活动/工具日志</td><td>控制台及连接自愈日志只记已配置/已生成，不打印令牌前后缀；活动日志与工具调用参数过 <code>redactSensitiveText</code> / <code>redactSensitive</code>（递归处理 JSON 字符串叶子）</td></tr>
+<tr><td>令牌只发回环</td><td><code>dsh-client.ensureAuth()</code></td><td>DSH launch token 换 Cookie 时必须放进 URL，因此<strong>默认拒绝非回环 baseUrl</strong>；远程部署需显式 <code>dsh.allowRemote: true</code></td></tr>
+<tr><td>自动探测与重定向</td><td><code>dsh-endpoint.js</code> / <code>dsh-client.js</code></td><td>自动发现只为回环地址铸造本机 Cookie；拒绝 URL 内嵌凭据；探测不跟随重定向并关闭响应体，RPC 拒绝重定向，避免转交聊天主体</td></tr>
+<tr><td>路径校验（读点）</td><td><code>roleRawContent()</code> 等</td><td>人格名在<strong>读取点</strong>也做 <code>sanitizeRoleName</code> + <code>path.resolve</code> 包含性校验（<code>state/current-role.json</code> 是用户可直接编辑的文件）</td></tr>
+<tr><td>原型污染</td><td>记忆写入/加载</td><td><code>__proto__</code> / <code>constructor</code> / <code>prototype</code> 键在写入与加载两侧都被拒绝；配置合并用对象展开（不触发 setter）</td></tr>
+</tbody>
+</table>
+<h3 id="6-与-dsh-沙箱的-acl-交互dsh-020-起这是有意的取舍不是缺陷">6. 与 DSH 沙箱的 ACL 交互（DSH 0.2.0 起；<strong>这是有意的取舍，不是缺陷</strong>）</h3>
+<p>DSH 的 Windows 文件沙箱按<strong>能力 SID</strong> 授权：SID 由 <code>sha256(规范化工作区路径)</code> 派生
+（形如 <code>S-1-4-&lt;a&gt;-&lt;b&gt;</code>；同一个工作区路径每次会话派生出同一个 SID，<strong>重命名工作区会换一个</strong>），
+沙箱进程跑在 <code>WRITE_RESTRICTED</code> + Low 完整性的令牌里，<strong>写权限要靠工作区根上那条
+可继承 ACE 沿继承链传下来</strong>。DSH 只在首次进入工作区时下发一次
+（之后有 exact-ACE 跳过，不会重新下发），也从不修改任何对象的保护标志。</p>
+<p>由此产生一条必须知道的交互：</p>
+<table>
+<thead><tr><th>事实</th><th>后果</th></tr></thead>
+<tbody>
+<tr><td><code>harden-state-acl.mjs</code> 用 <code>/inheritance:r</code> 切断 <code>state/</code> 与 <code>config.json</code> 的继承链</td><td>这两处的 DACL 里<strong>没有</strong>能力 SID ⇒ <strong>DSH 沙箱会话写不进去</strong>（EPERM / Access denied），而无沙箱终端完全正常</td></tr>
+<tr><td>这是收紧凭据的<strong>唯一手段</strong>（Windows 上 <code>mode 0o600</code> 是空操作）</td><td>取舍明确：<strong>保住凭据不外泄</strong> &gt; 沙箱内可写</td></tr>
+</tbody>
+</table>
+<p>因此本项目的规矩是：<strong>任何从沙箱里跑的东西都不得写 <code>state/</code></strong>。
+测试夹具、探针、self-test 的临时产物一律落在系统临时目录
+（见 <code>scripts/probe-auth.mjs</code> 的 <code>probeWorkspaceDir</code>）。</p>
+<p>诊断：<code>npm run diagnose:acl</code> —— 只读扫描，列出全部被切断继承的路径并分成
+「有意收紧（<code>state/</code>、<code>config.json</code>）」与「非预期收紧」两类。</p>
+<blockquote>
+<p>⛔ <strong>绝不要用 <code>/inheritance:e</code> 去"修好" <code>state/</code> 的沙箱写入</strong>：恢复继承会把父目录的
+可继承 ACE 一起带回来，其中包含 <code>NT AUTHORITY\Authenticated Users: Modify</code> 与
+<code>BUILTIN\Users: ReadAndExecute</code> —— 那正是收紧时要摘掉的两条，等于把控制台令牌、
+SnowLuma OneBot 令牌与全部 QQ 聊天记录重新开放给本机任何已登录用户。</p>
+</blockquote>
+<blockquote>
+<p>⚠️ 已知的<strong>非预期</strong>收紧（2026-09-29 实测）：<code>plugins/qq-agent-presets/**</code> 与
+<code>plugins/qq-mode-console/**</code> 的内容也被切断了继承（<code>plugins/</code> 自身没有）。
+<strong>本仓库没有任何脚本这么做</strong>，来源不明（手工 icacls 或仓库外工具）。
+它的副作用是沙箱会话里改不动 L7 守卫（<code>qq-tool-restrict.mjs</code>）。
+这两处不含凭据，恢复继承不涉及泄密风险 —— 是否恢复由使用者决定（<code>npm run diagnose:acl</code>
+会打印命令）。<code>state/</code> 不在此列。</p>
+</blockquote>
+<h3 id="7-网络">7. 网络</h3>
+<p><code>src/safe-fetch.js</code>（仅暴露给 agent 的只读联网）：</p>
+<ul>
+<li>只允许 <code>http</code> / <code>https</code>；拒绝 URL 内嵌凭据；拒绝 <code>file:</code> / <code>gopher:</code> 等 scheme</li>
+<li>解析出的<strong>每一个</strong> DNS 结果都要过私有地址判定（含 IPv4-mapped IPv6、NAT64、6to4、ULA、link-local、zone-id、十进制/八进制/十六进制 IPv4）</li>
+<li><strong>连接到已校验的 IP</strong>，同时保留原 <code>Host</code> 与 TLS SNI ⇒ 关闭 DNS rebinding 的检查-连接间隙</li>
+<li>每一跳重定向都重新校验，最多 5 跳，重定向响应体立即销毁</li>
+<li>响应体大小与图片像素上限；图片按 magic number 校验</li>
+<li>不读取任何代理环境变量（不存在 <code>HTTP_PROXY</code> 绕过）</li>
+<li>拒绝 Azure WireServer 等特殊云平台地址；<code>web_fetch</code> 与媒体抓取统一只允许 80/443/8080/8443 端口</li>
+</ul>
+<p>联网搜索不把上游 HTTP 错误主体传给模型；成功结果中的已知 API key 在字段截断前精确脱敏，
+避免兼容端点回显凭据。此措施不改变响应协议字段，也不取代凭据和目标地址校验。</p>
+<hr>
+
+<!-- moved verbatim from NOTICE.md [h2:四] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="四数据传输">四、数据传输</h2>
+<p>本软件运行时主要有下列网络出口。部署方应在部署前知悉，并按适用法律与所在平台规则履行告知义务。</p>
+<table>
+<thead><tr><th>目的地</th><th>传输的数据</th><th>默认</th><th>关闭方式</th></tr></thead>
+<tbody>
+<tr><td>本机 DSH（默认 <code>127.0.0.1:3080</code>）</td><td>群聊与私聊消息文本、图片、昵称、会话上下文</td><td>启用</td><td>不运行 DSH</td></tr>
+<tr><td>LLM 提供方（经 DSH 调用，默认 <code>deepseek-official</code>）</td><td>同上，包含群内其他成员的消息</td><td>启用</td><td>在 DSH 中更换 provider 或 model</td></tr>
+<tr><td>OneBot 网关（默认 <code>127.0.0.1:3000/3001</code>）</td><td>发出的消息与动作参数</td><td>启用</td><td>不接入 QQ</td></tr>
+<tr><td><code>web_search</code> → DeepSeek 搜索接口（默认）／Bing（回退）；也支持自定义 <code>webSearch.baseURL</code></td><td>搜索关键词，以及 DeepSeek / 自定义搜索端点所需的 API key 请求头。黑话自学习默认启用（<code>slang.autoResearch: true</code>），会将自群聊提取的词条作为关键词发出；自定义 <code>baseURL</code> 时 API key 也发往该端点</td><td>启用</td><td>不挂载 <code>mcp-web-search-safe</code>，或关闭黑话自动研究</td></tr>
+<tr><td><code>web_fetch</code> → 公网 URL</td><td>被抓取的页面地址（由模型决定，可能来自聊天内容中的线索）</td><td>启用</td><td>不挂载 <code>mcp-web-search-safe</code>；<code>safe-fetch.js</code> 拦截内网、私有及保留地址</td></tr>
+<tr><td>图片与表情等媒体 URL → QQ CDN 或其他公网地址</td><td>媒体地址及下载请求；地址可来自聊天消息或 OneBot 返回数据</td><td>启用</td><td>不发送含媒体的会话，或不接入 QQ</td></tr>
+</tbody>
+</table>
+<p>搜索、网页与媒体请求的目标和内容可能由模型、聊天消息或自定义配置决定，可能包含群聊中出现的
+词条或线索。部署方可通过搜索服务配置、关闭黑话自动研究及限制媒体输入控制这些出口。</p>
+<p>本软件不包含遥测、统计或 phone-home 机制。上表描述本软件运行时的主要网络出口，
+不包括安装依赖、操作系统或用户自行启动的其他服务产生的网络流量。</p>
+<hr>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+<aside class="sidebar-right" aria-label="On this page">
+  <div class="sidebar-inner">
+    <span class="toc-label">On this page</span>
+    <nav class="toc-list">
+      <a class="toc-h2" href="#二已实现的边界按攻击面">二、已实现的边界（按攻击面）</a>
+      <a class="toc-h3" href="#1-准入谁能触发-agent">1. 准入（谁能触发 agent）</a>
+      <a class="toc-h3" href="#2-工具面agent-能做什么">2. 工具面（agent 能做什么）</a>
+      <a class="toc-h3" href="#3-出站内容模型能说什么能发什么">3. 出站内容（模型能说什么、能发什么）</a>
+      <a class="toc-h3" href="#4-控制台本机最高权限入口">4. 控制台（本机最高权限入口）</a>
+      <a class="toc-h3" href="#5-秘密与落盘">5. 秘密与落盘</a>
+      <a class="toc-h3" href="#6-与-dsh-沙箱的-acl-交互dsh-020-起这是有意的取舍不是缺陷">6. 与 DSH 沙箱的 ACL 交互（DSH 0.2.0 起；这是有意的取舍，不是缺陷）</a>
+      <a class="toc-h3" href="#7-网络">7. 网络</a>
+      <a class="toc-h2" href="#四数据传输">四、数据传输</a>
+    </nav>
+  </div>
+</aside>
+
+</div>
+
+<script src="../../../assets/nav.js"></script>
+
+</body>
+</html>

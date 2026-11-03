@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DSH 0.2.0 适配改动记录（qq-bridge v0.1.7 → v0.2.0） — qq-bridge</title>
+<meta name="description" content="本文的边界 ：只记录 为适配 DSH 0.2.0-rc.2 而做的改动 。每一条给出四件事： 现象 / 为什么必须改 / 证据 / 怎么验证。">
+<meta property="og:title" content="DSH 0.2.0 适配改动记录（qq-bridge v0.1.7 → v0.2.0） — qq-bridge">
+<meta property="og:description" content="本文的边界 ：只记录 为适配 DSH 0.2.0-rc.2 而做的改动 。每一条给出四件事： 现象 / 为什么必须改 / 证据 / 怎么验证。">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../../assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="../../../" data-tab="记录" data-page-rel="pages/records/adaptation/dsh-0.2.0.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../../../index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout has-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body research">
+  <div class="topbar">
+  <div class="crumbs">
+    <a href="../../../index.html">qq-bridge</a>
+    <span class="sep">/</span>
+    Pages
+    <span class="sep">/</span>
+    记录
+    <span class="sep">/</span>
+    版本适配
+    <span class="sep">/</span>
+    <span class="here">DSH 0.2.0 适配改动记录（qq-bridge v0.1.7 → v0.2.0）</span>
+  </div>
+</div>
+  <h1>DSH 0.2.0 适配改动记录（qq-bridge v0.1.7 → v0.2.0）</h1>
+<!-- moved verbatim from pages/history/index.html [all] on 2026-11-03 (docs reorg step 2) -->
+<blockquote>
+<p><strong>本文的边界</strong>：只记录<strong>为适配 DSH 0.2.0-rc.2 而做的改动</strong>。每一条给出四件事：
+现象 / 为什么必须改 / 证据 / 怎么验证。</p>
+<p>同批但不属于适配本身的改动（依赖告警清理、沙箱 ACL 诊断工具）在 <strong>§7</strong> 单独列，
+避免把"顺手做的"算进"适配必须做的"。
+复核后<strong>判定兼容、因此没改</strong>的部分在 <strong>§8</strong> —— "没改"同样是结论，而且是省下返工的那种。</p>
+<p>适配目标：<code>@deepseek-ai/dsh</code> <strong>0.2.0-rc.2</strong>（上一版适配目标是 0.1.7-rc.2）。
+对应提交：<code>e43186a</code>（主体）；本文写于 2026-10-02。</p>
+<p><strong>上游行为标注</strong>：文中出现的 SnowLuma <code>[Hook]</code>、原生组件、逐字节比对、运行时源码等，均为对 SnowLuma 行为的记录或观测；qq-bridge 自身不注入、不挂钩、不修改其本体。</p>
+</blockquote>
+<hr>
+<h2 id="0-一句话结论">0. 一句话结论</h2>
+<p><strong>0.2.0 的协议面基本没动</strong>：桥接用到的 14 个 RPC、<code>$events</code>/waterfall 帧、<code>session/follow</code> 快照、
+<code>settings/update</code> 参数形状、三个 MCP server 的握手与工具命名，全部实测兼容。</p>
+<p><strong>真正需要改的是三处</strong>，而且其中<strong>最严重的一处并不是 0.2.0 造成的</strong>（见 §2.1 的事实核对）：</p>
+<ol>
+<li>会话待处理队列读不出来 ⇒ <strong>每一次</strong>退役/重置 QQ 会话都在抛错，旧任务继续跑；</li>
+<li>QQ 安全守卫的名单没跟上 0.2.0 的真实工具面（新增了能绕过 L7 的口子）；</li>
+<li><code>qq-mode</code> 设置命名空间的注册 API 被 0.2.0 删除（旧代码靠一句早退"看起来正常"）。</li>
+</ol>
+<p>外加一处<strong>0.1.7 时代遗留、本轮一并清零</strong>的适配缺口：9 个诊断/运维脚本的鉴权路径早已失效（§5）。</p>
+<hr>
+<h2 id="1-改动总览">1. 改动总览</h2>
+<table>
+<thead><tr><th>#</th><th>文件</th><th>改动</th><th>对治的问题</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>src/dsh-client.js</code></td><td>新增 <code>inboxItemsOfProjections</code> / <code>inboxItemIds</code> / <code>controlBaselineInboxItems</code>；<code>_readSessionQueue</code> 改为「<code>session/projections</code> 主路径 + <code>session/control</code> 回退」；<code>METHOD_ARG_WRAPPERS</code> 增加 <code>session/projections</code></td><td>§2 队列读不出来</td></tr>
+<tr><td>2</td><td><code>plugins/qq-agent-presets/qq-tool-restrict.mjs</code></td><td>restrict 名单 <strong>52 → 67</strong>，补 15 个名字</td><td>§3 工具面漂移</td></tr>
+<tr><td>3</td><td><code>scripts/dsh-tool-names.mjs</code>（新增）</td><td>工具名抽取的<strong>唯一实现</strong>（原测试里那份模糊抽取器误报真名）</td><td>§3 对账工具</td></tr>
+<tr><td>4</td><td><code>scripts/scan-dsh-tool-names.mjs</code>（新增）</td><td>拿安装包与守卫名单双向求差的 CLI（<code>npm run scan:tool-names</code>）</td><td>§3 对账工具</td></tr>
+<tr><td>5</td><td><code>plugins/qq-mode-console/lib/index.js</code></td><td>删掉 0.2.0 已移除的 <code>ctx.settings.register()</code> 死路，<code>apply()</code> 改为显式空实现</td><td>§4 设置命名空间</td></tr>
+<tr><td>6</td><td><code>scripts/test-qq-mode-plugin.mjs</code></td><td>重写为 6 项，钉住命名空间可用的三点前提 + 「不许把已删除的 API 加回来」</td><td>§4</td></tr>
+<tr><td>7</td><td><code>scripts/probe-auth.mjs</code>（新增）+ 5 个探针 + 4 个运维脚本</td><td>鉴权统一走本机 DSH 会话凭据生成 Cookie；夹具改到系统临时目录</td><td>§5 遗留缺口</td></tr>
+<tr><td>8</td><td><code>scripts/probe-020-protocol.mjs</code>、<code>probe-020-settings.mjs</code>（新增）</td><td>0.2.0 契约探针（帧结构 / settings 命名空间）</td><td>§2 §4 取证</td></tr>
+<tr><td>9</td><td><code>scripts/test-dsh-inbox-projection.mjs</code>（新增，12 项）</td><td>用<strong>真实 0.2.0 帧骨架</strong>钉住队列解析（离线，已进 <code>test:audit</code>）</td><td>§2 回归网</td></tr>
+<tr><td>10</td><td><code>scripts/test-dsh-session-retire.mjs</code>（新增，11 项）</td><td>活 DSH 端到端：退役会话必须成功且真的清掉队列</td><td>§2 回归网</td></tr>
+<tr><td>11</td><td><code>scripts/test-audit-protocol.mjs</code></td><td>3 条会话退役用例按两条路径重写（含 0.2.0 形状断言）</td><td>§2 回归网</td></tr>
+<tr><td>12</td><td><code>scripts/verify-dsh-015-adaptation.mjs</code> → <code>verify-dsh-020-adaptation.mjs</code></td><td>活 DSH 段重写为 0.2.0 契约；语法检查在禁止 spawn 的环境改为<strong>显式跳过</strong>而非假失败</td><td>§6</td></tr>
+<tr><td>13</td><td><code>scripts/test-preset-local-tools.mjs</code></td><td>删掉自带的模糊抽取器，改用 §3 的唯一实现；名单同步</td><td>§3</td></tr>
+<tr><td>14</td><td><code>scripts/test-audit.mjs</code></td><td>清单加入 2 个新脚本（28 → 30）</td><td>§6</td></tr>
+<tr><td>15</td><td>版本身份：<code>package.json</code>、<code>package-lock.json</code>、两个插件包、三个 MCP serverInfo</td><td>0.1.7 → <strong>0.2.0</strong></td><td>§6</td></tr>
+<tr><td>16</td><td>文档：<code>README.md</code>、<code>README.en.md</code>、<code>RULES.md</code>、<code>docs/FOLDER_MAP.md</code>、<code>docs/guides/DSH_SETUP.md</code>、<code>docs/guides/SECURITY_BASELINE.md</code>、<code>docs/guides/PROJECT_GUIDE.md</code></td><td>版本行、preset 安装位置、鉴权说明、脚本清单、过期清单</td><td>§6</td></tr>
+</tbody>
+</table>
+<hr>
+<h2 id="2-断裂点一会话待处理队列读不出来改动最大也最容易被忽略">2. 断裂点一：会话待处理队列读不出来（改动最大，也最容易被忽略）</h2>
+<h3 id="21-事实核对这不是-020-引入的">2.1 事实核对：<strong>这不是 0.2.0 引入的</strong></h3>
+<p>这一点必须写在最前面，因为它改变了这条改动的定性：</p>
+<ul>
+<li>读队列的代码（<code>frame.value.value?.queues</code>）由提交 <code>288642d</code>（<strong>2026-09-18</strong>）引入，
+并<strong>随 v0.1.7 发布</strong>（<code>git merge-base --is-ancestor 288642d ce726bb</code> 成立）。</li>
+<li><code>state/bridge.log</code> 里有 <code>invalid session/control baseline</code> 报错，时间是 <strong>9/27 21:37</strong> 与 <strong>9/28 08:16</strong>。</li>
+<li>DSH <code>0.2.0-rc.2</code> 的发布时间是 <strong>2026-09-29</strong>。</li>
+</ul>
+<p>⇒ 报错<strong>全部发生在 0.1.7-rc.2 上</strong>。也就是说：<strong>这段解析从来没有工作过</strong>，不是 0.2.0 改坏了它，
+而是 0.2.0 期间做契约探测时才被翻出来。</p>
+<blockquote>
+<p>⚠️ 勘误：v0.2.0 的 README 与提交信息把这个缺陷描述成「0.2.0 把队列挪进了 projections」，
+那个归因是<strong>错的</strong>（已在本轮修正 README）。本仓库不再保留 0.1.7 安装，因此<strong>无法断言
+0.1.7 的 baseline 形状到底是什么</strong>；能确定的只有：<code>queues</code> 不是它。</p>
+</blockquote>
+<h3 id="22-现象">2.2 现象</h3>
+<p>桥接退役/重置 QQ 会话时要先清掉 DSH 侧还没跑的队列，再取消当前 turn（<code>stopSessionWork</code>）。
+日志里每次都是：</p>
+<pre><code>⚠️ 停止旧会话失败 session-…: invalid session/control baseline；请在 DSH 检查旧任务</code></pre>
+<p>后果不是"少清几条"：<strong>队列清不掉 ⇒ 旧任务继续在 DSH 里跑、继续烧 token</strong>，
+而唯一的信号就是那一行警告（不影响启动、不影响收发，所以很容易被当成噪音）。</p>
+<h3 id="23-020-的实际契约实测">2.3 0.2.0 的实际契约（实测）</h3>
+<p><code>session/control</code> 的开场 baseline（<code>scripts/probe-020-protocol.mjs</code> 采样，逐键确认）：</p>
+<pre><code>{ type: &#x27;baseline&#x27;,
+  value: { projections: {
+    &#x27;&lt;sessionId&gt;&#x27;: { asOfSeq, values: {
+      inbox: { &#x27;next-turn&#x27;: UserMessage[], &#x27;next-step&#x27;: UserMessage[] },
+      title, goal, tokenUsage, ... } } } } }</code></pre>
+<p>每条 inbox 项的形状（<strong>这就是 <code>session/updateQueue</code> 需要的 <code>itemId</code> 来源</strong>）：</p>
+<pre><code>{ content: [{ type:&#x27;text&#x27;, text }], source: { kind:&#x27;user&#x27;, rpcId }, role:&#x27;user&#x27;, id }</code></pre>
+<p>同时确认 0.2.0 提供一元 RPC <code>session/projections</code>（非激活读取）：</p>
+<pre><code>POST /api/session/projections   { request: { sessionId } }
+  → { asOfSeq, values } | null      （null = 会话不在宿主注册表里）</code></pre>
+<h3 id="24-改法">2.4 改法</h3>
+<ul>
+<li><strong>主路径</strong>改为 <code>session/projections</code>：一条普通 HTTP RPC，不开 WebSocket、可取消、可超时、可单测；
+<code>null</code> 视为「没有待处理项」（会话已归档/未挂载）。</li>
+<li><strong>回退路径</strong>保留 <code>session/control</code>，但按 0.2.0 形状解析 <code>projections[&lt;id&gt;].values.inbox</code>。</li>
+<li>解析逻辑抽成<strong>具名导出</strong>（<code>inboxItemsOfProjections</code> / <code>inboxItemIds</code> / <code>controlBaselineInboxItems</code>），
+测试可以直接钉住，不必去戳私有方法。</li>
+<li><strong>结构不符就显式抛错</strong>：静默返回空数组正是这个缺陷的形态——"清不掉却毫无提示"。
+但"能力缺失"（没有 inbox 键 / <code>values</code> 为 null）与"结构变了"要分开：前者返回空，后者抛错。</li>
+<li><code>stopSessionWork</code> 的读队列失败<strong>不阻断</strong> <code>session/cancel</code>（保持原设计：读不到也要停当前 turn）。</li>
+</ul>
+<h3 id="25-怎么验证">2.5 怎么验证</h3>
+<table>
+<thead><tr><th>测试</th><th>类型</th><th>内容</th></tr></thead>
+<tbody>
+<tr><td><code>npm run test:dsh-inbox</code>（12 项）</td><td>离线，已进 <code>test:audit</code></td><td>用真实采样帧骨架钉住层级与键名；断言旧 <code>queues</code> 形状<strong>不再被接受</strong>；断言结构异常必须抛错</td></tr>
+<tr><td><code>npm run test:session-retire:e2e</code>（11 项）</td><td>需活 DSH</td><td><code>session/projections</code> 可用、baseline 带 <code>projections</code> 且<strong>没有</strong> <code>queues</code>、<code>stopSessionWork</code> 成功返回、排队中的消息真的被清掉（实测 <code>removed: 1</code>）、退役后队列为空</td></tr>
+<tr><td><code>test-audit-protocol.mjs</code>（4 项）</td><td>离线夹具</td><td>主路径不开 socket；回退路径按 0.2.0 形状只删自己的项；超时关 socket；读失败仍取消 turn</td></tr>
+</tbody>
+</table>
+<hr>
+<h2 id="3-断裂点二qq-安全守卫名单没跟上-020-的工具面">3. 断裂点二：QQ 安全守卫名单没跟上 0.2.0 的工具面</h2>
+<h3 id="31-为什么这是安全问题而不是清洁问题">3.1 为什么这是安全问题而不是清洁问题</h3>
+<p>守卫有两道闸门：注册期 <code>tools.restrict({deny})</code>（把工具从模型 schema 里<strong>隐藏</strong>）与
+执行期 <code>tools.guard</code> 白名单。<code>restrict</code> 对<strong>不存在的</strong>工具名会抛错，而守卫是逐个 <code>try/catch</code>
+的 ⇒ 拼错/过期的名字 = <strong>静默 no-op</strong>；反过来，DSH 新版本<strong>新增</strong>的能力若没进名单 =
+该隐藏的工具留在仿真会话的 schema 里。两类漂移都只能靠"拿安装包重新对账"发现。</p>
+<h3 id="32-对账工具新增">3.2 对账工具（新增）</h3>
+<ul>
+<li><code>scripts/dsh-tool-names.mjs</code>：从已安装的 <code>@deepseek-ai/dsh-*</code> 与用户插件里抽真实工具名
+（锚定 <code>register(defineTool({ name }))</code> / <code>toolName:</code> / 任意层级的 <code>*.patch.yml</code>）。</li>
+<li><code>scripts/scan-dsh-tool-names.mjs</code>：<code>npm run scan:tool-names</code>，双向求差并给退出码。</li>
+<li><strong>抽取实现只有一份</strong>，扫描器与 <code>test-preset-local-tools.mjs</code> 共用。</li>
+</ul>
+<blockquote>
+<p>顺带修掉一个危险缺陷：<code>test-preset-local-tools.mjs</code> 原先自带一份<strong>模糊</strong>抽取器
+（全文件乱扫 <code>name: &#x27;x&#x27;</code> + 只认少数包名前缀 + 只读包根目录的 patch）。0.2.0 对账时它把
+<strong>10 个真实存在</strong>的工具名报成"假名"——<code>dsh-mcp-resources</code>、<code>dsh-experimental-tool-agent-team</code>
+不匹配它的包名白名单，<code>subagent_codex</code> 写在 <code>dsh-web-app/presets/*.patch.yml</code> 而非包根。
+<strong>误判方向很危险：它会逼人把真名字从安全名单里删掉。</strong></p>
+</blockquote>
+<h3 id="33-对账结论旧名字全在0-假名新增-15-个">3.3 对账结论：旧名字全在（0 假名），新增 15 个</h3>
+<p>扫描器按"危险语义"报出 13 个，人工补齐 <code>read_mcp_resource</code> 的两个兄弟后实际新增 <strong>15</strong> 个
+（守卫 52 → 67）。逐条判定：</p>
+<table>
+<thead><tr><th>组</th><th>名字</th><th>为什么必须隐藏</th></tr></thead>
+<tbody>
+<tr><td>① <strong>全局层默认启用，仿真会话真的会继承</strong></td><td><code>list_mcp_resources</code>、<code>list_mcp_resource_templates</code>、<code>read_mcp_resource</code></td><td><code>dsh-base</code> 的 <code>mcp-resources</code> 行<strong>没有被 disabled</strong>，所以每个 QQ 会话都拿到这三个工具。<code>read_mcp_resource</code> 的 <code>server</code> 参数可以指向<strong>任意已配置的 MCP server</strong>：用户一旦挂了 filesystem 之类的能力型 MCP，QQ 群就通过它拿到了文件读取权</td></tr>
+<tr><td>② 派生 agent / 执行外部代码</td><td><code>subagent_codex</code>、<code>subagent_claude_code</code>、<code>spawn_teammate</code>、<code>team_task_{create,get,list,update}</code></td><td>Codex / Claude Code 子智能体与实验性 Team 模式都能间接拿到 shell。当前只在 DSH 自带 preset 里挂载，列进来是<strong>回归网</strong>（别的 composition 一旦推进全局层就被挡住）</td></tr>
+<tr><td>③ 插件装载权 = 任意代码执行</td><td><code>plugin_manager</code></td><td>安装/卸载/启停插件，内部会 spawn pnpm</td></tr>
+<tr><td>④ 无人值守的自我调度</td><td><code>schedule_{create,list,update,delete}</code></td><td>0.2.0 起 <code>dsh-schedule</code> 是可选 bundle，装上就是"agent 给自己排定时任务"</td></tr>
+</tbody>
+</table>
+<h3 id="34-怎么验证">3.4 怎么验证</h3>
+<p><code>npm run scan:tool-names</code> → 悬空（假名）0 个、未覆盖的危险名 0 个；
+<code>node scripts/test-preset-local-tools.mjs</code> 7 项全过；<code>verify:adaptation</code> 增加两条对应断言。</p>
+<hr>
+<h2 id="4-断裂点三qq-mode-设置命名空间的注册-api-被删除">4. 断裂点三：<code>qq-mode</code> 设置命名空间的注册 API 被删除</h2>
+<h3 id="41-现象不明显因为被一句早退挡住了">4.1 现象（不明显，因为被一句早退挡住了）</h3>
+<p>DSH 0.2.0 删除了 <code>ctx.settings.register(ns, schema, opts)</code>——<code>SettingsForms</code> 的公开面只剩
+<code>configure</code> / <code>writable</code> / <code>documentPath</code> / <code>prepareDocument</code> / <code>describe</code> / <code>update</code> / <code>replace</code> / <code>mutate</code>。
+命名空间改为<strong>从 profile 的 loader entry 推导</strong>。</p>
+<p>插件原来的 <code>apply()</code> 第一句就是 <code>if (!settings || typeof settings.register !== &#x27;function&#x27;) return;</code>，
+所以它<strong>静默早退</strong>：不报错、不影响功能，但那段代码变成了死路，而且注释还在教后来人用已删除的 API。</p>
+<h3 id="42-实测命名空间本身完全正常">4.2 实测：命名空间本身完全正常</h3>
+<p>在 0.2.0 上实测（<code>npm run probe:settings</code> / <code>verify:adaptation</code>）：</p>
+<ul>
+<li><code>settings/describe</code> 列出 <strong>20 个</strong>命名空间，其中<strong>有</strong> <code>qq-mode</code>，<code>value = {&quot;mode&quot;:&quot;reserved2&quot;}</code>，带 <code>revision</code>；</li>
+<li><code>settings/update</code> 写回成功并返回 <code>SettingsNamespaceView</code>。</li>
+</ul>
+<p>即三点前提在 0.2.0 依然成立且是唯一路径：<strong>① entry id 恰好等于命名空间名</strong>（<code>cordis.patch.yml</code> 的
+<code>id: qq-mode</code>）、<strong>② 插件模块导出 <code>Config</code></strong>、<strong>③ <code>Config</code> 至少一个 <code>volatile</code> 字段</strong>。</p>
+<blockquote>
+<p>附带更正一条 0.2.0 的接口形状：<code>settings/update</code> 是<strong>多参数</strong> RPC，args 是
+<code>{ ns, patch, expectedRevision }</code> <strong>平铺</strong>，不是 <code>{ request: {...} }</code>
+（传 request 会被网关拒为 <code>gateway/arguments-invalid: missing &quot;ns&quot;, &quot;patch&quot;; unexpected &quot;request&quot;</code>）。
+桥接原本就是平铺调用，<strong>无需改动</strong>——但这条值得写下来，因为它极易踩。</p>
+</blockquote>
+<h3 id="43-改法">4.3 改法</h3>
+<ul>
+<li><code>apply()</code> 改为显式空实现 + 一行诊断日志（证明 entry 真的被装配过），<strong>不再触碰 <code>settings.register</code></strong>；
+也不改成 <code>settings.configure({auto:false})</code>——那会关掉自动设置页策略，与默认行为相反。</li>
+<li>注释按 0.2.0 重写，说明为什么 0.2.0 下"什么都不用做"。</li>
+</ul>
+<h3 id="44-怎么验证">4.4 怎么验证</h3>
+<p><code>test-qq-mode-plugin.mjs</code> 重写为 6 项：导出形状、entry id 等于命名空间名、<code>Config</code> 可用且带 volatile
+（含 schemastery <code>toJSON()</code> 的<strong>引用表</strong>形状——顶层是 <code>{uid, refs}</code>，dict 在 refs 里）、
+schema 接受全部 mode 拼写、<strong>不再出现 <code>settings.register</code></strong>（只看可执行代码，剥注释）、
+以及缺 settings 服务时不抛。活 DSH 侧由 <code>verify:adaptation</code> 的 qq-mode 段覆盖。</p>
+<hr>
+<h2 id="5-适配缺口四探针与夹具的鉴权落盘路径017-遗留本轮清零">5. 适配缺口四：探针与夹具的鉴权/落盘路径（0.1.7 遗留，本轮清零）</h2>
+<p><strong>这一条不是 0.2.0 造成的</strong>，是 0.1.7 改动留下的尾巴，因为这次要大量用探针才暴露出来。</p>
+<ul>
+<li><strong>鉴权</strong>：六个探针 + 四个运维脚本各自复制了一份"从 <code>~/.dsh/guard/logs/server-*.out.log</code> 抓
+<code>?token=</code> 再换 Cookie"的引导。这条路在 0.1.7 就死了（启动 token 只存在内存、日志里是上一个进程的
+陈旧值），于是一律 401 —— <strong>诊断工具本身坏了，而且没人会注意到</strong>（探针不在回归套件里；
+生产代码当时修好了，工具没跟上）。
+→ 新增 <code>scripts/probe-auth.mjs</code>，统一走本机 DSH 会话凭据生成 Cookie，并提供
+<code>probeRpc</code> / <code>probeMuxSocket</code> / <code>probeWorkspaceDir</code>；9 个脚本全部改用它。</li>
+<li><strong>落盘</strong>：探针与测试夹具原先写在仓库 <code>state/</code> 下。<code>state/</code> 被 <code>harden-state-acl.mjs</code> 收紧了 ACL
+（见 §7.2），在 DSH 沙箱会话里<strong>写不进去</strong>（EPERM）。
+→ 探针、<code>self-test</code>、<code>test-setup-dsh-idempotent</code>、<code>test-dsh-v2-wait</code> 的临时产物全部改到系统临时目录。
+迁完后 <code>npm run self-test</code> 在沙箱里也能完整跑通。</li>
+<li>删除 <code>scripts/probe-015.mjs</code>（0.1.5 专用，已被 verifier 取代，走的是旧点号协议路径）；
+同一用途由 <code>probe-020-protocol.mjs</code> 承担。</li>
+</ul>
+<hr>
+<h2 id="6-版本身份验证脚本与文档">6. 版本身份、验证脚本与文档</h2>
+<h3 id="61-版本身份-017--020">6.1 版本身份 0.1.7 → 0.2.0</h3>
+<p>沿用项目约定（版本号与 DSH 对齐）。改动点：<code>package.json</code>、<code>package-lock.json</code>（顶层 + <code>packages[&quot;&quot;]</code>）、
+<code>plugins/qq-mode-console/package.json</code>、<code>plugins/qq-agent-presets/package.json</code>、三个 MCP server 的
+<code>serverInfo.version</code>。全部由 <code>verify:adaptation</code> 的既有断言钉住（防止再次出现"自报版本与包版本不一致"）。</p>
+<h3 id="62-验证脚本改名与重写">6.2 验证脚本改名与重写</h3>
+<p><code>verify-dsh-015-adaptation.mjs</code> → <strong><code>verify-dsh-020-adaptation.mjs</code></strong>
+（0.1.7 那次为了不打断调用方沿用了旧文件名，结果留下一个"自称 015 却在验 0.2.0"的脚本；
+<code>npm run verify:adaptation</code> 入口名保持不变，所以既有调用不受影响）。</p>
+<p>活 DSH 段按 0.2.0 重写，新增/保留：qq-mode 可列可写、<code>session/projections</code>、
+<strong>control baseline 形状（有 <code>projections</code>、无 <code>queues</code>）</strong>、<code>stopSessionWork</code> 不抛、
+<code>$events</code> ready 帧、<code>session/modelCatalog</code>、点号 endpoint 仍 404。
+语法检查在禁止 spawn 的环境里改为<strong>显式记 <code>⏭ 跳过</code></strong>，而不是输出 8 条假失败把真失败淹掉。</p>
+<h3 id="63-文档纠偏原文与代码不符的地方">6.3 文档纠偏（原文与代码不符的地方）</h3>
+<table>
+<thead><tr><th>文档</th><th>原问题</th></tr></thead>
+<tbody>
+<tr><td><code>README.md</code> / <code>README.en.md</code></td><td>版本行停在 0.1.7；<code>README.en.md</code> 更旧，仍停在 v0.1.5，且<strong>仍在介绍已删除的 <code>start_snowluma</code>/<code>stop_snowluma</code></strong>；preset 安装位置写成已废弃的 <code>~/.dsh/.agent-presets/</code>；<code>dsh.authToken</code> 说明仍在讲"从 guard 日志自动发现"</td></tr>
+<tr><td><code>docs/guides/DSH_SETUP.md</code></td><td>同上（preset 位置、命名空间机制、401 排查步骤）；断言项数 45 → 65；EPERM 的说明改为"显式跳过"</td></tr>
+<tr><td><code>docs/FOLDER_MAP.md</code></td><td>脚本数、被删/新增脚本、探针状态</td></tr>
+<tr><td><code>docs/guides/SECURITY_BASELINE.md</code></td><td>守卫两道闸门与对账工具；回归清单脚本数与新增命令</td></tr>
+<tr><td><code>RULES.md</code></td><td>preset 修改说明指向已废弃目录</td></tr>
+<tr><td><code>docs/guides/PROJECT_GUIDE.md</code></td><td>它是历史说明书（文首自带"已过时"清单），补了第 3、4 条：preset 机制、鉴权链路</td></tr>
+</tbody>
+</table>
+<hr>
+<h2 id="7-同批但不属于-020-适配的改动">7. 同批但<strong>不属于</strong> 0.2.0 适配的改动</h2>
+<p>写在这里是为了不把它们混算成"适配必须做的"。</p>
+<h3 id="71-依赖告警清理提交-0595862">7.1 依赖告警清理（提交 <code>0595862</code>）</h3>
+<p><code>fast-uri</code> 3.1.7→3.1.8、<code>ip-address</code> 10.5.0→10.7.3。两者都是
+<code>@modelcontextprotocol/sdk@1.30.0</code> 的<strong>传递依赖</strong>（经 <code>ajv</code> / <code>express-rate-limit</code>），
+在 0.1.7 时代就存在，与 0.2.0 无关。影响面也小：告警文案提到 SSRF 绕过，而本项目自己的
+SSRF 防护 <code>src/safe-fetch.js</code> 是独立实现、<strong>没有用 <code>ip-address</code></strong>；<code>express-rate-limit</code> 只在
+HTTP transport 下起作用，而三个 MCP server 全是 stdio。清掉是为了让已发布版本的门面干净：
+<code>npm audit</code> → 0，GitHub 上 5 条告警全部转为 fixed。</p>
+<h3 id="72-沙箱-acl-与-state-收紧的交互提交-ede38e3">7.2 沙箱 ACL 与 <code>state/</code> 收紧的交互（提交 <code>ede38e3</code>）</h3>
+<p>适配过程中发现「DSH 沙箱会话写不进 <code>state/</code>」。查清后<strong>结论是"这是有意的取舍，不是缺陷"</strong>：</p>
+<ul>
+<li>DSH 沙箱按<strong>能力 SID</strong>（<code>sha256(规范化工作区路径)</code> 派生）授权，写权限<strong>只能靠工作区根上那条
+可继承 ACE 沿继承链传下来</strong>；DSH 只在首次进入工作区时下发一次，之后既不重发也不修复。
+被 <code>/inheritance:r</code> 切断继承的对象对它<strong>永久不可写，且失败是静默的</strong>。</li>
+<li>而 <code>harden-state-acl.mjs</code> 正是用 <code>/inheritance:r</code> 收紧 <code>state/</code> 与 <code>config.json</code>——
+Windows 上 <code>mode 0o600</code> 是空操作，这是防"本机其他用户读走令牌"的唯一手段。
+<strong>代价（沙箱里写不了 state/）已被接受</strong>，项目的规矩随之明确：沙箱里跑的东西一律不写 <code>state/</code>（§5 已落实）。</li>
+<li>⛔ 因此<strong>绝不能</strong>用 <code>/inheritance:e</code> 去"修好" <code>state/</code>：实测确认恢复继承会把父目录的
+<code>Authenticated Users: Modify</code> 与 <code>BUILTIN\Users: ReadAndExecute</code> 一起带回来，等于把凭据重新开放。</li>
+<li>顺带发现 <code>plugins/qq-agent-presets/**</code> 与 <code>plugins/qq-mode-console/**</code> 的内容也被切断了继承，
+而<strong>本仓库没有任何脚本这么做</strong>（全历史 <code>-S</code> 搜索 + 已安装插件扫描都没有），来源不明。
+这两处不含凭据，是否恢复由使用者决定。</li>
+</ul>
+<p>新增 <code>npm run diagnose:acl</code>（只读盘点，只对"非预期"那类打印恢复命令），
+并在 <code>SECURITY_BASELINE.md</code> 加 §2.6 与残余风险 R10/R11。</p>
+<hr>
+<h2 id="8-复核为兼容无需改动的部分这些没改也是结论">8. 复核为「兼容、无需改动」的部分（这些"没改"也是结论）</h2>
+<table>
+<thead><tr><th>面</th><th>结论与证据</th></tr></thead>
+<tbody>
+<tr><td><strong>RPC 面</strong></td><td>枚举 0.2.0 全部远端 endpoint（约 140 个）后逐条比对：桥接用到的<strong>每一个都还在</strong>——<code>session/{list,create,prompt,cancel,selectModel,rename,fork,updateQueue,page,search,follow,modelCatalog}</code>、<code>workspace/{create,rename,delete,archiveSession,insertBefore,insertSessionBefore}</code>、<code>agentPresets/list</code>、<code>settings/describe</code>。点号 endpoint 仍 404（协议确为斜杠式）</td></tr>
+<tr><td><strong><code>$events</code> / 审批提问链路</strong></td><td><code>$events</code>、<code>$events/result</code> 仍在；waterfall 帧形状不变 <code>{type:&#x27;waterfall&#x27;, event, eventId, agentId, request}</code>；<code>approval/request</code> 与 <code>user-questions/request</code> 仍在 <code>API_REMOTE_FORWARDED_EVENTS</code> 白名单里；<code>request.toolName/callId/reason</code> 与 <code>request.questions</code> 字段未变；outcome 形状 <code>{kind:&#x27;next&#x27;|&#x27;result&#x27;|&#x27;rejected&#x27;}</code> 与网关校验一致</td></tr>
+<tr><td><strong><code>session/follow</code></strong></td><td>请求形状 <code>{ address:{kind:&#x27;session&#x27;,sessionId}, maxMessages }</code> 未变；快照键集与 <code>projections</code> 仍在</td></tr>
+<tr><td><strong>三个 MCP server</strong></td><td>DSH 客户端已升级到官方 SDK <strong>v2</strong>，而 server 用的是 v1.30.0：实测五个协议修订版本两侧完全一致，<code>server/discover</code> 探测失败会<strong>干净回落</strong>到 2025 握手；<code>toolCallTimeoutMs</code> / <code>serverName</code> / <code>mcp__&lt;server&gt;__&lt;tool&gt;</code> 命名规则 / <code>serverInfo</code> 形状均未变；MCP 输入 schema <strong>原样透传</strong>（harness 的 JSON Schema 子集只约束 output schema，因此 ~20 处 <code>z.union</code> 产生的 <code>anyOf</code> 不受影响）。活链路实测：<code>mcp__snowluma__qq_status</code> 返回真实账号信息，三个 server 共 <strong>38</strong> 个工具</td></tr>
+<tr><td><strong>模型目录</strong></td><td><code>deepseek-flash</code> 仍在（新增 <code>deepseek-v4-pro</code>），思考档位 <code>off/low/high/max</code>。控制台把 <code>off</code> 过滤掉是<strong>有意的产品决策</strong>（QQ 聊天助手依赖思考），与内置白名单自洽，未改；实测 <code>/api/dsh/model</code> 返回 <code>options:[&quot;low&quot;,&quot;high&quot;,&quot;max&quot;]</code> 且 <code>labels</code> 里带 <code>off</code>，说明动态读取链路在 0.2.0 正常</td></tr>
+<tr><td><strong><code>settings/update</code> 参数形状</strong></td><td>是平铺多参数（见 §4.2），桥接原本就对</td></tr>
+<tr><td><strong>preset / bundle 机制</strong></td><td><code>@deepseek-ai/dsh-agent-preset</code> 行 + <code>plugins/qq-agent-presets</code> bundle patch 仍有效；两个 preset 的 persona schema 仍通过；<code>id: qq-mode</code> 行 + 导出的 <code>Config</code> 仍能让命名空间可读写（§4.2）</td></tr>
+<tr><td><strong><code>session/create</code> + preset</strong></td><td>活 DSH 实测：挂 <code>qq-chat-v2</code> 成功，<code>agentPresets/list</code> 含 <code>qq-chat</code> 与 <code>qq-chat-v2</code></td></tr>
+<tr><td><strong><code>session/modelCatalog</code></strong></td><td>仍可用，返回 <code>default</code> / <code>routableProviders</code> / <code>groups</code> / <code>failures</code>，桥接的思考强度下拉依赖它</td></tr>
+</tbody>
+</table>
+<hr>
+<h2 id="9-验证记录2026-10-02">9. 验证记录（2026-10-02）</h2>
+<h3 id="91-自动化">9.1 自动化</h3>
+<table>
+<thead><tr><th>命令</th><th>结果</th></tr></thead>
+<tbody>
+<tr><td><code>npm run test:audit</code></td><td><strong>30/30 脚本通过</strong>（清单新增 <code>test-dsh-inbox-projection.mjs</code>、<code>test-qq-mode-plugin.mjs</code>）</td></tr>
+<tr><td><code>npm run verify:adaptation</code></td><td><strong>73 通过 / 0 失败</strong>（含 8 项语法检查；在禁止 spawn 的环境里这 8 项显式跳过，计 65）</td></tr>
+<tr><td><code>npm run test:dsh-auth</code></td><td>17 项通过</td></tr>
+<tr><td><code>npm run scan:tool-names</code></td><td>悬空假名 0 / 未覆盖危险名 0（扫 282 个包）</td></tr>
+<tr><td><code>npm run verify:persona</code></td><td>全过</td></tr>
+<tr><td><code>npm run test:mcp-servers</code></td><td>3 个 server 共 38 个工具全部接入正常</td></tr>
+<tr><td><code>npm run self-test</code></td><td>端到端：DSH 连接 → 建会话 → prompt → 收到回复 → 归档，通过</td></tr>
+<tr><td><code>npm run test:setup-idempotent</code></td><td>通过</td></tr>
+<tr><td><code>npm run privacy-scan</code></td><td><code>git ls-files</code> 139 个文件，未发现敏感信息</td></tr>
+</tbody>
+</table>
+<blockquote>
+<p>环境说明：语法检查、MCP stdio、setup 夹具这几类需要 spawn 子进程，
+在 DSH 沙箱会话里会被系统拦成 EPERM。<strong>那是环境限制，不是代码问题</strong>——
+上面这些数字是在无沙箱终端下取得的；只在沙箱里跑时，相关项会显式标为跳过。</p>
+</blockquote>
+<h3 id="92-真实-qq-链路实测活群">9.2 真实 QQ 链路实测（活群）</h3>
+<p>在真实白名单群里跑通了一个完整来回（记录取自 <code>state/</code>）：</p>
+<table>
+<thead><tr><th>时刻</th><th>发生的事</th></tr></thead>
+<tbody>
+<tr><td>22:07:45</td><td>入站：<code>@小鲸鱼</code>（owner）→ 进未读队列</td></tr>
+<tr><td>22:07:54</td><td>桥接<strong>新建 DSH 会话</strong>、挂上 <code>qq-chat-v2</code> preset、模型固定 <code>deepseek-official/deepseek-flash (max)</code></td></tr>
+<tr><td>22:07:56</td><td>agent 调 <code>qq_get_prompt</code> → 拿到会话令牌与人设 ✅</td></tr>
+<tr><td>22:08:02</td><td>agent 调 <code>qq_send_message</code> → <strong>成功 2/2 条</strong></td></tr>
+<tr><td>22:08:15</td><td>入站：<code>没事</code></td></tr>
+<tr><td>22:08:29</td><td>agent 再发 1 条 → <strong>成功 1/1</strong></td></tr>
+</tbody>
+</table>
+<p>一条链路同时验证了：0.2.0 的 <strong>preset bundle 机制</strong>、<strong>本机会话 Cookie 生成</strong>、
+<code>session/selectModel</code>、三个 <strong>MCP 工具</strong>的活调用，以及人设确实在起作用（短句、不像客服、不汇报）。</p>
+<h3 id="93-回归网的意义">9.3 回归网的意义</h3>
+<p>§2 那个缺陷此前<strong>没有任何测试覆盖</strong>——线上只表现为一行日志，两个版本都没人发现。
+本轮补的两个测试（一个离线钉结构、一个活 DSH 钉行为）就是针对这个失败形态：
+<strong>契约变了要红，而不是静默漏水</strong>。</p>
+<hr>
+<h2 id="10-下次-dsh-升级的操作清单可复用">10. 下次 DSH 升级的操作清单（可复用）</h2>
+<ol>
+<li><code>node scripts/verify-dsh-021-adaptation.mjs</code>（先看红在哪；活 DSH 段是主要信号）。</li>
+<li><code>npm run scan:tool-names</code> —— <strong>每次升级必跑</strong>。守住两类漂移：假名静默失效、新能力漏隐藏。</li>
+<li><code>node scripts/probe-020-protocol.mjs</code> —— 采样 <code>session/control</code> / <code>session/follow</code> / <code>$events</code> /
+<code>session/cancel</code> 的<strong>DSH RPC 返回结构（原始帧）</strong>，与本文 §2.3 §8 对照。</li>
+<li><code>node scripts/probe-020-settings.mjs</code> —— 命名空间是否还在、是否还可写。</li>
+<li><code>npm run test:dsh-inbox</code> + <code>npm run test:session-retire:e2e</code> —— 队列与退役路径。</li>
+<li><code>npm run test:audit</code>（30 个脚本）与 <code>npm run verify:persona</code>。</li>
+<li>若 DSH 改了 preset / 插件装载机制：<code>node scripts/setup-dsh.mjs</code> 后重启 DSH，再看
+<code>npm run test:setup-idempotent</code>。</li>
+<li><code>npm run privacy-scan</code> + <code>npm run diagnose:acl</code>（后者需在<strong>无沙箱</strong>终端跑）。</li>
+</ol>
+<hr>
+<h2 id="附v020-r3--snowluma-上游健康客户端库升级全新-clone-可移植性">附：v0.2.0-r3 —— SnowLuma 上游健康、客户端库升级、全新 clone 可移植性</h2>
+<blockquote>
+<p><strong>版本说明</strong>：本节内容曾以 <code>v0.2.1</code> 这个标签发布过约 26 分钟，随后因改用
+「主版本与 DSH 同步 + <code>rN</code> 后缀」的方案，该标签与对应 Release <strong>已撤回</strong>。
+提交本身仍在 <code>main</code> 历史里，内容 100% 包含在 <code>v0.2.0-r3</code>，撤回不影响任何功能。
+完整序列见本节 H。</p>
+</blockquote>
+<p>v0.2.0 发布后，有人反馈「<strong>QQ 注入失败</strong>」。调查后修了三类问题。
+<strong>这一节与 DSH 无关</strong>，属于 SnowLuma 侧观测能力与打包质量。</p>
+<h3 id="a-起因与结论那个报障不是本桥接造成的">A. 起因与结论：那个报障<strong>不是</strong>本桥接造成的</h3>
+<p>「注入」在这个技术栈里只发生在一处：<strong>SnowLuma 用原生组件挂进 QQ 客户端进程</strong>
+（它日志里叫 <code>[Hook]</code>，载体是安装目录的 <code>native/snowluma-win32-x64.{dll,node}</code>）。
+本桥接<strong>没有任何原生/注入面</strong>：7 个依赖全为纯 JS，<code>src/</code> 里没有 <code>.dll</code>/<code>.node</code>/FFI/进程注入，
+也不启动、不控制 SnowLuma 或 QQ（v0.1.5 起按 EULA §5.4 移除了启停工具）。</p>
+<p>但<strong>桥接让这个失败无法诊断</strong> —— 这才是要修的：</p>
+<table>
+<thead><tr><th>SnowLuma 的 <code>[Hook]</code> 退化时</th><th>桥接此前看到的现象</th></tr></thead>
+<tbody>
+<tr><td>进程与 OneBot WebSocket <strong>都还活着</strong></td><td><code>bot.on(&#x27;open&#x27;)</code> 打过「SnowLuma 已连接」</td></tr>
+<tr><td>但收不到 QQ 侧数据（<code>receive path stale</code>）</td><td>群里一条消息都不来</td></tr>
+<tr><td>它自己报 <code>good=false</code></td><td>桥接<strong>从不读 <code>good</code></strong>；没有看门狗（对比：DSH 有 5 秒探活）、<code>/api/status</code> 没有字段、控制台没有指示、文档没有排查分支</td></tr>
+</tbody>
+</table>
+<p>⇒ 症状是「接了但没反应」，而<strong>没有任何证据指向 SnowLuma</strong>，于是被报成「qq-bridge 注入失败」。
+用户自己的 SnowLuma 日志里 <code>receive path stale</code> 出现过 4 次（3 次自愈）—— 这个状态是<strong>常态化偶发</strong>，
+不是别人的特殊环境。</p>
+<p><strong>修复</strong>：桥接现在把上游健康报出来（<code>/api/status.snowluma</code> + 控制台「运行总览」卡片 +
+「访问与安全」告警条 + 边沿触发日志），并明确指向 SnowLuma 的 <code>[Hook]</code> 日志。判定分两级：
+<code>good=false</code> 是<strong>确认</strong>；「连心跳都没有」是<strong>另一个故障面</strong>（进程/WS 层面），措辞分开。</p>
+<h3 id="b-上游健康的两处实现错误做完就发现是错的已修">B. 上游健康的两处实现错误（做完就发现是错的，已修）</h3>
+<p>这两条值得单独记，因为它们是<strong>同一个失败形态的复现</strong> —— "看起来在工作，其实永远不会触发"：</p>
+<table>
+<thead><tr><th>错法</th><th>后果</th><th>正确做法</th></tr></thead>
+<tbody>
+<tr><td><code>good</code> 取自 <strong><code>get_login_info</code></strong></td><td>它只返回 <code>{user_id, nickname}</code>，<code>good</code> 永远 <code>undefined</code>；而 SDK <strong>只校验 status/retcode 信封、不校验 data 载荷</strong> ⇒ 不报错、<code>good</code> 永远停在 <code>null</code>，那条"权威信号"整条是<strong>死代码</strong></td><td>取自 <strong><code>get_status</code></strong>（<code>{online, good}</code>），以及<strong>每 30 秒心跳载荷里的 <code>status.good</code></strong></td></tr>
+<tr><td>用心跳/事件<strong>静默</strong>判断上游接入死活</td><td>心跳由 SnowLuma <strong>自己的定时器无条件</strong>发出（<code>HEARTBEAT_INTERVAL = 3e4</code>），不经过 QQ 事件流水线 ⇒ 静默<strong>永远不触发</strong>，检测不到它声称要检测的东西</td><td>接收链路的健康度只在 <code>status.good</code> 里；静默只能说明<strong>进程/WS 卡住</strong>，是另一个故障面</td></tr>
+</tbody>
+</table>
+<p>两条都实测核对过 SnowLuma 1.14.9 运行时源码，并用 <code>npm run probe:heartbeat</code> 连真实网关验证：
+<code>status = {&quot;online&quot;:true,&quot;good&quot;:true}</code>、<code>interval = 30000</code>。
+新增 <code>test-snowluma-upstream-health.mjs</code>（9 项）把这两条钉住 —— 特别是<strong>反面断言</strong>：
+不得从 <code>get_login_info</code> 取 <code>good</code>、静默分支不得把结论指向 SnowLuma <code>[Hook]</code>。</p>
+<h3 id="c-客户端库升级-114911410--11420">C. 客户端库升级 1.14.9/1.14.10 → 1.14.20</h3>
+<ul>
+<li>上游 1.14.9→1.14.20 共 <strong>139 次提交 / 300 个文件</strong>。逐面核对（含 190→195 动作目录双向 diff）：
+<strong>无移除动作、无参数改名、无入站事件形状变化、无 stdout 风险</strong>（<code>@snowluma/mcp</code> 在 <code>src/</code> 里零引用，
+且它只往 stderr 写）。</li>
+<li><strong>上游打包 bug 仍在</strong>（dist 相对导入缺 <code>.js</code>），<code>postinstall</code> 补丁依旧必需（仍命中 13 个文件）。</li>
+<li>顺带修两处<strong>只影响升级运行时之后</strong>的正确性问题：
+<code>markdown</code> 段落此前落到 default 分支、被喂字面量 <code>[markdown]</code>（上游 1.14.17 的 changelog 里列为 <code>1934e4e7</code>；
+<strong>实测 1.14.20 的线上段落是 <code>data:{content}</code></strong>，桥接读 <code>d.text ?? d.content</code>，两个形状都覆盖）；
+图片段落读的是 camelCase <code>subType</code> 而线上字段是 snake_case <code>sub_type</code>（一直是空串，且不报错）。</li>
+<li>新增 <code>npm run probe:heartbeat</code>：只读探针，验证心跳字段是否真的存在。</li>
+</ul>
+<h3 id="d-端点自愈会覆盖用户写的-wsurl">D. 端点自愈会覆盖用户写的 <code>wsUrl</code></h3>
+<p><code>applyHealedTokens</code> 会把<strong>发现到的</strong> <code>wsUrl</code> 无条件写回 <code>config.json</code>。主场景（换账号端口变了）是对的，
+但它不区分「配置里是过期值」与「用户就是要指向别处」。实测踩到：把 <code>wsUrl</code> 指向死端口想让它别连，
+启动后仍被改回真实端点并连上 —— <strong>想跑第二实例/指向另一份 SnowLuma 安装时会连错账号</strong>。
+新增 <code>snowluma.followDiscoveredEndpoint</code>（默认 <code>true</code>＝保持既有行为），设 <code>false</code> 则只自愈 token、绝不动 URL。</p>
+<h3 id="e-全新-clone-上-npm-run-testaudit-会失败-7-个脚本真实的打包缺陷">E. 全新 clone 上 <code>npm run test:audit</code> 会失败 7 个脚本（真实的打包缺陷）</h3>
+<p>用一个真的 <code>git clone</code> 复现的（作者机器上全绿，所以一直没人发现）：</p>
+<table>
+<thead><tr><th>原因</th><th>影响的脚本</th></tr></thead>
+<tbody>
+<tr><td>引用 <code>../voice-tool/...</code> —— 语音工具是<strong>仓库上一级</strong>的独立工具，不在本仓库里，测试却按固定相对路径读它</td><td>6 个</td></tr>
+<tr><td>读 <code>config.json</code> —— 它按设计是 gitignore 的，仓库里只有 <code>config.example.json</code></td><td>2 个（其中一个被前一个崩溃掩盖了）</td></tr>
+</tbody>
+</table>
+<p>⇒ 任何照 README 克隆的人跑自检都会看到一堆红，<strong>看起来像"这个项目装出来就是坏的"</strong>。</p>
+<p><strong>修复</strong>：新增 <code>scripts/voice-tool-locator.mjs</code> 统一解析位置（支持 <code>QQ_BRIDGE_VOICE_TOOL_DIR</code> 覆盖），
+缺目录时<strong>明确跳过</strong>（<code>⏭ 跳过…（这是跳过，不是通过）</code>）而不是崩溃；<code>config.json</code> 相关断言改为
+只断言 <code>config.example.json</code> 的<strong>出厂默认</strong> —— 顺带修掉一个语义错误：原先它断言的是<strong>用户当前状态</strong>，
+于是用户按文档打开「AI 发语音」之后测试就会变红（测试不该因为用户用了功能而失败）。</p>
+<p>验证（两种模式都 <strong>31/31</strong>）：把工具目录指向不存在时输出 19 条明确的跳过、依旧 31/31。
+另用<strong>负向对照</strong>确认这是诚实跳过而非刷绿：故意破坏一个仓库内断言 → 仍然 <code>exit=1</code>。</p>
+<h3 id="f-顺带记录http-token-与-ws-token-是两个不同的值">F. 顺带记录：HTTP token 与 WS token 是两个不同的值</h3>
+<p>SnowLuma 同一账号的 <strong>HTTP token（3000）与 WS token（3001）不同</strong>，而 <code>config.json</code> 只能存一个（存 HTTP 的）。
+所以桥接<strong>每次启动的首次 WS 连接几乎必然失败一次</strong>（<code>连接断开(1006)</code> → 自愈 → <code>已连接</code>）。
+这条序列是正常的，日志文案已改清楚；真正会一直连不上的是<strong>自愈无从下手</strong>
+（<code>homeDir</code> 没配/被移动/读不到 <code>config/onebot_&lt;QQ&gt;.json</code>）—— 那才要查。</p>
+<h3 id="g-运行时升到-11420-的实测2026-10-03">G. 运行时升到 1.14.20 的实测（2026-10-03）</h3>
+<p>把用户的运行时从 1.14.9 升到 1.14.20 并逐项实测（<strong>安装/启动由用户自己做</strong>，本次只做了下载、校验、
+迁移与核对）。结论：</p>
+<table>
+<thead><tr><th>检查</th><th>证据</th></tr></thead>
+<tbody>
+<tr><td>包完整性</td><td><code>SnowLuma-v1.14.20-win-x64-lite.zip</code> SHA256 == 官方发布资产 <code>digest</code></td></tr>
+<tr><td><strong>SnowLuma 原生组件跨版本未变</strong></td><td>官方 1.14.9 包 == 本机 1.14.9 == 官方 1.14.20，<code>native/snowluma-win32-x64.{dll,node}</code> 与 <code>websocket-win32-x64.node</code> <strong>逐字节相同（发布包核对）</strong>；<code>index.mjs</code> 7,062,899 → 7,476,546 B</td></tr>
+<tr><td>配置迁移无损</td><td>桥接的 <code>readOneBotTokens()</code> 在新装目录解析出两个账号，HTTP/WS token 与旧装<strong>逐一相同</strong></td></tr>
+<tr><td>心跳主信号仍成立</td><td><code>status = {&quot;online&quot;:true,&quot;good&quot;:true}</code>、<code>interval = 30000</code></td></tr>
+<tr><td><code>bot_status</code> 真的出现了</td><td>1.14.9：<strong>0</strong> 次；1.14.20：<strong>3</strong> 次（带 <code>sub_type</code>/<code>user_id</code>）</td></tr>
+<tr><td>桥接连通</td><td>走完「首次 1006 → 自愈 WS token → 已连接」；<code>/api/status.snowluma</code> 给出 <code>good:true</code>、<strong><code>goodSource:&quot;heartbeat&quot;</code></strong></td></tr>
+<tr><td>收到 QQ 消息</td><td><code>lastPacketKind: message/group</code>；静默态下正确「仅入库不唤醒」</td></tr>
+<tr><td><strong>完整往返</strong></td><td>唤醒 → DSH 建会话并挂 <code>qq-chat-v2</code> → 工具发送 <code>成功 1/1 条</code> → 群里实际出现两条回复</td></tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <strong>更正</strong>：本附录 A 一度暗示「升级 SnowLuma 可能修注入（1.14.17 刷新过原生组件）」。
+SnowLuma 发布包字节级证据表明<strong>原生组件根本没有变</strong>，那条推断是错的。升级只换 JS 层
+（事件流水线订阅更全、<code>bot_status</code>、markdown 带 text、收发修复），
+<strong>不会修「原生 hook 挂不上 QQ」</strong>——那类问题要走 SnowLuma 自己的排查（QQ 版本、杀软拦注入、权限）。</p>
+</blockquote>
+<h3 id="h-版本号方案自本版起">H. 版本号方案（自本版起）</h3>
+<p>主版本号与 DSH 同步，后缀 <code>rN</code> 表示「同一 DSH 版本下桥接的第 N 次发布」：</p>
+<table>
+<thead><tr><th>标签</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>v0.2.0</code></td><td>r1 —— DSH 0.2.0-rc.2 适配</td></tr>
+<tr><td><del><code>v0.2.1</code></del></td><td>r2 —— 采用本方案<strong>之前</strong>的一次性发布：标签与 Release <strong>已撤回</strong>（提交 <code>9bb7b98</code> 仍在历史里）。本节全部内容都包含在 r3 中，撤回无功能影响。撤回理由：它不符合「主版本与 DSH 同步」的方案，且发布仅约 26 分钟、无二进制资产、无下游依赖，改写代价为零；留着则每次看标签列表都要额外解释一次</td></tr>
+<tr><td><code>v0.2.0-r3</code></td><td>r3 —— 上游健康 + 客户端库升级 + clone 可移植性 + 1.14.20 实测</td></tr>
+<tr><td><code>v0.2.0-r4</code></td><td>r4 —— 表情包/动图链路、DSH 同源联网搜索、issue 修复、整体体检（见附录 J）</td></tr>
+<tr><td><code>v0.2.1-r1</code></td><td>r1（0.2.1 线）—— DSH 0.2.1-rc.2 适配，P0 <code>{{cwd}}</code> 提示词变量修复 + 工具面守卫补齐（见 <a href="dsh-0.2.1.html">DSH_021_ADAPTATION.md</a>）。用 <code>-r1</code> 而不是裸 <code>v0.2.1</code>：那个标签已被上表撤回的 r2 占用过</td></tr>
+<tr><td><code>v0.2.1-r2</code></td><td>r2（0.2.1 线）—— 会话隔离、安全加固、断线投递与实例归属修复；继续沿用 <code>rN</code> 方案</td></tr>
+</tbody>
+</table>
+<p><code>package.json</code> 是 <code>&quot;private&quot;: true</code>（不发布到 npm），所以 <code>0.2.1-rN</code> 这种 prerelease 写法
+不产生 npm 语义影响；版本号与标签保持一致，便于 <code>verify:adaptation</code> 对账。</p>
+<h3 id="i-r3-时未修r4-已修的问题">I. r3 时<strong>未</strong>修、r4 已修的问题</h3>
+<p>工具流水里 <code>mcp__snowluma__qq_wait_for_messages</code> 出现过 <code>ok:false</code> 且
+<code>error: &quot;\&quot;Error: [object Object]\&quot;&quot;</code>（2026-09-28、2026-10-03 各一次）。错误对象被 <code>String()</code> 成了
+<code>[object Object]</code>，<strong>运维与智能体都看不到任何信息</strong>。</p>
+<p>r4 已修：MCP 侧统一走 <code>errorText()</code>（对象 → <code>JSON.stringify</code> 或取 <code>message</code>，限长 500），
+两条传输通道（普通 fetch 与长轮询）与两个图片工具都用它；并补了「对象形态的 error 必须可读」的回归。
+同轮还把 <code>qq_wait_for_messages</code> 整体改走 <code>node:http</code> 长轮询，绕开 undici 的 300 秒 <code>headersTimeout</code>
+（见附录 J）。</p>
+<hr>
+<h2 id="附本文没有覆盖的">附：本文没有覆盖的</h2>
+<ul>
+<li><strong>不是适配范围</strong>：依赖告警、沙箱 ACL（见 §7）。</li>
+<li><strong>无法验证的</strong>：DSH 0.1.7 的 baseline 真实形状（本机已无 0.1.7 安装，只有报错日志）；
+本文 §2.1 只断言"<code>queues</code> 不是它"，没有替 0.1.7 编一个形状。</li>
+<li><strong>已知的上游缺口</strong>（值得反馈给 DSH）：被切断 DACL 继承的路径对沙箱<strong>永久不可写且无任何提示</strong>，
+而 DSH 自带的 ACL 诊断技能修的是另外两类（缺 <code>WRITE_DAC</code> 的目录链、AppContainer 包 ACE），
+对这种形状会报 <code>NOT_THIS_CLASS</code>。这条在任何"自己管 ACL"的项目里都会踩到。</li>
+</ul>
+<hr>
+<h2 id="附v020-r4-主要改动">附：v0.2.0-r4 主要改动</h2>
+<blockquote>
+<p>完整版见 <a href="https://github.com/Derpyu520/qq-bridge/releases/tag/v0.2.0-r4">Release v0.2.0-r4</a>。
+本附录只记录「改了什么 / 为什么」的要点，便于在仓库内追溯。</p>
+</blockquote>
+<h3 id="j1-图片表情含动图链路">J.1 图片/表情（含动图）链路</h3>
+<p><strong>根因</strong>：QQ 表情 CDN（<code>gxh.vip.qq.com</code> / <code>p.qpic.cn</code> / <code>multimedia.nt.qq.com.cn</code>）的 DNS 应答里
+AAAA 排在 A 前面，而本机没有 IPv6 出口；旧 <code>safe-fetch</code> 只取 <code>addresses[0]</code> 并钉死连接 ——
+抢到 AAAA 的那次请求白等 20 秒超时，DNS 顺序又是轮转的，于是表现为「<strong>部分</strong>表情/图片时好时坏」。</p>
+<ul>
+<li><code>safe-fetch</code>：全部解析结果校验后按 <strong>IPv4 优先、两族交替</strong>排序；多地址时逐地址尝试
+（单次 8s、最多 4 个、总预算 20s），仅网络层失败才换地址。</li>
+<li>表情包：解析保留 <code>emoji_id</code>/<code>summary</code>/<code>sub_type</code>（含 <code>mface</code> 段）；<strong>表情优先走 CDN</strong>
+（市场表情不在网关缓存，<code>get_image</code> 必失败），无 URL 时用 <code>emoji_id</code>（或文件名里的 32 位 hex）
+推出 <code>gxh.vip.qq.com/.../raw300.gif</code> 兜底。</li>
+<li>落库（<code>appendSocialV2Message</code>）不再丢 <code>kind</code>/<code>emojiId</code>/<code>summary</code>/<code>subType</code>；<code>summary</code> 单行化并限长 60。</li>
+<li>单条媒体上限：8MB / 64MP / 5 张（<code>socialV2.media</code> 可调）。</li>
+</ul>
+<p>实测：29 个收藏表情 29/29 抓取成功（修复前抽样 5/6，失败那次 20003ms）；会话里的 GIF 表情
+<code>20s 超时 → 421ms</code>。</p>
+<h3 id="j2-联网搜索">J.2 联网搜索</h3>
+<p><code>src/web-search.js</code>（新）：与 <code>@deepseek-ai/dsh-web-search-deepseek</code> 相同的
+<code>POST https://api.deepseek.com/anthropic/v1/messages</code> + <code>web_search_20250305</code> 服务端工具，
+凭据顺序 <code>webSearch.apiKey</code> → 环境变量（默认 <code>DEEPSEEK_API_KEY</code>）→ <code>$DSH_HOME/.credentials.yaml</code>；
+Bing <strong>RSS</strong> 仅作兜底；5 分钟查询缓存；空结果显式 <code>note</code>。安全：key 只发往校验过的
+<strong>https + 公网</strong>端点、禁止跟随重定向、响应体 2MB、总超时 35s、key 不落日志；
+<code>web_fetch</code> 仍走 SSRF 防护传输。</p>
+<h3 id="j3-reserved2-状态机与长轮询">J.3 reserved2 状态机与长轮询</h3>
+<ul>
+<li><code>refreshMode</code> 读 DSH settings 时 <strong>user 层优先</strong>（0.2.0-rc.2 写完 <code>value</code> 不热更新，
+否则控制台切的模式会被 5 秒轮询改回去）。</li>
+<li>回合判忙改为「起始时间 + 15 分钟租约」：无起始时间的残留 collector 不再永久 busy；
+<code>rebuildInFlightCollector</code> 补起始时间；learner collector 同型修复；busy 日志带原因。</li>
+<li><code>qq_wait_for_messages</code> 改走 <code>node:http</code> 长轮询（undici 默认 300s headersTimeout 会让
+5 分钟沉睡前观察必然失败）；错误对象统一 <code>errorText()</code> 可读。</li>
+<li>DSH 控制调用（停任务/归档/列会话）全部 15s 超时；事件流重连指数退避 + 「已结束」日志；
+SnowLuma <code>error</code> 事件也触发 token 自愈。</li>
+<li>机器人身份（昵称 + QQ 号）注入唤醒 prompt、收尾提醒与 <code>qq_get_prompt</code>。</li>
+</ul>
+<h3 id="j4-体检修复">J.4 体检修复</h3>
+<p><code>/api/send/*</code> 失败路径的 <code>catch</code> 引用了 <code>try</code> 内块级变量（发送失败抛 ReferenceError、额度不回滚）；
+媒体落库丢表情字段；搜索空结果 note 写在缓存之后；对象形态的 error 被 String 成 <code>[object Object]</code>。</p>
+<h3 id="j5-验证">J.5 验证</h3>
+<p><code>npm run test:audit</code> <strong>33/35</strong>（仅 <code>test-audit-setup</code> / <code>test-qq-model-view</code> 的沙箱 <code>spawn EPERM</code>）；
+新增/更新离线回归：<code>test-media-search</code>、<code>test-issue-regressions</code>、<code>test-audit-regressions</code>（R15/R16）、
+<code>test-audit-security-mcp</code>（长轮询 + 对象 error）；<code>privacy-scan</code> 未发现敏感信息。</p>
+<h3 id="j6-仍已知未修">J.6 仍已知未修</h3>
+<ul>
+<li><code>saveSocialV2State()</code> 写盘失败只记日志、接口仍回 <code>ok:true</code>（需写盘队列，改动面大）；</li>
+<li><code>auditAndSend</code> 的返回值不反映真实发送结果（主回复路径已由 <code>lastSendSucceeded()</code> 兜住）；</li>
+<li><code>toolCallNames</code> 在 <code>turn/end</code> 丢失时不回收（有 15 分钟租约兜底，增长极慢）。</li>
+</ul>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+<aside class="sidebar-right" aria-label="On this page">
+  <div class="sidebar-inner">
+    <span class="toc-label">On this page</span>
+    <nav class="toc-list">
+      <a class="toc-h2" href="#0-一句话结论">0. 一句话结论</a>
+      <a class="toc-h2" href="#1-改动总览">1. 改动总览</a>
+      <a class="toc-h2" href="#2-断裂点一会话待处理队列读不出来改动最大也最容易被忽略">2. 断裂点一：会话待处理队列读不出来（改动最大，也最容易被忽略）</a>
+      <a class="toc-h3" href="#21-事实核对这不是-020-引入的">2.1 事实核对：这不是 0.2.0 引入的</a>
+      <a class="toc-h3" href="#22-现象">2.2 现象</a>
+      <a class="toc-h3" href="#23-020-的实际契约实测">2.3 0.2.0 的实际契约（实测）</a>
+      <a class="toc-h3" href="#24-改法">2.4 改法</a>
+      <a class="toc-h3" href="#25-怎么验证">2.5 怎么验证</a>
+      <a class="toc-h2" href="#3-断裂点二qq-安全守卫名单没跟上-020-的工具面">3. 断裂点二：QQ 安全守卫名单没跟上 0.2.0 的工具面</a>
+      <a class="toc-h3" href="#31-为什么这是安全问题而不是清洁问题">3.1 为什么这是安全问题而不是清洁问题</a>
+      <a class="toc-h3" href="#32-对账工具新增">3.2 对账工具（新增）</a>
+      <a class="toc-h3" href="#33-对账结论旧名字全在0-假名新增-15-个">3.3 对账结论：旧名字全在（0 假名），新增 15 个</a>
+      <a class="toc-h3" href="#34-怎么验证">3.4 怎么验证</a>
+      <a class="toc-h2" href="#4-断裂点三qq-mode-设置命名空间的注册-api-被删除">4. 断裂点三：qq-mode 设置命名空间的注册 API 被删除</a>
+      <a class="toc-h3" href="#41-现象不明显因为被一句早退挡住了">4.1 现象（不明显，因为被一句早退挡住了）</a>
+      <a class="toc-h3" href="#42-实测命名空间本身完全正常">4.2 实测：命名空间本身完全正常</a>
+      <a class="toc-h3" href="#43-改法">4.3 改法</a>
+      <a class="toc-h3" href="#44-怎么验证">4.4 怎么验证</a>
+      <a class="toc-h2" href="#5-适配缺口四探针与夹具的鉴权落盘路径017-遗留本轮清零">5. 适配缺口四：探针与夹具的鉴权/落盘路径（0.1.7 遗留，本轮清零）</a>
+      <a class="toc-h2" href="#6-版本身份验证脚本与文档">6. 版本身份、验证脚本与文档</a>
+      <a class="toc-h3" href="#61-版本身份-017--020">6.1 版本身份 0.1.7 → 0.2.0</a>
+      <a class="toc-h3" href="#62-验证脚本改名与重写">6.2 验证脚本改名与重写</a>
+      <a class="toc-h3" href="#63-文档纠偏原文与代码不符的地方">6.3 文档纠偏（原文与代码不符的地方）</a>
+      <a class="toc-h2" href="#7-同批但不属于-020-适配的改动">7. 同批但不属于 0.2.0 适配的改动</a>
+      <a class="toc-h3" href="#71-依赖告警清理提交-0595862">7.1 依赖告警清理（提交 0595862）</a>
+      <a class="toc-h3" href="#72-沙箱-acl-与-state-收紧的交互提交-ede38e3">7.2 沙箱 ACL 与 state/ 收紧的交互（提交 ede38e3）</a>
+      <a class="toc-h2" href="#8-复核为兼容无需改动的部分这些没改也是结论">8. 复核为「兼容、无需改动」的部分（这些"没改"也是结论）</a>
+      <a class="toc-h2" href="#9-验证记录2026-10-02">9. 验证记录（2026-10-02）</a>
+      <a class="toc-h3" href="#91-自动化">9.1 自动化</a>
+      <a class="toc-h3" href="#92-真实-qq-链路实测活群">9.2 真实 QQ 链路实测（活群）</a>
+      <a class="toc-h3" href="#93-回归网的意义">9.3 回归网的意义</a>
+      <a class="toc-h2" href="#10-下次-dsh-升级的操作清单可复用">10. 下次 DSH 升级的操作清单（可复用）</a>
+      <a class="toc-h2" href="#附v020-r3--snowluma-上游健康客户端库升级全新-clone-可移植性">附：v0.2.0-r3 —— SnowLuma 上游健康、客户端库升级、全新 clone 可移植性</a>
+      <a class="toc-h3" href="#a-起因与结论那个报障不是本桥接造成的">A. 起因与结论：那个报障不是本桥接造成的</a>
+      <a class="toc-h3" href="#b-上游健康的两处实现错误做完就发现是错的已修">B. 上游健康的两处实现错误（做完就发现是错的，已修）</a>
+      <a class="toc-h3" href="#c-客户端库升级-114911410--11420">C. 客户端库升级 1.14.9/1.14.10 → 1.14.20</a>
+      <a class="toc-h3" href="#d-端点自愈会覆盖用户写的-wsurl">D. 端点自愈会覆盖用户写的 wsUrl</a>
+      <a class="toc-h3" href="#e-全新-clone-上-npm-run-testaudit-会失败-7-个脚本真实的打包缺陷">E. 全新 clone 上 npm run test:audit 会失败 7 个脚本（真实的打包缺陷）</a>
+      <a class="toc-h3" href="#f-顺带记录http-token-与-ws-token-是两个不同的值">F. 顺带记录：HTTP token 与 WS token 是两个不同的值</a>
+      <a class="toc-h3" href="#g-运行时升到-11420-的实测2026-10-03">G. 运行时升到 1.14.20 的实测（2026-10-03）</a>
+      <a class="toc-h3" href="#h-版本号方案自本版起">H. 版本号方案（自本版起）</a>
+      <a class="toc-h3" href="#i-r3-时未修r4-已修的问题">I. r3 时未修、r4 已修的问题</a>
+      <a class="toc-h2" href="#附本文没有覆盖的">附：本文没有覆盖的</a>
+      <a class="toc-h2" href="#附v020-r4-主要改动">附：v0.2.0-r4 主要改动</a>
+      <a class="toc-h3" href="#j1-图片表情含动图链路">J.1 图片/表情（含动图）链路</a>
+      <a class="toc-h3" href="#j2-联网搜索">J.2 联网搜索</a>
+      <a class="toc-h3" href="#j3-reserved2-状态机与长轮询">J.3 reserved2 状态机与长轮询</a>
+      <a class="toc-h3" href="#j4-体检修复">J.4 体检修复</a>
+      <a class="toc-h3" href="#j5-验证">J.5 验证</a>
+      <a class="toc-h3" href="#j6-仍已知未修">J.6 仍已知未修</a>
+    </nav>
+  </div>
+</aside>
+
+</div>
+
+<script src="../../../assets/nav.js"></script>
+
+</body>
+</html>

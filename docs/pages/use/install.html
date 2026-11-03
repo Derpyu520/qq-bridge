@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>安装与首次运行 — qq-bridge</title>
+<meta name="description" content="准备好 Windows 10 / 11、Node.js ≥ 22.13 ，以及以下两个独立运行的服务：">
+<meta property="og:title" content="安装与首次运行 — qq-bridge">
+<meta property="og:description" content="准备好 Windows 10 / 11、Node.js ≥ 22.13 ，以及以下两个独立运行的服务：">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="../../" data-tab="使用指南" data-page-rel="pages/use/install.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../../index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout has-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body guide">
+  <div class="topbar">
+  <div class="crumbs">
+    <a href="../../index.html">qq-bridge</a>
+    <span class="sep">/</span>
+    Pages
+    <span class="sep">/</span>
+    <a href="index.html">使用指南</a>
+    <span class="sep">/</span>
+    <span class="here">安装与首次运行</span>
+  </div>
+</div>
+  <h1>安装与首次运行</h1>
+<!-- moved verbatim from README.md [h2pre:快速开始] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="快速开始">快速开始</h2>
+<p>准备好 <strong>Windows 10 / 11、Node.js ≥ 22.13</strong>，以及以下两个独立运行的服务：</p>
+<p>macOS 用户请看 <a href="install-macos.html">macOS 安装</a>（有实测运行记录，不在测试矩阵内）。</p>
+<ul>
+<li><strong>DSH Web</strong>：当前有 <code>0.2.0-rc.2</code> / <code>0.2.1-rc.2</code> 的验证记录，其他版本见<a href="#兼容范围">兼容范围</a>。</li>
+<li><strong>SnowLuma</strong>：请自行按<a href="https://github.com/SnowLuma/SnowLuma">上游文档</a>安装、启动并登录，开启 OneBot <strong>WebSocket 服务端</strong>和 <strong>HTTP API</strong>。</li>
+</ul>
+
+<!-- moved verbatim from README.md [h3:快速开始/1.] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="1-获取项目">1. 获取项目</h2>
+<p>在 PowerShell 中运行：</p>
+<pre><code class="language-powershell">git clone https://github.com/Derpyu520/qq-bridge.git
+cd qq-bridge
+npm install
+Copy-Item config.example.json config.json</code></pre>
+<p>默认分支 <code>main</code> 为正式发布线；<code>dev</code> 用于开发与测试。</p>
+
+<!-- moved verbatim from README.md [h3:快速开始/3.] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="3-安装-dsh-插件">3. 安装 DSH 插件</h2>
+<pre><code class="language-powershell">node scripts/setup-dsh.mjs</code></pre>
+<p>这一步会把聊天预设和 MCP 工具接入 DSH，<strong>首次安装也必须执行</strong>。完成后重启 DSH；使用非 <code>web</code> profile 时见<a href="#安装步骤">安装指南</a>。</p>
+
+<!-- moved verbatim from README.md [h3:快速开始/4.] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="4-启动并测试">4. 启动并测试</h2>
+<pre><code class="language-powershell">npm start</code></pre>
+<p>打开 <a href="http://127.0.0.1:3100">本地控制台</a> 并输入控制台令牌。自动生成的令牌保存在 <code>state/console-token</code>；如果已在 <code>config.json</code> 配置 <code>consoleToken</code>，则使用该值。启动日志不会打印令牌。新装默认使用二代仿真模式（<code>reserved2</code>），会选择性发言；测试收发时可先切到 <code>chat</code>，再从白名单会话发送消息。</p>
+<p>Windows 也可双击 <code>start.bat</code> 以守护模式运行，关闭窗口即停止。</p>
+
+<!-- moved verbatim from pages/ops/dsh-setup.html [pre] on 2026-11-03 (docs reorg step 2) -->
+<p><code>qq-bridge</code> 仓库本身包含桥接、控制台和插件，但 <strong>DSH 端的两个聊天模式（<code>qq-chat</code> / <code>qq-chat-v2</code>）以及 MCP 挂载</strong> 不在仓库根目录，需要通过本说明安装到目标设备的 DSH 环境中。</p>
+<blockquote>
+<p><strong>上游行为标注</strong>：本文中的 <code>[Hook]</code>、进程枚举、PID/pipe 等均为 SnowLuma 接入日志字段；qq-bridge 不注入、不挂钩、不修改 SnowLuma 本体。</p>
+</blockquote>
+
+<!-- moved verbatim from pages/ops/dsh-setup.html [h2:兼容范围] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="兼容范围">兼容范围</h2>
+<p>桌面版端口自动发现默认开启。多实例或固定端点部署可将 <code>config.json</code> 的
+<code>dsh.autoDiscoverPort</code> 设为 <code>false</code>，此时桥接只使用配置的地址，不扫描或重绑其他实例。</p>
+<p>协议代际与预设 schema 必须分别匹配，不能只凭斜杠 RPC 判断可用性（<a href="https://github.com/Derpyu520/qq-bridge/issues/9">#9</a>）。</p>
+<table>
+<thead><tr><th>DSH 版本</th><th>处理方式</th></tr></thead>
+<tbody>
+<tr><td>0.1.1-rc.2 及更早</td><td>历史标签 <code>v0.1.0</code>；当前分支不支持旧点号协议</td></tr>
+<tr><td>0.1.2-alpha.1</td><td>历史标签 <code>v0.1.2-alpha.1</code> 使用 <code>persona.text</code>；当前分支不兼容该 schema</td></tr>
+<tr><td>0.1.2 的其他版本～0.1.4</td><td>当前预设不支持；没有逐版本验证的标签映射，建议升级到已验证版本</td></tr>
+<tr><td>0.1.5-rc.1 / 0.1.7-rc.2</td><td>分别使用历史标签 <code>v0.1.5</code> / <code>v0.1.7</code></td></tr>
+<tr><td>0.2.0-rc.2 / 0.2.1-rc.2</td><td>当前版本已有适配与验证记录</td></tr>
+</tbody>
+</table>
+<p>历史标签不包含后续安全修复。DSH 0.2.1-rc.3 的个别环境反馈仍需对应安装形态复现，
+不能把某个环境成功或失败的结果推广到全部安装。</p>
+
+<!-- moved verbatim from pages/ops/dsh-setup.html [h2:安装步骤] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="安装步骤">安装步骤</h2>
+<p>在目标设备上：</p>
+<ol>
+<li><p><strong>克隆/获取仓库</strong>：</p>
+<pre><code class="language-bash">git clone https://github.com/Derpyu520/qq-bridge.git
+cd qq-bridge</code></pre>
+<blockquote>
+<p>默认分支 <code>main</code> 是正式发布线，具体版本以 <a href="https://github.com/Derpyu520/qq-bridge/releases">Releases</a> 为准，clone 下来无需切换分支。
+<code>dev</code> 是开发与测试线，不保证稳定；只在想参与开发或测试未发布改动时才切过去。</p>
+</blockquote></li>
+</ol>
+<ol start="2">
+<li><p><strong>安装依赖</strong>：</p>
+<pre><code class="language-bash">npm install</code></pre>
+<blockquote>
+<p><code>postinstall</code> 会自动修补 <code>@snowluma/sdk</code> 的 ESM 打包 bug。</p>
+</blockquote></li>
+</ol>
+<ol start="3">
+<li><p><strong>创建配置文件</strong>：</p>
+<pre><code class="language-bash">cp config.example.json config.json</code></pre>
+<blockquote>
+<p>Windows CMD 用户请用：<code>copy config.example.json config.json</code></p>
+</blockquote>
+<p>然后编辑 <code>config.json</code>，填写：</p>
+<ul>
+<li><code>snowluma.wsUrl</code> / <code>httpUrl</code>（例如 <code>ws://127.0.0.1:3001</code> / <code>http://127.0.0.1:3000</code>，分别对应 OneBot WebSocket 与 HTTP API 端口）</li>
+<li><code>snowluma.accessToken</code></li>
+<li><code>dsh.authToken</code>（通常留空：桥接优先使用本机 DSH 持久化签名密钥生成会话 Cookie，不依赖 guard 日志；旧启动日志仅作为兼容兜底）</li>
+<li><code>ownerQQ</code></li>
+<li><code>allow.private</code> / <code>allow.groups</code></li>
+</ul></li>
+</ol>
+<ol start="4">
+<li><p><strong>运行 DSH 端安装脚本</strong>：</p>
+<pre><code class="language-bash">node scripts/setup-dsh.mjs</code></pre>
+<p>默认安装到 <code>web</code> profile；如果 DSH 使用其他 profile，可以传参：</p>
+<pre><code class="language-bash">node scripts/setup-dsh.mjs &lt;profile名&gt;</code></pre>
+<p>脚本会完成：</p>
+<ul>
+<li>安装 agent preset：通过 <code>plugins/qq-agent-presets</code> 这个 DSH bundle 把 <code>qq-chat</code> / <code>qq-chat-v2</code> 两条 <code>@deepseek-ai/dsh-agent-preset</code> 行插入 profile（DSH 0.1.7 起 preset <strong>不再是</strong> <code>~/.dsh/.agent-presets/&lt;名&gt;/</code> 目录，该目录完全不被读取）。patch 由 <code>scripts/build-agent-preset-patches.mjs</code> 从 <code>dsh/agent-presets/</code> 的权威源生成</li>
+<li>在 <code>~/.dsh/profiles/web/cordis.patch.yml</code> 挂载：
+<ul>
+<li><code>mcp-snowluma</code>（<code>src/mcp-snowluma-safe.js</code>，带 <code>toolCallTimeoutMs: 725000</code>）</li>
+<li><code>mcp-snowluma-host</code>（<code>src/mcp-host-server.js</code>）</li>
+<li><code>mcp-web-search-safe</code>（<code>src/mcp-web-search-safe.js</code>）</li>
+</ul></li>
+<li>在 <code>~/.dsh/profiles/web/package.json</code> 注册 <code>qq-mode-console</code> 与 <code>qq-agent-presets</code>（<code>dsh.profile.bundles</code> + <code>link:</code> 依赖），并维护 <code>node_modules</code> 下的 junction</li>
+<li>把 <code>qq-mode</code> 的默认模式设为 <code>reserved2</code>（二代仿真）</li>
+<li>创建本地 <code>state/mode.json</code>（<code>mode: reserved2</code>）作为 DSH settings 不可用时的兜底</li>
+<li>尝试自动执行 <code>dsh plugin --profile web install</code>（当 <code>dsh</code> CLI 在 PATH 中可用时），注册两个插件的 bundle 依赖；若 <code>dsh</code> 不在 PATH，缺失依赖时 DSH 会提示补跑</li>
+</ul>
+<blockquote>
+<p>脚本可重复运行（幂等）：它会重建 <code>qq-agent-presets</code> 的 preset patch、更新 MCP 路径并重建失效的插件链接。
+MCP 条目通过 YAML 解析后<strong>按顶层 <code>insert</code> 内的条目 id 增删</strong>（不依赖标记注释），支持带引号的 id、共享 <code>insert</code> 与行内 YAML，并保留其他插件配置和嵌套数据。
+脚本在写入前验证 YAML；无法解析时停止，不覆盖配置或 preset。只修复历史版本在文件开头遗留的多余 <code>[]</code>，不会删除正文中的空数组或文本。
+YAML 格式与注释会在序列化时规范化；每次<strong>实际改动内容</strong>前，完整原文会保存在同目录的 <code>cordis.patch.yml.bak-&lt;ISO 时间戳&gt;</code>（例如 <code>cordis.patch.yml.bak-2026-10-31T13-10-31-123Z</code>），只保留最近 5 份；内容无需改动时不会新增备份。
+可用 <code>node scripts/test-audit-setup.mjs</code> 验证幂等性、配置保留、路径边界和 Windows CLI 调用；测试只使用独立的临时仓库和 DSH_HOME，不启动真实 DSH。
+已存在的 <code>qq-bridge/state/mode.json</code> 会被保留（不覆盖用户设置）；全新安装才会写入 <code>mode: reserved2</code>。
+如果之后把 <code>qq-bridge</code> 目录移动/重新 clone 到别的路径，请重新运行一次本脚本，否则 DSH 里的 MCP/插件绝对路径会指向旧位置。
+也可用环境变量指定 DSH 根目录：<code>DSH_HOME=/path/to/.dsh node scripts/setup-dsh.mjs &lt;profile&gt;</code>。
+<code>&lt;profile&gt;</code> 必须是单个目录名，不能包含路径分隔符或 <code>..</code> 路径跳转。离线准备配置时，可设置 <code>QQ_BRIDGE_SKIP_DSH_INSTALL=1</code> 跳过自动安装 bundle，随后手动运行 <code>dsh plugin --profile &lt;profile&gt; install</code>。
+Windows 下脚本通过隐藏的 <code>cmd.exe</code> 调用 npm 的 <code>dsh.cmd</code> 启动器；<code>DSH_HOME</code> 和 profile 参数会传给该进程。</p>
+</blockquote></li>
+</ol>
+<ol start="5">
+<li><strong>重启 DSH</strong>：
+<p>必须重启 DSH（或让 DSH 重新加载 profile），新 preset 和 MCP 工具才会生效。</p>
+<blockquote>
+<p>默认模式为 <strong><code>reserved2</code>（二代仿真）</strong>，即“文本不自动转发、AI 通过工具自主收发”。如果你想改用 <code>chat</code> / <code>closed-agent</code> / <code>reserved</code>，在<strong>桥接控制台</strong>（默认 <code>http://127.0.0.1:3100</code>）顶部按钮切换即可 —— 桥接会同时写入 DSH 设置与本地 <code>state/mode.json</code>，<strong>无需重启</strong>（每 5 秒轮询即时生效）。本地文件保存模式兜底与 <code>closedAgentPreset</code>；正常情况下模式以 DSH 设置为准，请通过控制台切换。</p>
+</blockquote></li>
+</ol>
+
+<!-- moved verbatim from pages/ops/dsh-setup.html [h2:验证是否装好] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="验证是否装好">验证是否装好</h2>
+<p>离线安全回归：<code>node scripts/test-audit-setup.mjs</code> 与 <code>node scripts/test-audit-setup-guards.mjs</code>。后者直接执行两套 preset 的限制插件，验证本地工具、未声明工具与裸 <code>web_fetch</code> / <code>web_search</code> 被拒绝，而带 SSRF 防护的 <code>mcp__web-search-safe__*</code> 仍然可用。更新 preset 后需重新运行安装脚本并重启 DSH，现有 DSH 安装中的旧副本才会更新。</p>
+<ol>
+<li><strong>一键自检</strong>：<code>npm run verify:adaptation</code> —— 覆盖 preset persona schema、bundle patch 与工具守卫、版本身份一致性、preset fail-closed 护栏，以及运行中 DSH 的协议与活体回合（<code>qq-mode</code>、<code>session/projections</code>、<code>session/control</code>、<code>stopSessionWork</code>、<code>$events</code>、<code>session/modelCatalog</code> 等）。具体断言数量以脚本输出为准。
+<blockquote>
+<p>若你的环境禁止起子进程（例如在 DSH 的沙箱会话里跑），脚本内那批 <code>node --check</code> 语法检查会被<strong>显式记为跳过</strong>（<code>⏭</code>）而不是报假失败 —— 请在普通终端重跑以覆盖它们。</p>
+</blockquote></li>
+<li><strong>切换桥接模式</strong>：打开桥接控制台（默认 <code>http://127.0.0.1:3100</code>），顶部的「聊天模式 / 封闭 Agent / 一代仿真模式 / 二代仿真模式」按钮即为当前生效的切换入口。控制台会同时写入 DSH 设置与本地 <code>state/mode.json</code>。
+<blockquote>
+<p>ℹ️ DSH 设置页 <code>Plugins → Plugin configuration</code> 里<strong>不会</strong>出现 <code>qq-mode</code> 卡片：该槽位要求插件自带浏览器半（<code>package.json</code> 的 <code>dsh.client</code> + <code>lib/client.js</code>），而 <code>plugins/qq-mode-console</code> 只实现了 host 半。<code>qq-mode</code> 命名空间本身<strong>可用</strong>（<code>settings/describe</code> 能列出、<code>settings/update</code> 能写成功），缺的只是那张 GUI 表单 —— 所以模式改走控制台。参见下方「常见问题」。
+DSH 0.2.0 起命名空间<strong>不再需要任何注册调用</strong>：它由 profile 里 <code>id: qq-mode</code> 那条 loader entry + 插件导出的 <code>Config</code>（带 <code>volatile</code> 字段）推导出来。0.1.x 的 <code>ctx.settings.register()</code> 已被 DSH 删除。</p>
+</blockquote></li>
+<li><strong>新建会话时</strong>：agent preset 列表中应能看到：
+<ul>
+<li><code>QQ 聊天角色</code>（<code>qq-chat</code>）</li>
+<li><code>QQ 聊天角色（二代仿真）</code>（<code>qq-chat-v2</code>）</li>
+</ul></li>
+<li><strong>工具列表</strong>：QQ 会话中应能看到 <code>mcp__snowluma__*</code>、<code>mcp__snowluma-host__*</code>、<code>mcp__web-search-safe__*</code> 等工具；不应看到 <code>dev_*</code> 等开发工具。</li>
+</ol>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+<aside class="sidebar-right" aria-label="On this page">
+  <div class="sidebar-inner">
+    <span class="toc-label">On this page</span>
+    <nav class="toc-list">
+      <a class="toc-h2" href="#快速开始">快速开始</a>
+      <a class="toc-h2" href="#1-获取项目">1. 获取项目</a>
+      <a class="toc-h2" href="#3-安装-dsh-插件">3. 安装 DSH 插件</a>
+      <a class="toc-h2" href="#4-启动并测试">4. 启动并测试</a>
+      <a class="toc-h2" href="#兼容范围">兼容范围</a>
+      <a class="toc-h2" href="#安装步骤">安装步骤</a>
+      <a class="toc-h2" href="#验证是否装好">验证是否装好</a>
+    </nav>
+  </div>
+</aside>
+
+</div>
+
+<script src="../../assets/nav.js"></script>
+
+</body>
+</html>

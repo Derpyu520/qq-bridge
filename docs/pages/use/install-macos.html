@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>macOS 安装 — qq-bridge</title>
+<meta name="description" content="本页记录在 macOS（Apple Silicon）上实测跑通的装法。通用部分（兼容范围、 setup-dsh.mjs 做了什么、验证步骤）见 安装与首次运行 ，这里只写 macOS 上不一样的地方。">
+<meta property="og:title" content="macOS 安装 — qq-bridge">
+<meta property="og:description" content="本页记录在 macOS（Apple Silicon）上实测跑通的装法。通用部分（兼容范围、 setup-dsh.mjs 做了什么、验证步骤）见 安装与首次运行 ，这里只写 macOS 上不一样的地方。">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="../../" data-tab="使用指南" data-page-rel="pages/use/install-macos.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../../index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout has-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body guide">
+  <div class="topbar">
+  <div class="crumbs">
+    <a href="../../index.html">qq-bridge</a>
+    <span class="sep">/</span>
+    Pages
+    <span class="sep">/</span>
+    <a href="index.html">使用指南</a>
+    <span class="sep">/</span>
+    <span class="here">macOS 安装</span>
+  </div>
+</div>
+  <h1>macOS 安装</h1>
+<p>本页记录在 macOS（Apple Silicon）上实测跑通的装法。通用部分（兼容范围、<code>setup-dsh.mjs</code> 做了什么、验证步骤）见<a href="install.html">安装与首次运行</a>，这里只写 macOS 上不一样的地方。</p>
+<blockquote>
+<p><strong>支持级别</strong>：macOS 有实测运行记录，但不在测试矩阵内。SnowLuma 上游列出的平台是 Windows / Linux，macOS 不在其中；下面 SnowLuma 跑在 Docker 的 Linux 环境里，属于上游未覆盖的用法。</p>
+</blockquote>
+
+<h2 id="验证环境">验证环境</h2>
+<table>
+<thead><tr><th>组件</th><th>实测版本</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>macOS</td><td>Apple Silicon（arm64）</td><td>Intel Mac 未验证</td></tr>
+<tr><td>Node.js</td><td>25.4.0（Homebrew）</td><td>要求 ≥ 22.13；25 能跑但不在测试矩阵内，建议用 22 LTS</td></tr>
+<tr><td>DSH</td><td>桌面版 <code>0.2.1-rc.2</code></td><td>用 <code>dsh web</code> 提供 Web 接口</td></tr>
+<tr><td>SnowLuma</td><td>上游 Docker 镜像 <code>v2.1.1</code></td><td>跑在 Colima（<code>aarch64</code>，runtime docker）里；Docker Desktop / OrbStack 未实测</td></tr>
+<tr><td>qq-bridge</td><td><code>0.2.1-r2</code></td><td><code>main</code> 分支</td></tr>
+</tbody>
+</table>
+
+<h2 id="和-windows-的差异">和 Windows 的差异</h2>
+<ul>
+<li><strong>没有 <code>start.bat</code> / <code>restart.bat</code></strong>：用 <code>npm start</code> 前台运行，没有守护进程，退出后不会自动重启。</li>
+<li><strong>DSH 端口不会自动发现</strong>：端口枚举目前只有 Windows 实现（<code>netstat</code> + <code>tasklist</code>）。macOS 上桥接只会尝试 <code>config.json</code> 的 <code>dsh.baseUrl</code> 和环境变量 <code>DSH_WEB_URL</code>，必须手动填对。</li>
+<li><strong><code>state/</code> 权限</strong>：用 <code>chmod</code> 收紧为仅本用户可读写，不涉及 Windows ACL，不需要管理员权限。</li>
+<li><strong><code>setup-dsh.mjs</code></strong>：插件链接建成普通目录 symlink（Windows 上是 junction），并直接调用 PATH 里的 <code>dsh</code> 命令。</li>
+</ul>
+
+<h2 id="1-准备工具">1. 准备工具</h2>
+<pre><code>brew install node@22 git
+# 可选：语音功能需要 ffmpeg
+brew install ffmpeg</code></pre>
+<p><code>node@22</code> 是 keg-only，按 Homebrew 安装结束时的提示把它加进 PATH，然后确认 <code>node -v</code> ≥ 22.13。</p>
+
+<h2 id="2-snowluma">2. SnowLuma</h2>
+<p>qq-bridge <strong>不安装、不打包、不启停</strong> SnowLuma（设计不变量 L6，见 <a href="license.html">许可与边界</a>），本仓库也不提供启动它的命令或脚本。请自行完成：</p>
+<ol>
+<li>准备一个 Docker 运行时。以下任选其一，它们都提供同样的 <code>docker</code> 命令，后续步骤不受影响：
+<ul>
+<li><strong>Colima</strong>（实测使用）：免费开源，纯命令行。
+<pre><code>brew install colima docker
+colima start</code></pre>
+</li>
+<li><strong>Docker Desktop</strong>：Docker 官方的图形界面版，用户最多。较大的公司需要付费订阅，个人与小团队免费。</li>
+<li><strong>OrbStack</strong>：启动快、占用资源少，个人免费、商用收费。</li>
+</ul>
+</li>
+<li>按 <a href="https://snowluma.github.io/zh/docs/guide/deploy/docker">SnowLuma 官方 Docker 部署文档</a>部署上游镜像（提供 <code>linux/arm64</code>），并按文档登录 QQ。</li>
+<li>开启 OneBot <strong>HTTP API</strong> 与 <strong>WebSocket 服务端</strong>，把两个端口映射到本机 <code>127.0.0.1</code>（下文以 HTTP 3000、WS 3001 为例）。</li>
+</ol>
+<p>QQ 登录态保存在容器的数据卷里，删掉卷就要重新扫码登录。</p>
+
+<h2 id="3-dsh">3. DSH</h2>
+<p>安装 DSH 桌面版并启动 <code>dsh web</code>，记下它打印的端口。<strong>这个端口每次启动都可能变化</strong>；变了之后要同步修改 <code>dsh.baseUrl</code>，否则桥接连不上 DSH。</p>
+
+<h2 id="4-获取并配置项目">4. 获取并配置项目</h2>
+<pre><code>git clone https://github.com/Derpyu520/qq-bridge.git
+cd qq-bridge
+npm install
+cp config.example.json config.json
+chmod 600 config.json</code></pre>
+<p>编辑 <code>config.json</code>，macOS 上需要特别注意以下几项：</p>
+<table>
+<thead><tr><th>键</th><th>填什么</th></tr></thead>
+<tbody>
+<tr><td><code>dsh.baseUrl</code></td><td><code>http://127.0.0.1:&lt;dsh web 的端口&gt;</code>，必须手填（见上文）</td></tr>
+<tr><td><code>snowluma.wsUrl</code> / <code>httpUrl</code></td><td>映射到本机的端口，例如 <code>ws://127.0.0.1:3001</code> / <code>http://127.0.0.1:3000</code></td></tr>
+<tr><td><code>snowluma.accessToken</code></td><td>OneBot 的访问令牌，见下文</td></tr>
+<tr><td><code>socialV2.voice.ffmpegPath</code></td><td>启用语音时填 <code>/opt/homebrew/bin/ffmpeg</code>（或设置环境变量 <code>FFMPEG_PATH</code>）</td></tr>
+</tbody>
+</table>
+<p><strong>OneBot 令牌从哪里来</strong>：桥接有两种拿令牌的方式。</p>
+<ul>
+<li><strong>直接填写</strong> <code>snowluma.accessToken</code>：令牌在 SnowLuma 的 OneBot 账号配置 <code>config/onebot_&lt;QQ号&gt;.json</code> 里。SnowLuma 跑在容器中时，这个文件在容器的数据卷里，需要自行取出。</li>
+<li><strong>填 <code>snowluma.homeDir</code></strong>：指向一个包含 <code>config/onebot_*.json</code> 的本机目录，桥接会自己扫描其中的令牌，换账号后也能跟上。容器部署时，这个目录需要能在本机看到（例如挂载出来）；如果是一次性拷贝出来的，SnowLuma 那边换了令牌，拷贝就会过期。</li>
+</ul>
+<p>其余项（<code>ownerQQ</code>、<code>allow.private</code> / <code>allow.groups</code> 等）与 Windows 相同，见<a href="config.html">配置参考</a>。</p>
+
+<h2 id="5-安装-dsh-插件">5. 安装 DSH 插件</h2>
+<pre><code>node scripts/setup-dsh.mjs</code></pre>
+<p>脚本做了什么见<a href="install.html#安装步骤">安装步骤</a>。DSH 根目录默认是 <code>~/.dsh</code>，可用 <code>DSH_HOME</code> 覆盖。如果 <code>dsh</code> 命令不在 PATH 里，脚本会跳过插件依赖安装；之后需要手动执行 <code>dsh plugin --profile web install</code>。完成后<strong>重启 DSH</strong>。</p>
+
+<h2 id="6-启动与停止">6. 启动与停止</h2>
+<p>启动顺序：<strong>SnowLuma → DSH → 桥接</strong>。桥接连不上 DSH 时会直接退出。</p>
+<pre><code>npm start</code></pre>
+<p>想在后台运行，可以把输出重定向到日志：</p>
+<pre><code>nohup npm start &gt; state/bridge.stdout.log 2&gt;&amp;1 &amp;</code></pre>
+<p>桥接<strong>只允许一个实例</strong>。启动前先确认控制台端口没有被旧进程占用：</p>
+<pre><code>lsof -nP -iTCP:3100 -sTCP:LISTEN</code></pre>
+<p>停止：前台运行时按 <code>Ctrl+C</code>；后台运行时先确认 <code>state/bridge.lock</code> 里记的 PID 确实是本仓库的 <code>node src/bridge.js</code>，再 <code>kill</code> 它。<code>restart.bat</code> 和它调用的 <code>scripts/stop-bridge-instance.mjs</code> 只支持 Windows。</p>
+
+<h2 id="7-验证">7. 验证</h2>
+<ol>
+<li>打开桥接控制台 <code>http://127.0.0.1:3100</code>，令牌在 <code>state/console-token</code>。</li>
+<li>运行 <code>npm run verify:adaptation</code> 做一次自检，具体覆盖范围见<a href="install.html#验证是否装好">验证是否装好</a>。</li>
+<li>在白名单会话里发一条消息测试收发；新装默认是二代仿真模式（<code>reserved2</code>），会选择性发言，测试时可先在控制台切到 <code>chat</code>。</li>
+</ol>
+
+<h2 id="常见问题">常见问题</h2>
+<table>
+<thead><tr><th>症状</th><th>原因与处理</th></tr></thead>
+<tbody>
+<tr><td>重启 DSH 后桥接连不上</td><td><code>dsh web</code> 端口变了，更新 <code>dsh.baseUrl</code> 或 <code>DSH_WEB_URL</code></td></tr>
+<tr><td>桥接提示已有实例在运行</td><td>上一个桥接没有退干净，用 <code>lsof</code> 找到占用 3100 的进程</td></tr>
+<tr><td>SnowLuma 连不上</td><td>先确认 Docker 运行时与容器都在运行，再检查端口映射和令牌</td></tr>
+<tr><td>日志时间差几个小时</td><td>容器时区与本机不同，按各自时区对时间线</td></tr>
+</tbody>
+</table>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+<aside class="sidebar-right" aria-label="On this page">
+  <div class="sidebar-inner">
+    <span class="toc-label">On this page</span>
+    <nav class="toc-list">
+      <a class="toc-h2" href="#验证环境">验证环境</a>
+      <a class="toc-h2" href="#和-windows-的差异">和 Windows 的差异</a>
+      <a class="toc-h2" href="#1-准备工具">1. 准备工具</a>
+      <a class="toc-h2" href="#2-snowluma">2. SnowLuma</a>
+      <a class="toc-h2" href="#3-dsh">3. DSH</a>
+      <a class="toc-h2" href="#4-获取并配置项目">4. 获取并配置项目</a>
+      <a class="toc-h2" href="#5-安装-dsh-插件">5. 安装 DSH 插件</a>
+      <a class="toc-h2" href="#6-启动与停止">6. 启动与停止</a>
+      <a class="toc-h2" href="#7-验证">7. 验证</a>
+      <a class="toc-h2" href="#常见问题">常见问题</a>
+    </nav>
+  </div>
+</aside>
+
+</div>
+
+<script src="../../assets/nav.js"></script>
+
+</body>
+</html>

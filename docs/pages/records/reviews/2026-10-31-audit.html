@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2026-10-31 仓库体检与修复 — qq-bridge</title>
+<meta name="description" content="审计基线为 dev 分支的 c893c7b 。范围覆盖桥接与控制台、MCP 工具、网络请求、 预设权限、学习资料、语音路径、运行时状态、依赖和 CI；采用代码审查、隔离夹具和回归测试。 没有操作真实 QQ/DSH 会话，也没有修改运行配置、聊天记录或仓库历史。">
+<meta property="og:title" content="2026-10-31 仓库体检与修复 — qq-bridge">
+<meta property="og:description" content="审计基线为 dev 分支的 c893c7b 。范围覆盖桥接与控制台、MCP 工具、网络请求、 预设权限、学习资料、语音路径、运行时状态、依赖和 CI；采用代码审查、隔离夹具和回归测试。 没有操作真实 QQ/DSH 会话，也没有修改运行配置、聊天记录或仓库历史。">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../../assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="../../../" data-tab="记录" data-page-rel="pages/records/reviews/2026-10-31-audit.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../../../index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout has-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body research">
+  <div class="topbar">
+  <div class="crumbs">
+    <a href="../../../index.html">qq-bridge</a>
+    <span class="sep">/</span>
+    Pages
+    <span class="sep">/</span>
+    记录
+    <span class="sep">/</span>
+    核查
+    <span class="sep">/</span>
+    <span class="here">2026-10-31 仓库体检与修复</span>
+  </div>
+</div>
+  <h1>2026-10-31 仓库体检与修复</h1>
+<!-- moved verbatim from pages/records/audit-2026-10-31.html [all] on 2026-11-03 (docs reorg step 2) -->
+<p>审计基线为 <code>dev</code> 分支的 <code>c893c7b</code>。范围覆盖桥接与控制台、MCP 工具、网络请求、
+预设权限、学习资料、语音路径、运行时状态、依赖和 CI；采用代码审查、隔离夹具和回归测试。
+没有操作真实 QQ/DSH 会话，也没有修改运行配置、聊天记录或仓库历史。</p>
+<h2 id="已修复的问题">已修复的问题</h2>
+<p>P1 表示可能泄露私有资料或违反用户撤权意图，P2 表示安全边界或健壮性缺口；
+这是本次代码审计的优先级判断，不是 CVSS 评分。</p>
+<table>
+<thead><tr><th>优先级</th><th>问题与影响</th><th>修复</th></tr></thead>
+<tbody>
+<tr><td>P1</td><td>黑话创建丢弃 scope，同名词跨会话合并；查询、提示词和提交可能返回别群解释</td><td>创建保留归属，按内容和 scope 更新，所有模型读取按 scope 过滤</td></tr>
+<tr><td>P1</td><td>黑话研究共享学习历史，且按全库同名词回写，可能混合证据和覆盖其他条目</td><td>按 scope 分批并隔离学习会话，只向本批目标 ID 和 scope 回写</td></tr>
+<tr><td>P1</td><td>贴纸 API、搜索及部分更新可能泄露或搬运其他会话的 AI 认知</td><td>返回与搜索前净化私有字段，切换归属清空旧备注、标签、用途和语境</td></tr>
+<tr><td>P1</td><td>排队或异步准备中的 AI 动作可能在暂停、关闭、静默或权限变化后继续发送</td><td>提前捕获权限，在实际发送前重查；覆盖文本、语音、表情与拍一拍</td></tr>
+<tr><td>P1</td><td>搜索兼容端点回显的 API key 可能随错误或搜索结果进入模型</td><td>错误只返回稳定状态，结果字段在截断前精确脱敏，兼容短 key</td></tr>
+<tr><td>P2</td><td>SSRF 过滤遗漏特殊云平台地址</td><td>补充 <a href="https://learn.microsoft.com/en-us/azure/virtual-network/what-is-ip-address-168-63-129-16">Azure WireServer 地址</a>及嵌入式 IPv6、DNS、重定向回归</td></tr>
+<tr><td>P2</td><td>MCP 网页抓取未使用已有端口限制</td><td>与媒体抓取统一限制 80/443/8080/8443</td></tr>
+<tr><td>P2</td><td>DSH 自动探测可为远端候选铸造本机 Cookie，RPC 默认跟随重定向</td><td>自动探测仅限回环，拒绝 URL 内嵌凭据；探测和 RPC 均不跟随重定向</td></tr>
+<tr><td>P2</td><td>语音库新文件不存在时跳过真实父目录校验</td><td>校验最近已存在父目录，拒绝库外 junction 和失效链接</td></tr>
+<tr><td>P2</td><td>预设生成物检查把 Windows 检出的 CRLF 当成源与产物漂移，干净工作树也可能失败</td><td>比较前统一文件换行，保留真实 YAML 字段和内容差异检查</td></tr>
+</tbody>
+</table>
+<p>新增四组离线回归，同时把已有预设装配、工具守卫、媒体、贴纸、转发、等待和路由测试纳入
+<code>npm run test:audit</code>。CI 增加依赖检查，阻止已知高危和严重漏洞。
+贴纸、转发和等待测试的默认值检查改读示例配置，干净克隆无需提供本机配置；
+转发实机检查只有显式 <code>QQ_BRIDGE_TEST_LIVE=1</code> 时才启用，离线套件强制关闭该开关。</p>
+<h2 id="验证">验证</h2>
+<ul>
+<li>修改前的原有离线回归：37/37 脚本通过。</li>
+<li>修改后的完整离线回归：<code>Audit suite: 51/51 scripts passed.</code>，四组新增边界回归均纳入 CI。</li>
+<li>全部 126 个 JS/MJS/CJS 文件语法检查、9 个 JSON 文件解析和差异空白检查通过。</li>
+<li>当前工作树在默认规则及本机规则下均无隐私命中；扫描包括新增文件。</li>
+<li><code>npm audit --json --ignore-scripts</code>：129 个生产依赖项，已知漏洞 0。</li>
+<li>首次沙箱运行出现本地连接和临时文件替换权限错误；离线套件随后在获准的沙箱外环境重跑。</li>
+</ul>
+<h2 id="升级后的资料复核">升级后的资料复核</h2>
+<p>旧版本已经错误保存为 <code>global</code> 的 AI 黑话仍按全局语义可见。过去同名词合并后，解释和证据也可能已混合。
+管理员应在控制台复核旧 AI 条目，删除或重新指定归属。本次不自动重写现有资料：缺失的归属无法可靠恢复，
+而有意设为全局的条目也应继续共享。新数据已在创建、研究、读取和更新全链路隔离。</p>
+<p>历史隐私扫描还报告 15 处旧提交中的本机路径。当前工作树未命中；这些历史命中不因普通修复提交消失。
+本次未改写公开历史。需要清理时应另行制定与已有克隆、分支和 fork 协调的方案。</p>
+<h2 id="架构与剩余风险">架构与剩余风险</h2>
+<p><code>src/bridge.js</code> 约 1.2 万行，同时承担 HTTP 路由、鉴权、调度、外部协议和持久化，安全规则容易在旁路遗漏。
+此次统一复用了发送守卫和按归属净化函数；后续适合分阶段提取服务层，先保留现有行为回归，再拆控制台路由和资料存储。</p>
+<p><code>src/core/session-router.mjs</code> 有独立测试，但尚未接入实际桥接链路，与主文件里的策略实现并存。
+其测试通过不能证明生产路由使用了这套策略，后续应明确集成路径或删除未使用抽象。</p>
+<p>敏感内容检测仍是启发式规则；本机状态中的秘密仍依赖 ACL 保护；网络、DSH、SnowLuma 的实际端到端行为
+需要在维护窗口另做验证。本次离线审计不构成没有未知漏洞的保证。相关边界详见 <a href="../../dev/security/baseline.html">安全基线</a>。</p>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+<aside class="sidebar-right" aria-label="On this page">
+  <div class="sidebar-inner">
+    <span class="toc-label">On this page</span>
+    <nav class="toc-list">
+      <a class="toc-h2" href="#已修复的问题">已修复的问题</a>
+      <a class="toc-h2" href="#验证">验证</a>
+      <a class="toc-h2" href="#升级后的资料复核">升级后的资料复核</a>
+      <a class="toc-h2" href="#架构与剩余风险">架构与剩余风险</a>
+    </nav>
+  </div>
+</aside>
+
+</div>
+
+<script src="../../../assets/nav.js"></script>
+
+</body>
+</html>

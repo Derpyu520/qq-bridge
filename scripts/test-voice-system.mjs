@@ -193,8 +193,8 @@ console.log('## 文档');
   } else {
     console.log('  ⏭  docs/guides/VOICE.md 未入库（本地专属文档），跳过该文件的断言');
   }
-  ok(read('docs/README.md').includes('FOLDER_MAP.md'), 'docs/README.md 索引链接到 FOLDER_MAP.md');
-  ok(exists(path.join('docs', 'FOLDER_MAP.md')), 'docs/FOLDER_MAP.md 存在');
+  ok(read('docs/index.html').includes('codebase-map.html'), 'docs/index.html 索引链接到 codebase-map.html');
+  ok(exists(path.join('docs', 'pages', 'dev', 'core', 'codebase-map.html')), 'docs/pages/dev/core/codebase-map.html 存在');
 }
 
 console.log('## 独立工具的配置解析（env → voice-tool/config.json → ../qq-bridge/config.json → 默认值）');

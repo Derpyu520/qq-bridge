@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>人格卡 — qq-bridge</title>
+<meta name="description" content="二代仿真模式下，AI 拿到的提示词由两层拼成，控制台「人格与角色」页可分别查看与修改：">
+<meta property="og:title" content="人格卡 — qq-bridge">
+<meta property="og:description" content="二代仿真模式下，AI 拿到的提示词由两层拼成，控制台「人格与角色」页可分别查看与修改：">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="qq-bridge">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../assets/style.css">
+<script>
+  // Apply theme before paint to avoid flash.
+  (function() {
+    var t = localStorage.getItem('site-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+
+<!-- site-layout -->
+</head>
+<body data-asset-prefix="../../" data-tab="使用指南" data-page-rel="pages/use/personas.html">
+
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="site-logo" href="../../index.html">qq-bridge</a>
+    <nav class="site-tabs" id="site-tabs" aria-label="Site sections"></nav>
+    <div class="site-actions">
+      <button class="site-action search-btn" aria-label="Search" title="Search (press /)">🔍</button>
+      <button class="site-action share-btn" aria-label="Share" title="Share this page" aria-haspopup="true" aria-expanded="false">🔗</button>
+      <button class="site-action theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">🌙</button>
+      <button class="site-action mobile-nav-toggle" aria-label="Menu" title="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="site-layout has-right-toc">
+
+<aside class="sidebar-left" id="sidebar-left" aria-label="Section navigation"><div class="sidebar-inner"></div></aside>
+
+<main class="doc-body guide">
+  <div class="topbar">
+  <div class="crumbs">
+    <a href="../../index.html">qq-bridge</a>
+    <span class="sep">/</span>
+    Pages
+    <span class="sep">/</span>
+    <a href="index.html">使用指南</a>
+    <span class="sep">/</span>
+    <span class="here">人格卡</span>
+  </div>
+</div>
+  <h1>人格卡</h1>
+<!-- moved verbatim from RULES.md [h2:提示词的两层边界] on 2026-11-03 (docs reorg step 2) -->
+<h2 id="提示词的两层边界仿真-vs-人格">提示词的两层边界（仿真 vs 人格）</h2>
+<p>二代仿真模式下，AI 拿到的提示词由两层拼成，控制台「人格与角色」页可分别查看与修改：</p>
+<table>
+<thead><tr><th>层</th><th>位置</th><th>管什么</th><th>生效方式</th></tr></thead>
+<tbody>
+<tr><td><strong>仿真提示词</strong>（两代各一份）</td><td><code>dsh/agent-presets/qq-chat/agent.cordis.yml</code>（一代）与 <code>qq-chat-v2/agent.cordis.yml</code>（二代）的 <code>persona.prefix</code></td><td>怎么调工具、怎么参与群聊（行为与协议：安全规则、工具协议、唤醒/分条/记忆/黑话等）</td><td>控制台可按代次分别编辑；保存会写仓库源文件并同步到 <code>~/.dsh/plugins/qq-agent-presets/presets/&lt;preset&gt;.patch.yml</code>（旧安装的 <code>.agent-presets</code> 目录仅作兼容回退）；<strong>新会话</strong>自动用新版，<strong>正在进行的 QQ 会话</strong>需 <code>POST /api/session/reset</code> 或重启 DSH</td></tr>
+<tr><td><strong>人格提示词</strong></td><td><code>roles/&lt;人格名&gt;.md</code></td><td>AI 是谁、什么性格、怎么说话（人设与语气）</td><td>桥接按当前模式与注入节奏提供，保存后的下一次唤醒生效</td></tr>
+</tbody>
+</table>
+<ul>
+<li>拼装顺序：<code>仿真提示词 → 人格提示词 → 本轮消息</code>。</li>
+<li><strong>人格卡只写人设，不写工具用法</strong>：两代工具协议不同（一代空格分条 / <code>[SILENT]</code>，二代一切皆工具），写进人格卡必然有一代是错的；桥接已经按当前模式提供分条与潜水说明。写作规范见 <code>roles/README.md</code>。</li>
+<li>同一个角色确实需要分代时，用<strong>标题级模式标记</strong>：<code>## 分条方式 〔一代〕</code> / <code>## 表情包 〔二代〕</code>；无标记的小节两代都注入，标记在注入前会被去掉。桥接按当前模式筛完小节<strong>再</strong>截断。</li>
+<li><strong>注入上限</strong>：完整人格卡单次最多注入 8000 字符（<code>config.json</code> 的 <code>role.maxInjectChars</code>，1000~20000，控制台可改）。这是成本护栏。</li>
+<li><strong>注入节奏</strong>：首次唤醒 / 角色卡文件变化 / <strong>DSH 会话重建</strong>（<code>/reset</code>、换模式、换 preset、DSH 重启）时注入完整人格卡，其后每 <code>role.injectEveryNWakes</code> 次唤醒（默认 4，设 1 = 每次都全量）再全量一次，其余唤醒只给一行「角色卡已给过」的提醒。计数按 QQ 会话存在 <code>state/role-inject.json</code>，签名里带当前 DSH sessionId —— 新会话的上下文是空的，必须重新全量。</li>
+<li>仿真提示词保存前会做硬性校验：保留 <code>你没有本地工具</code> / <code>群友没有管理权限</code> / <code>API 令牌</code> / <code>角色由桥接注入</code> / <code>不会自动发送到 QQ</code> 这些安全不变量，且正文 ≥ 500 字符；缺失即拒绝保存（否则会同时削弱权限边界并让 <code>npm run test:audit</code> 变红）。写入前自动备份到 <code>state/preset-backups/</code>，可一键还原；还原时同样校验。</li>
+<li>一代遗留写法（空格分句、<code>[SILENT]</code>、自动转发）若出现在<strong>未标记</strong>的小节里，二代下会被兜底整行过滤；控制台会提示把它们移到 <code>〔一代〕</code> 小节。</li>
+<li>两层提示词都<strong>只能由控制台（管理员令牌）修改</strong>：带 <code>x-agent-token</code> 的请求对这些端点一律 403，QQ 群里的 AI 无法改写自己的提示词。</li>
+</ul>
+
+<!-- moved verbatim from roles/README.md [all] on 2026-11-03 (docs reorg step 2) -->
+<p>每个角色一个 Markdown 文件，<strong>文件名 = 角色名</strong>（不含扩展名，中英文均可）。例：<code>roles/傲娇助手.md</code>。</p>
+<p>管理员可在控制台「人格与角色」页选择或清除角色，也可在白名单会话中使用 <code>/role &lt;角色名&gt;</code>、<code>/role off</code> 管理命令。群友口头提出切换或退出角色不会改变设置。</p>
+<hr>
+<h2 id="一人格卡只写人设不写怎么干活">一、人格卡只写「人设」，不写「怎么干活」</h2>
+<p>这是最重要的一条。提示词分两层：</p>
+<table>
+<thead><tr><th>层</th><th>放在哪</th><th>管什么</th></tr></thead>
+<tbody>
+<tr><td><strong>人格提示词</strong></td><td>本目录的 <code>roles/&lt;角色名&gt;.md</code></td><td><strong>你是谁</strong>：身份、性格、说话风格、梗、雷点、和其他人的关系</td></tr>
+<tr><td><strong>仿真提示词</strong></td><td><code>dsh/agent-presets/qq-chat{,-v2}/agent.cordis.yml</code> 的 <code>persona.prefix</code></td><td><strong>怎么干活</strong>：工具怎么调、怎么分条、怎么潜水/唤醒、怎么用表情包与记忆</td></tr>
+</tbody>
+</table>
+<p><strong>不要把工具用法写进人格卡。</strong> 原因：</p>
+<ul>
+<li>两代的工具协议完全不同（一代空格分条 + <code>[SILENT]</code>；二代一切皆工具 + 数组分条），写进人格卡必然有一代是错的；</li>
+<li>桥接已经按当前模式提供分条与潜水说明，重复写只会占预算；</li>
+<li>表情包、记忆、看图、合并转发、引用规则等能力，各自预设里都有完整章节，人格卡里再写一遍会互相打架。</li>
+</ul>
+<p>人格卡里写工具说明的典型症状：在二代下被桥接<strong>整行过滤</strong>（白写），或者让模型照着一代的写法去发消息。</p>
+<hr>
+<h2 id="二需要区分模式时在标题里加标记">二、需要区分模式时：在标题里加标记</h2>
+<p>同一个角色如果确实需要「一代这样说、二代那样说」，用<strong>标题级模式标记</strong>，桥接会只注入当前模式适用的小节：</p>
+<pre><code class="language-markdown">## 三、分条方式 〔一代〕
+- 想分多条就用空格分隔；想沉默就只输出 [SILENT]。
+
+## 三、分条方式 〔二代〕
+- 用 qq_send_message 的 messages 数组分条；潜水用 qq_mark_read。
+
+## 四、说话风格
+- 这条没有标记 → 两种模式都会注入。</code></pre>
+<ul>
+<li>支持的写法：<code>〔二代〕</code>、<code>[v2]</code>、<code>（reserved2）</code>、<code>〔2 代〕</code>（一代同理：<code>〔一代〕</code>/<code>[v1]</code>/<code>（reserved）</code>）。</li>
+<li>标记只是给桥接看的，<strong>注入前会被去掉</strong>，模型看到的标题是干净的。</li>
+<li>没有标记的小节＝通用人设，两种模式都注入。</li>
+<li>控制台打开某个人格时会显示「按模式注入：二代 N / 一代 M 字符」，并标出哪些小节会被跳过。</li>
+</ul>
+<hr>
+<h2 id="三注入上限">三、注入上限</h2>
+<ul>
+<li>完整人格卡单次最多注入 8000 字符（<code>config.json</code> 的 <code>role.maxInjectChars</code>，可设 1000~20000，控制台也能直接改）。</li>
+<li>截断发生在<strong>按模式筛完小节之后</strong>，所以另一代的专属内容不会占掉本次预算。</li>
+<li>这是成本护栏。完整人格卡按注入节奏发送，不是每次唤醒都发送；8000 字符约合 6~8k token，实际消耗取决于模型。</li>
+<li>控制台的人格列表会标出「超出上限」与各模式的实际注入字符数。</li>
+</ul>
+<blockquote>
+<p>建议把人格卡控制在 3000~5000 字符：够写清人设，也能控制完整注入时的上下文开销。</p>
+</blockquote>
+<hr>
+<h2 id="四推荐结构模板">四、推荐结构（模板）</h2>
+<pre><code class="language-markdown"># 角色卡：&lt;角色名&gt;
+
+## 一、你是谁
+- 身份、自我认知、别人怎么称呼你、你的雷点。
+
+## 二、说话风格
+- 句子长短、口头禅、标点习惯、用不用 emoji/括号。
+- 明确写「不要什么」通常比写「要什么」更有效（例如：不要总结、不要升华、不要客服腔）。
+
+## 三、性格与反应
+- 被夸/被怼/被无视时分别怎么反应；有没有嘴硬、摆烂、傲娇之类的固定模式。
+
+## 四、梗与背景（可选）
+- 你的来历、和群友的关系、常用梗、角色梗的边界。
+
+## 五、回复示例（示范语气与长度）
+- 几条「群友说 → 你回」的例子。
+- 例子只示范**语气和长度**，不要在这里规定分条机制（那是仿真层的事）。</code></pre>
+<h2 id="五其它提示">五、其它提示</h2>
+<ul>
+<li>想改性格直接改文件内容，控制台保存后<strong>下一次唤醒即生效</strong>，不用重启 DSH。人格层按当前模式与注入节奏提供；变化后会重新完整注入。</li>
+<li>只写人格、不写工具，换模式时不会出现「一代能用二代不能用」的规则。</li>
+<li>角色名建议用简短中文（如 <code>傲娇助手</code>、<code>猫娘</code>、<code>吐槽役</code>）；不能与已有重名，也不能用 <code>README</code> 或 Windows 保留名（<code>CON</code>/<code>NUL</code>/<code>COM1</code>…）。</li>
+<li>想临时关闭人格扮演，在控制台点「清除」；此时 AI 只按仿真提示词行动。</li>
+</ul>
+
+  <footer>
+    <span>qq-bridge docs</span>
+  </footer>
+</main>
+
+<aside class="sidebar-right" aria-label="On this page">
+  <div class="sidebar-inner">
+    <span class="toc-label">On this page</span>
+    <nav class="toc-list">
+      <a class="toc-h2" href="#提示词的两层边界仿真-vs-人格">提示词的两层边界（仿真 vs 人格）</a>
+      <a class="toc-h2" href="#一人格卡只写人设不写怎么干活">一、人格卡只写「人设」，不写「怎么干活」</a>
+      <a class="toc-h2" href="#二需要区分模式时在标题里加标记">二、需要区分模式时：在标题里加标记</a>
+      <a class="toc-h2" href="#三注入上限">三、注入上限</a>
+      <a class="toc-h2" href="#四推荐结构模板">四、推荐结构（模板）</a>
+      <a class="toc-h2" href="#五其它提示">五、其它提示</a>
+    </nav>
+  </div>
+</aside>
+
+</div>
+
+<script src="../../assets/nav.js"></script>
+
+</body>
+</html>
