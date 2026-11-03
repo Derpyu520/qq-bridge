@@ -40,6 +40,11 @@ ok(/api\('\/api\/voice\/list/.test(html), '面板调用 /api/voice/list（操作
 ok(/api\('\/api\/voice\/send'/.test(html), '面板调用 /api/voice/send');
 ok(/typeof loadVoiceLibrary === 'function'|async function loadVoiceLibrary/.test(html), 'loadVoiceLibrary 已定义');
 
+console.log('## 会话级运行模式面板接线');
+ok(/data-mode-key="\$\{esc\(x\.key\)\}"/.test(html), '会话表渲染了运行模式下拉');
+ok(/api\('\/api\/conversation\/mode'/.test(html), '下拉调用 /api/conversation/mode');
+ok(/跟随全局/.test(html), '保留「跟随全局（不覆盖）」选项');
+
 console.log('## JS 语法');
 const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/gi)].map((m) => m[1]);
 const big = scripts.sort((a, b) => b.length - a.length)[0];

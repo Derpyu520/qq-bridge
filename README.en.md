@@ -22,7 +22,7 @@ QQ ↔ SnowLuma ↔ qq-bridge ↔ DeepSeek Harness ↔ Model provider
 | Message bridge | Separate sessions for groups and private chats; text, images, stickers, and quoted replies |
 | Chat and simulation | Regular chat (`chat`), two generations of social simulation (`reserved` / `reserved2`), and custom roles |
 | Personal assistant | `closed-agent` grants full DSH tools in owner-only private chats; enable with care |
-| Local management | Console for modes, allowlists, approvals, logs, and model usage |
+| Local management | Console for modes, allowlists, approvals, logs, and model usage; each conversation can also be given its own run mode |
 
 ## Quick start
 

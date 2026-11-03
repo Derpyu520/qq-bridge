@@ -24,6 +24,7 @@ import * as voiceLib from '../src/send-voice-lib.js';
 import * as presetPrompt from '../src/preset-prompt.js';
 import * as roleCard from '../src/role-card.js';
 import * as stateAcl from '../src/state-acl.mjs';
+import { CONVERSATION_MODES, ConversationModes } from '../src/core/conversation-modes.mjs';
 import { persistSnowLumaEndpoint, persistToken } from '../src/snowluma-conn.js';
 import { unwrap, createTurnCollector } from '../src/dsh-client.js';
 
@@ -210,6 +211,9 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     // 需要验证自愈逻辑的用例可以用 globals 覆盖它。
     discoverDshBaseUrl: async () => null,
     resolveInstalledPreset, synchronizePreset, renderPatch, persistSnowLumaEndpoint, persistToken,
+    // 会话级运行模式（src/core/conversation-modes.mjs）：bridge.js 的 import 会被剥掉，
+    // 这里显式注入到 VM 上下文，和 stateAcl 等模块同一套路。
+    ConversationModes, CONVERSATION_MODES,
     ...markdown, ...sensitive, ...wait, ...safeFetch, ...forward, ...slang, ...sticker,
     ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...presetPrompt, ...roleCard,
     // 桥接的出图出口会调归一化（体积/动图抽帧）：VM 里必须能拿到这几个函数。

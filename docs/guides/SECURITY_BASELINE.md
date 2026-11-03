@@ -31,6 +31,7 @@
 | --- | --- | --- |
 | 白名单 | `src/bridge.js` `allowed()` | `deny` 优先于 `allow`；两侧统一 `String()` 比较（兼容 OneBot int64 的数字/字符串差异）；allow 为空时返回 `allowAllWhenEmpty`（**默认 false**） |
 | 模式门 | `modeAllowed()` / `isSessionAllowedInCurrentMode()` | 会话 key 必须严格匹配 `^(group\|private):\d+$`；`closed-agent` 只放行 `private:<ownerQQ>` |
+| 会话级覆盖 | `src/core/conversation-modes.mjs` + `modeFor(key)` | 每个会话可单独指定模式；无覆盖时跟随全局。`closed-agent` 只接受 `private:<当前 ownerQQ>`；非 `closed-agent` 覆盖必须解析出 `qq-chat*` 安全 preset，否则拒绝（409）；覆盖文件损坏时「只读不写 + 回落全局」；换管理员立即作废旧 `closed-agent` 覆盖 |
 | 配置失败 | `loadConfig()` | `config.json` 缺失/解析失败 → **fail-fast 退出**（不是"用默认值继续跑"） |
 | 管理员识别 | `handleIncoming()` | `String(event.user_id) === String(cfg.ownerQQ ?? '')`；未配置 `ownerQQ` 时启动日志明确告警（审批/管理命令/封闭 agent 全部不可用） |
 
