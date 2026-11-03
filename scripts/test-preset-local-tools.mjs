@@ -276,6 +276,52 @@ test('守卫仍放行 QQ MCP 命名空间与无害模型侧工具', async () => 
   }
 });
 
+test('二代仿真（全工具）preset 按设计挂载本地工具面，但仍隐藏宿主管理面', async () => {
+  // 这是 L7 的**显式例外**：管理员按会话开启 reserved2-full 时，模型应当拿到
+  // standard 级别的本地工具面。但「全工具」不等于「宿主管理权」：dev_* 注入器、
+  // 插件装载、快照回滚、跨会话检索、终端一族必须继续隐藏并在执行期拒绝。
+  const id = 'qq-chat-v2-full';
+  const { dir, yml } = readPreset(id);
+  assert.match(yml, /qq-tool-restrict/, `${id} 必须挂守卫（负责隐藏宿主管理面）`);
+  assert.match(yml, /allowLocalTools:\s*true/, `${id}: 守卫行必须传 allowLocalTools: true`);
+  for (const row of [
+    'tool-bash', 'tool-fs', 'tool-fs-search', 'tool-jobs', 'tool-schedule',
+    'skill-filesystem', 'tool-skill', 'command-goal', 'tool-goal',
+    'planning', 'delegation', 'present',
+  ]) {
+    assert.match(yml, new RegExp(`id:\\s*${row}\\b`), `${id}: 应挂载 ${row} 行`);
+  }
+  assert.doesNotMatch(yml, /你没有本地工具/, `${id}: 人格不能再声称「没有本地工具」`);
+
+  const restricted = new Set();
+  const fakeTools = {
+    restrict({ deny }) { for (const n of deny ?? []) restricted.add(n); },
+    guard(fn) { this._guard = fn; },
+  };
+  const mod = await import(pathToFileURL(path.join(dir, 'qq-tool-restrict.mjs')).href);
+  mod.apply({ tools: fakeTools }, { allowLocalTools: true });
+
+  for (const tool of ['dev_inject_plugin', 'plugin_manager', 'dsh_snapshot', 'session_search', 'terminal_open', 'cordis_inspect_list']) {
+    assert.ok(restricted.has(tool), `${id}: 宿主管理面 ${tool} 必须仍被 restrict（否则等于交出部署机管理权）`);
+    assert.equal(typeof fakeTools._guard({ name: tool }), 'string', `${id}: ${tool} 执行期必须拒绝`);
+  }
+
+  for (const tool of ['bash', 'read', 'write', 'edit', 'glob', 'grep', 'subagent', 'workflow', 'job_list', 'skill', 'todo_write']) {
+    assert.ok(!restricted.has(tool), `${id}: ${tool} 不应被隐藏（该模式就是全工具面）`);
+    assert.equal(fakeTools._guard({ name: tool }), undefined, `${id}: ${tool} 执行期应放行`);
+  }
+
+  assert.equal(fakeTools._guard({ name: 'mcp__other__tool' }), undefined, `${id}: 任意 MCP 命名空间放行`);
+
+  const denial = fakeTools._guard({
+    name: 'mcp__snowluma__qq_send_message',
+    agent: { id: 'qqb-g-1' },
+    arguments: { key: 'group:2' },
+  });
+  assert.ok(typeof denial === 'string' && denial.length > 0,
+    `${id}: 即便全工具，跨会话 key 也必须被会话绑定校验拒绝`);
+});
+
 test('封闭 agent 的预设在创建后必须与仿真 preset 明确区分', () => {
   // standard 是 DSH 内置默认 preset，按设计**故意**拥有完整本地工具面：它的守卫只负责
   // "哪些 QQ 动作可见"，不负责"本地工具权限边界"。

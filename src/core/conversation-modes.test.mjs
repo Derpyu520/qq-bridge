@@ -191,7 +191,7 @@ test('the audit event records the actor, the time, and both sides of the change'
 });
 
 test('the mode list is exactly the four modes the bridge knows', () => {
-  assert.deepEqual([...CONVERSATION_MODES], ['chat', 'reserved', 'reserved2', 'closed-agent']);
+  assert.deepEqual([...CONVERSATION_MODES], ['chat', 'reserved', 'reserved2', 'reserved2-full', 'closed-agent']);
   assert.equal(isConversationMode('reserved2'), true);
   assert.equal(isConversationMode('simulation'), false);
   assert.equal(isConversationMode('reserved2 '), false);

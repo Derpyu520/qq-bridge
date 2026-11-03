@@ -21,10 +21,17 @@ import { fileURLToPath } from 'node:url'
 //  1) 用 tools.restrict 把本地执行/文件类工具与开发工具从**工具清单**里隐藏（注册期）；
 //  2) 用 tools.guard 白名单兜底：任何不在允许范围内的工具，执行时一律拒绝。
 //
-// ⚠️ 第 1 条是铁律 L7 的落点，不是"附注"：仿真会话的 preset 永不包含本地工具。
+// ⚠️ 第 1 条是铁律 L7 的落点，不是"附注"：**默认**（qq-chat / qq-chat-v2）仿真会话
+//    的 preset 永不包含本地工具。
+//
+//    唯一的显式例外是 qq-chat-v2-full：管理员按会话开启 `reserved2-full` 时，preset
+//    会挂上本地工具面，并把本守卫切到 `allowLocalTools` 分支。即便那时也不是无差别
+//    放开——宿主管理面（HOST_ADMIN_TOOL_NAMES：dev_*、插件装载、快照回滚、跨会话
+//    检索、终端等）仍然隐藏并在执行期拒绝。
+//
 //    `tools.guard` 只能拒绝**执行**，工具名仍会出现在模型的 schema 里——
 //    那既不满足"仿真会话不得拥有本地执行能力"的注册期要求，也会诱导模型去调它。
-//    所以本地工具必须同时出现在下面的 restrict 名单里。
+//    所以默认模式下本地工具必须同时出现在下面的 restrict 名单里。
 import { sessionBindingDenial } from './qq-self-key.mjs'
 
 export const name = 'qq-tool-restrict'
@@ -209,6 +216,46 @@ const KNOWN_DANGEROUS_GLOBAL_TOOLS = [
   'dev_uninject_plugin',
 ]
 
+/**
+ * 「宿主管理面」：即使在 allowLocalTools 模式下也**必须隐藏**的工具。
+ *
+ * 为什么需要单独一份：`reserved2-full` 按设计开放本地执行能力（bash/文件/子智能体），
+ * 所以不能再把 {@link LOCAL_EXECUTION_TOOLS} 整份 deny 掉。但下面这些不是「干活用的
+ * 工具」，而是**改动宿主本身**的能力：装/卸插件、改 profile 链接、快照回滚（会 spawn
+ * pnpm）、读宿主运行期状态、跨会话读事件正文、起终端。把它们留给 QQ 会话等于把
+ * 部署机的管理权交出去，和「开放所有 MCP 与工具」不是一回事。
+ *
+ * 口径：模式内允许 = DSH `standard` preset 的工具面 + 全部 MCP；
+ *       模式内禁止 = 这里列出的宿主管理面。
+ */
+const HOST_ADMIN_TOOL_NAMES = Object.freeze([
+  // 开发注入器（dsh-super-injector）
+  'dev_build_plugin', 'dev_clear_routes', 'dev_fix_patch', 'dev_heal_links', 'dev_inject_plugin',
+  'dev_injected_list', 'dev_install_package', 'dev_plugin_status', 'dev_release_plugin',
+  'dev_reload_package', 'dev_scaffold_plugin', 'dev_self_test', 'dev_stage_add', 'dev_stage_call',
+  'dev_stage_demote', 'dev_stage_list', 'dev_stage_promote', 'dev_uninject_plugin',
+  'dev_mode_set', 'dev_mode_status', 'dev_mode_subagent',
+  // 插件装载权 = 任意代码执行
+  'plugin_manager', 'plugin_market',
+  // 宿主快照 / 回滚 / 事故标记（会写 package.json / lockfile 并 spawn pnpm）
+  'dsh_snapshot', 'dsh_rollback', 'incident_resolved',
+  // cordis 运行时检查（读宿主运行期状态）
+  'cordis_inspect_list', 'cordis_inspect_query',
+  // 跨会话历史检索（能读别的会话的事件正文）
+  'session_search', 'session_trace', 'session_event_read', 'session_event_search', 'session_event_trace',
+  // 终端（与 bash 等价，但保留为宿主管理面；本模式统一用 bash）
+  'terminal_open', 'terminal_send', 'terminal_read', 'terminal_signal', 'terminal_close', 'terminal_list',
+  // 按需安装的其它 agent 家族
+  'subagent_codex', 'subagent_claude_code',
+  'spawn_teammate', 'team_task_create', 'team_task_get', 'team_task_list', 'team_task_update', 'wait_agent',
+])
+
+/** allowLocalTools 模式下仍要 hidden 的集合（O(1) 查询）。 */
+const HOST_ADMIN_TOOL_SET = new Set(HOST_ADMIN_TOOL_NAMES)
+
+/** 供测试对账：全工具模式下的隐藏名单。 */
+export const HOST_ONLY_TOOL_NAMES = HOST_ADMIN_TOOL_NAMES
+
 // 供 test-preset-local-tools.mjs 导入并与 DSH 真实工具名对账，避免两份名单漂移。
 export const RESTRICTED_TOOL_NAMES = Object.freeze([...KNOWN_DANGEROUS_GLOBAL_TOOLS])
 
@@ -279,7 +326,12 @@ function noteBindingDenial(exec, name) {
   } catch {}
 }
 
-export function apply(ctx) {
+export function apply(ctx, config = {}) {
+  // `allowLocalTools` 只有 qq-chat-v2-full（reserved2-full）会传。默认 false 时
+  // 行为与之前完全一致：仿真会话无本地工具。任何非法/缺省值都按 false 处理
+  // （fail-closed：宁可少给权限，也不能因为配置写错把本地工具漏给群聊）。
+  const allowLocalTools = config?.allowLocalTools === true
+  const denyNames = allowLocalTools ? HOST_ADMIN_TOOL_NAMES : KNOWN_DANGEROUS_GLOBAL_TOOLS
   // 1) 把已知危险全局工具从 schema 隐藏（restrict 只影响继承的全局层，
   //    不会误删 preset 自己注册的 scoped 工具）。
   // 逐个 restrict：当前 DSH 版本不存在的工具名会单独抛错并跳过，
@@ -305,7 +357,7 @@ export function apply(ctx) {
     return ok
   }
 
-  const firstOk = attempt(KNOWN_DANGEROUS_GLOBAL_TOOLS)
+  const firstOk = attempt(denyNames)
   const firstFailed = failed.slice()
   failed.length = 0
 
@@ -313,7 +365,7 @@ export function apply(ctx) {
     // 逐个名字的报错收成一类，避免 18 行重复
     const reasons = [...new Set(firstFailed.map((f) => f.message))]
     console.error(
-      `[qq-tool-restrict] restrict 失败 ${firstFailed.length}/${KNOWN_DANGEROUS_GLOBAL_TOOLS.length}：${reasons.join(' | ')}`
+      `[qq-tool-restrict] restrict 失败 ${firstFailed.length}/${denyNames.length}：${reasons.join(' | ')}`
     )
     writeDiagnostics([
       `${stamp} restrict ok=${firstOk} failed=${firstFailed.length} 原因: ${reasons.join(' | ')}`,
@@ -346,6 +398,24 @@ export function apply(ctx) {
   ctx.tools.guard((exec) => {
     const name = exec?.name
     if (typeof name !== 'string' || name.length === 0) return '工具名无效，已拒绝'
+
+    if (allowLocalTools) {
+      // 全工具模式：宿主管理面照旧拒绝，其余放行。MCP 命名空间不再限定白名单
+      // （管理员显式开启该模式 = 允许使用全部已配置 MCP），但会话绑定校验仍然生效：
+      // 带 key 的 QQ 工具必须指向当前会话，否则等于开后门。
+      if (HOST_ADMIN_TOOL_SET.has(name)) {
+        return `工具 "${name}" 属于宿主管理面，在二代仿真（全工具）模式下不可用`
+      }
+      if (name.startsWith('mcp__')) {
+        const denial = sessionBindingDenial(exec, exec?.arguments)
+        if (denial) {
+          noteBindingDenial(exec, name)
+          return denial
+        }
+      }
+      return
+    }
+
     if (SAFE_EXACT.has(name)) return
     if (SAFE_PREFIXES.some((prefix) => name.startsWith(prefix))) {
       // 会话绑定：凡带 key 的 QQ MCP 工具都必须是**当前会话**。未绑定会话（解不出身份）

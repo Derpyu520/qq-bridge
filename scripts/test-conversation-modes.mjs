@@ -43,7 +43,7 @@ function call(port, pathname, { method = 'GET', headers = {}, body } = {}) {
 }
 
 const h = await bridgeHarness({ config: { consolePort: 0 } });
-h.setPresets(['standard', 'qq-chat', 'qq-chat-v2']);
+h.setPresets(['standard', 'qq-chat', 'qq-chat-v2', 'qq-chat-v2-full']);
 const server = h.startConsoleServer();
 if (!server.listening) await new Promise((r) => server.once('listening', r));
 const port = server.address().port;
@@ -55,7 +55,7 @@ try {
   {
     const r = await call(port, '/api/sessions', { headers: ADMIN });
     ok(r.status === 200 && r.body?.globalMode === 'chat', '全局模式默认 chat', `HTTP ${r.status} / ${r.body?.globalMode}`);
-    ok((r.body?.modes ?? []).join(',') === 'chat,reserved,reserved2,closed-agent', '返回四种可选模式');
+    ok((r.body?.modes ?? []).join(',') === 'chat,reserved,reserved2,reserved2-full,closed-agent', '返回五种可选模式（含二代仿真·全工具）');
   }
 
   // ── B) 覆盖生效：preset 选择 + 策略指纹 ──────────────────────────────────
@@ -80,6 +80,22 @@ try {
     ok(h.calls.created.at(-1)?.agentPreset === 'qq-chat', '重建后的会话使用 chat 的 preset', String(h.calls.created.at(-1)?.agentPreset));
   }
 
+  // ── B2) reserved2-full：二代仿真语义 + 全工具 preset ──────────────────────
+  console.log('## 二代仿真（全工具）');
+  {
+    let r = await call(port, '/api/conversation/mode', { method: 'POST', headers: ADMIN, body: { key: 'group:456', mode: 'reserved2-full' } });
+    ok(r.status === 200 && r.body?.mode === 'reserved2-full', '群会话可设 reserved2-full（不受 owner 限制）', `HTTP ${r.status} ${r.body?.error ?? ''}`);
+    ok(r.body?.preset === 'qq-chat-v2-full', '解析到全工具 preset', String(r.body?.preset));
+    await h.ensureSession('group:456');
+    ok(h.calls.created.at(-1)?.agentPreset === 'qq-chat-v2-full', '新会话使用 qq-chat-v2-full', String(h.calls.created.at(-1)?.agentPreset));
+
+    // 全工具 preset 未安装时必须 409，不能悄悄退回 qq-chat-v2（那会退化成无本地工具）。
+    h.setPresets(['standard', 'qq-chat', 'qq-chat-v2']);
+    r = await call(port, '/api/conversation/mode', { method: 'POST', headers: ADMIN, body: { key: 'group:456', mode: 'reserved2-full' } });
+    ok(r.status === 409, '缺 qq-chat-v2-full 时拒绝该模式（不回退到 qq-chat-v2）', `HTTP ${r.status}`);
+    h.setPresets(['standard', 'qq-chat', 'qq-chat-v2', 'qq-chat-v2-full']);
+  }
+
   // ── C) 校验：非法模式 / closed-agent 边界 / 缺 preset ─────────────────────
   console.log('## 校验');
   {
@@ -98,7 +114,7 @@ try {
     h.setPresets(['standard']);
     r = await call(port, '/api/conversation/mode', { method: 'POST', headers: ADMIN, body: { key: 'group:456', mode: 'reserved2' } });
     ok(r.status === 409, '缺安全 preset 时拒绝设为 reserved2', `HTTP ${r.status}`);
-    h.setPresets(['standard', 'qq-chat', 'qq-chat-v2']);
+    h.setPresets(['standard', 'qq-chat', 'qq-chat-v2', 'qq-chat-v2-full']);
   }
 
   // ── D) 落盘 + 删除覆盖 ───────────────────────────────────────────────────

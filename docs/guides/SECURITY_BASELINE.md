@@ -31,6 +31,7 @@
 | --- | --- | --- |
 | 白名单 | `src/bridge.js` `allowed()` | `deny` 优先于 `allow`；两侧统一 `String()` 比较（兼容 OneBot int64 的数字/字符串差异）；allow 为空时返回 `allowAllWhenEmpty`（**默认 false**） |
 | 模式门 | `modeAllowed()` / `isSessionAllowedInCurrentMode()` | 会话 key 必须严格匹配 `^(group\|private):\d+$`；`closed-agent` 只放行 `private:<ownerQQ>` |
+| 全工具模式 | `modePreset()` + `qq-chat-v2-full` + `qq-tool-restrict` (`allowLocalTools`) | `reserved2-full` 是 L7 的唯一显式例外：仅能由管理员按会话开启，preset 挂载本地工具面与全部 MCP。守卫在该模式下仍隐藏宿主管理面（`dev_*`、plugin-manager/market、snapshot/rollback、cordis 检查、跨会话检索、terminal、其它 agent 家族）并在执行期拒绝；跨会话 key 绑定校验不因该模式放宽。preset 缺失时 strict 拒绝（409），绝不退化为 `qq-chat-v2` |
 | 会话级覆盖 | `src/core/conversation-modes.mjs` + `modeFor(key)` | 每个会话可单独指定模式；无覆盖时跟随全局。`closed-agent` 只接受 `private:<当前 ownerQQ>`；非 `closed-agent` 覆盖必须解析出 `qq-chat*` 安全 preset，否则拒绝（409）；覆盖文件损坏时「只读不写 + 回落全局」；换管理员立即作废旧 `closed-agent` 覆盖 |
 | 配置失败 | `loadConfig()` | `config.json` 缺失/解析失败 → **fail-fast 退出**（不是"用默认值继续跑"） |
 | 管理员识别 | `handleIncoming()` | `String(event.user_id) === String(cfg.ownerQQ ?? '')`；未配置 `ownerQQ` 时启动日志明确告警（审批/管理命令/封闭 agent 全部不可用） |

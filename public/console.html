@@ -2750,7 +2750,7 @@ async function refresh() {
     document.querySelectorAll('#modeRow button').forEach(b => (b.classList.toggle('active', b.dataset.mode === s.mode), b.setAttribute('aria-pressed', String(b.dataset.mode === s.mode))));
     document.getElementById('roleText').textContent = s.role || '无';
     document.getElementById('roleModeText').textContent = s.roleMode === 'silent' ? '静默' : '正常';
-    const modeLabel = s.mode === 'reserved' ? '一代仿真模式' : s.mode === 'reserved2' ? '二代仿真模式' : s.mode === 'closed-agent' ? '封闭 Agent' : '聊天模式';
+    const modeLabel = s.mode === 'reserved' ? '一代仿真模式' : s.mode === 'reserved2' ? '二代仿真模式' : s.mode === 'reserved2-full' ? '二代仿真（全工具）' : s.mode === 'closed-agent' ? '封闭 Agent' : '聊天模式';
     updateOverview(s, modeLabel);
     document.getElementById('activity').textContent = s.activity || '（空）';
     const presetSel = document.getElementById('closedPreset');
@@ -3053,7 +3053,7 @@ async function refreshSessions() {
     document.getElementById('metricSessions').textContent = s.sessions.length;
     if (!s.sessions.length) { box.innerHTML = '<div class="empty-state"><strong>还没有会话</strong><p>白名单中的群或好友发来消息后，会话会显示在这里。</p></div>'; return; }
     // 每个会话可以单独设运行模式；「跟随全局」= 没有覆盖。
-    const MODE_LABELS = { chat: '聊天模式', 'closed-agent': '封闭 Agent', reserved: '一代仿真', reserved2: '二代仿真' };
+    const MODE_LABELS = { chat: '聊天模式', 'closed-agent': '封闭 Agent', reserved: '一代仿真', reserved2: '二代仿真', 'reserved2-full': '二代仿真（全工具）' };
     const modeOptions = (selected) => {
       let opts = `<option value=""${selected ? '' : ' selected'}>跟随全局（${esc(MODE_LABELS[s.globalMode] || s.globalMode)}）</option>`;
       for (const m of (s.modes || Object.keys(MODE_LABELS))) {
