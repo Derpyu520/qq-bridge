@@ -1,6 +1,6 @@
 # QQ 桥接权限与安全规则（RULES）
 
-## 运行模式（QQ 桥接四模式）
+## 运行模式（QQ 桥接四模式 + 一个仅会话级模式）
 
 模式由**桥接控制台**（默认 `http://127.0.0.1:3100`）顶部的模式按钮切换，也可直接改 DSH 设置的 `qq-mode` 命名空间；
 控制台会**同时**写穿到 DSH 设置与本地 `qq-bridge/state/mode.json`，两者保持一致。
@@ -14,10 +14,18 @@
 | `closed-agent` | **仅** 私聊 ownerQQ | DSH 默认 preset（通常 `standard`，完整工具） | 你在 QQ 私聊里操控 DSH |
 | `reserved`（一代仿真） | 暂同 chat | qq-chat | 仿真群友：观望/活跃/试探/退场状态机，选择性参与并主动收尾 |
 | `reserved2`（二代仿真，运行 `setup-dsh.mjs` 后默认） | 暂同 chat | qq-chat-v2 | 文本不自动转发，AI 通过工具自主看消息/发言/等待/设置唤醒与潜水 |
+| `reserved2-full`（二代仿真·全工具，**仅会话级**） | 暂同 chat | qq-chat-v2-full | 对话语义与 `reserved2` 相同，但开放本机全部 MCP 与本地工具（shell/文件/子智能体）；见下方 L7 例外说明 |
 
 > ⚠️ `closed-agent` 模式下 owner 私聊 agent 拥有**完整本地工具**（DSH 默认 preset，通常是 `standard`），
 > 这是有意为之（QQ 远程操控 DSH）。该模式只放行 owner 私聊，群友完全无法触达；
 > 切换回 `chat` 后，owner 私聊也回到 qq-chat 安全预设。
+>
+> ⚠️ `reserved2-full` 是 **L7（仿真会话无本地工具）的唯一显式例外**：它的 preset
+> `qq-chat-v2-full` 会挂载 bash/文件检索/子智能体等本地工具面，并允许全部 MCP 命名空间。
+> 它**只能由管理员在控制台按会话开启**，没有全局开关；`qq-tool-restrict` 在该模式下
+> 仍然隐藏**宿主管理面**（`dev_*` 注入器、插件装载/市场、快照回滚、跨会话检索、终端、
+> 其它 agent 家族）并在执行期拒绝。开启前请确认该群/私聊的成员可信：本地工具意味着
+> 模型可以在这台部署机上执行命令、读写文件。
 >
 > 注：DSH 0.1.5 已不存在 `router-standard` preset。桥接现在留空表示「用 DSH 默认 preset」，
 > 并在启动时读取 `agentPresets/list` 校验；填了不存在的 preset 名会回退到默认值并打警告，
@@ -25,7 +33,7 @@
 
 ### 会话级运行模式（每会话覆盖）
 
-上面的四模式是**全局默认**。控制台「会话映射」里还可以给**单个会话**单独指定运行模式：
+上面的四个全局模式是**全局默认**（`reserved2-full` 只存在于会话级覆盖，没有全局开关）。控制台「会话映射」里还可以给**单个会话**单独指定运行模式：
 
 - 不设置覆盖 = 跟随全局（默认行为，和以前完全一样）；
 - 设置了覆盖 = 该会话按自己的模式运行，白名单准入、preset、会话策略指纹都按它自己的模式计算；
@@ -43,7 +51,7 @@
 > 设计说明：`src/core/session-router.mjs`（会话路由器）尚未接入桥接链路。它的模式模型把
 > `reserved`（一代）与 `reserved2`（二代）都归一成 `simulation`，而桥接里这是两个独立子系统
 > （不同的 preset、不同的唤醒/退场语义），无法直接对接。桥接的会话级模式由
-> `src/core/conversation-modes.mjs` 承载，保留四个模式的原样拼写。
+> `src/core/conversation-modes.mjs` 承载，保留模式的原样拼写（含 `reserved2-full`）。
 
 ## 权限分层
 
@@ -56,7 +64,7 @@
 
 ## QQ 会话 agent 的硬边界
 
-1. **无本地工具**：qq-chat / qq-chat-v2 预设不挂载 bash/pwsh、文件读写、子代理、工作流——群友无论如何诱导，agent 物理上无法操作本机。
+1. **无本地工具（默认）**：qq-chat / qq-chat-v2 预设不挂载 bash/pwsh、文件读写、子代理、工作流——群友无论如何诱导，agent 物理上无法操作本机。唯一的例外是管理员显式开启的 `reserved2-full`（preset `qq-chat-v2-full`，见上）；它按设计拥有本地工具面，因此等同于「把部署机的执行权交给该会话」，只应在可信会话中用。
 2. **QQ 动作安全子集**：只允许 `mcp__snowluma__*`、`mcp__snowluma-host__*`、`mcp__web-search-safe__*` 三个命名空间下的工具，以及 `ask_user_question` / `todo_write`；其他工具（含 `dev_*` 开发/管理工具）在执行期会被 `qq-tool-restrict.mjs` 拒绝。QQ 动作无禁言、踢人、文件上传下载等管理操作。
 3. **只读联网搜索**：`qq-chat` / `qq-chat-v2` 预设已关闭 DSH 内置 `tool-web` 的 `search` / `fetch`，联网统一走 `src/mcp-web-search-safe.js` 提供的 `mcp__web-search-safe__web_search/web_fetch`。不暴露本地文件、命令执行、写操作。
    - ✅ `mcp__web-search-safe__web_fetch` 已做 SSRF 加固：仅 http/https、禁止 localhost/私有 IP/链路本地/CGNAT/带凭据 URL、DNS 解析结果全量校验、每跳重定向重新校验、响应体限量读取。

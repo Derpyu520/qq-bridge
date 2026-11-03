@@ -25,8 +25,18 @@
 
 import { canonicalConversationKey } from './session-router.mjs';
 
-/** 桥接认识的四种会话模式（沿用历史拼写，不做归一）。 */
-export const CONVERSATION_MODES = Object.freeze(['chat', 'reserved', 'reserved2', 'closed-agent']);
+/**
+ * 桥接认识的会话模式（沿用历史拼写，不做归一）。
+ *
+ * `reserved2-full` 是「二代仿真 + 全工具」：对话语义与 `reserved2` 完全相同
+ * （文本不自动转发、AI 自主决定看/回/潜水），但 preset 包含本机全部 MCP 与
+ * 本地工具（命令、文件、进程）。它不是 `closed-agent` 的别名：`closed-agent`
+ * 是「自动转发文本 + 完整工具面」的单人助手，两者的发送与唤醒语义不同。
+ *
+ * 是否允许该模式由管理端显式指定；桥接不把它当作特权模式自动限制到 owner
+ * 私聊——管理员可以在任意会话上开启它（见 RULES.md 的显式例外说明）。
+ */
+export const CONVERSATION_MODES = Object.freeze(['chat', 'reserved', 'reserved2', 'reserved2-full', 'closed-agent']);
 
 /** 有本地工具面的特权模式：只允许 owner 私聊。 */
 const PRIVILEGED_MODE = 'closed-agent';

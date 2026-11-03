@@ -24,6 +24,9 @@ function timerFixture(random = 0) {
     Math: math, Date, Number, Promise,
     cfg: { socialV2: { proactive: {} } },
     currentMode: 'reserved2', socialV2: { paused: false },
+    // 调度器现在按「会话生效模式」判定，而不是全局 currentMode：
+    // 用假 modeFor 固定成 reserved2，并单独注入真实 isV2Mode。
+    modeFor: () => 'reserved2',
     social: { pendingTimers: new Map() },
     getSocialV2State: () => st,
     isSessionAllowedInCurrentMode: () => true,
@@ -41,6 +44,7 @@ function timerFixture(random = 0) {
     },
   });
   vm.runInContext([
+    section('  function isV2Mode(', '  function hasV2ConversationOverrides('),
     section('function boundedTimerDelay(', 'const convKey ='),
     section('  function scheduleSocialReply(', '  // 全局扫描'),
     section('  function scheduleReplyCheckV2(', '  /** 会话此刻算忙'),

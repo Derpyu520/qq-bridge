@@ -459,7 +459,7 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
                 globalMode,
               })),
               globalMode,
-              modes: ['chat', 'closed-agent', 'reserved', 'reserved2'],
+              modes: ['chat', 'closed-agent', 'reserved', 'reserved2', 'reserved2-full'],
             });
           }
           case '/api/conversation/mode': {
@@ -472,7 +472,7 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
               preset: 'qq-chat-v2',
               override: override ? { mode: override, preset: 'qq-chat-v2', updatedBy: 'console', at: Date.now() } : null,
               globalMode: state.mode || 'reserved2',
-              modes: ['chat', 'closed-agent', 'reserved', 'reserved2'],
+              modes: ['chat', 'closed-agent', 'reserved', 'reserved2', 'reserved2-full'],
             });
           }
           case '/api/pending': return json({ pending: [{ key: 'group:123456789', kind: 'approval', toolName: '演示工具', reason: '等待管理员确认（离线示例）' }] });
