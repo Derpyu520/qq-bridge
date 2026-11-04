@@ -52,7 +52,7 @@ node scripts/test-console-ui.mjs --artifacts=docs/ui-verification
 - `prefers-reduced-motion: reduce` 下关闭背景动效、页面切换动画与过渡。
 - 人格管理全流程：新建 → 点列表载入编辑（内容回填、按钮切到「保存修改」）→ 保存修改 → 改名保存（先重命名再保存）→ 删除（确认框自动接受），每步都断言列表随之更新。
 - 仿真提示词：默认可查看且只读、解锁后可编辑、保存后回到只读并提示「需重启 DSH」。
-- 思考强度：档位来自 DSH 公布的能力（low/high/max）、默认 max、可切换保存，并断言页面明示会连带修改 DSH 全局默认。
+- 思考强度：档位来自 DSH 公布的能力（含适配器自定义档位）、默认 max，可切换保存；另有「不指定（跟随模型）」，并断言页面明示会连带修改 DSH 全局默认。
 - 无 JavaScript 错误、未知 API 或外部网络请求。
 
 新增的控制台 API 都已在 `console-ui-fixture.mjs` 里 mock；**改动控制台时若加了新接口，必须同步补 mock**，否则本套件会在「未知 API」这一项失败。

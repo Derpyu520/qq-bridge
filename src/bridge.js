@@ -585,22 +585,17 @@ let modelCatalogInFlight = null;
 // 控制台改强度后递增它，让已在运行的会话在下一条消息重新 selectModel；
 // 放在模块级是为了不依赖 main() 内部声明的执行顺序（避免 TDZ）。
 let modelSelectionEpoch = 0;
-// 思考强度（reasoningEffort）的取值**按 provider 而异**，不是全平台一套：
-//   · deepseek-official / deepseek-account → off/low/high/max
-//   · trae / trae-global                   → low/high/xhigh（'max'/'medium' 会被拒）
-//   · google-antigravity（Gemini）          → low/medium/high
-//   · codearts                             → on/off
-// 所以这里只做「拼写合法」的兜底白名单；真正可用的档位以 DSH 的 session/modelCatalog 为准
-// （/api/dsh/model 会把 catalog 公布的档位回给控制台，本清单仅在 catalog 不可用时兜底）。
-// 换模型后档位不匹配的后果是 selectModel 抛 session/model-unavailable（每条消息都失败），
-// 所以别把某个 provider 的取值当成「平台通用」。
-const REASONING_EFFORT_OPTIONS = ['off', 'on', 'low', 'medium', 'high', 'xhigh', 'max'];
+// 目录不可用时的 DeepSeek 兜底档位。DSH 的档位 id 由适配器定义，其他模型可返回不同取值。
+const REASONING_EFFORT_OPTIONS = ['low', 'high', 'max'];
 const REASONING_EFFORT_DEFAULT = 'max';
+const REASONING_EFFORT_NONE = 'none';
 function normalizeReasoningEffort(value) {
-  const v = String(value ?? '').trim().toLowerCase();
-  if (!REASONING_EFFORT_OPTIONS.includes(v)) {
-    throw new Error(`思考强度只能是 ${REASONING_EFFORT_OPTIONS.join(' / ')}`);
+  const v = String(value ?? '').trim();
+  if (!v || /\p{Cc}/u.test(v)) {
+    throw new Error(`思考强度不能为空或包含控制字符；${REASONING_EFFORT_NONE} 表示不指定`);
   }
+  const normalized = v.toLowerCase();
+  if (normalized === REASONING_EFFORT_NONE || REASONING_EFFORT_OPTIONS.includes(normalized)) return normalized;
   return v;
 }
 
@@ -4698,7 +4693,7 @@ async function main() {
         if (req.method === 'GET' && url.pathname === '/api/dsh/model') {
           const provider = String(cfg.dsh?.provider || 'deepseek-official');
           const model = String(cfg.dsh?.model || 'deepseek-flash');
-          // 档位优先取 DSH 实际公布的能力（DSH 换档位词汇或换 provider 时自动跟随），失败退回内置白名单。
+          // 档位优先取 DSH 实际公布的能力（DSH 换档位词汇或换 provider 时自动跟随），失败退回内置清单。
           let options = REASONING_EFFORT_OPTIONS.slice();
           let labels = {};
           let providerDefault = null;
@@ -4711,11 +4706,11 @@ async function main() {
             const catalog = unwrap(await modelCatalogInFlight, 'session.modelCatalog');
             const group = (catalog?.groups ?? []).find((g) => g?.id === provider);
             const entry = (group?.models ?? []).find((m) => m?.id === model);
-            const efforts = entry?.reasoning?.efforts ?? [];
-            const advertised = efforts.map((e) => String(e?.id ?? '')).filter((id) => REASONING_EFFORT_OPTIONS.includes(id));
-            if (advertised.length) {
-              options = advertised;
-              labels = Object.fromEntries(efforts.map((e) => [String(e.id), { name: e.name ?? '', description: e.description ?? '' }]));
+            const efforts = entry?.reasoning?.efforts;
+            if (Array.isArray(efforts)) {
+              const valid = efforts.filter((e) => typeof e?.id === 'string' && e.id.length > 0);
+              options = valid.map((e) => e.id);
+              labels = Object.fromEntries(valid.map((e) => [e.id, { name: e.name ?? '', description: e.description ?? '' }]));
               providerDefault = entry.reasoning.defaultEffort ?? null;
               catalogSource = 'dsh';
             }
@@ -4727,6 +4722,7 @@ async function main() {
               log(`读取 DSH 模型能力失败，思考强度暂用内置清单：${reason}`);
             }
           }
+          options = [...new Set([...options, REASONING_EFFORT_NONE])];
           sendJson({
             provider,
             model,
@@ -9167,11 +9163,12 @@ async function main() {
     if (modelAppliedSessions.get(sessionId) === modelSelectionEpoch) return 'applied';
     const provider = String(cfg.dsh?.provider || 'deepseek-official');
     const model = String(cfg.dsh?.model || 'deepseek-flash');
-    const effort = String(cfg.dsh?.reasoningEffort || REASONING_EFFORT_DEFAULT);
+    const configuredEffort = String(cfg.dsh?.reasoningEffort || REASONING_EFFORT_DEFAULT);
+    const effort = configuredEffort === REASONING_EFFORT_NONE ? '' : configuredEffort;
     let lastError = null;
     // 两段式降级（P1，repo-auditor 提的「effort 不对就 100% 哑掉」）：
     //   第 1 段按配置带 reasoningEffort；
-    //   第 2 段去掉 reasoningEffort。
+    //   第 2 段去掉 reasoningEffort。显式 none 直接进入这一段。
     // 为什么需要：模型目录里不同 provider 的模型不一定有 effort 维度（本机 dashscope
     // 的 deepseek-v4.1-flash-1017 / qwen3.8-* 就 efforts=[]），带 effort 的 selectModel 会被拒，
     // 而失败只留一行日志、消息仍靠 DSH 会话默认模型兜着——默认模型也不可用时，QQ 侧就变成
@@ -9191,9 +9188,12 @@ async function main() {
           return 'applied';
         } catch (error) {
           lastError = error;
-          log(`设置会话模型失败 ${sessionId}（${plan.label}，第 ${attempt}/2 次）: ${error?.message ?? error}`);
+          const reason = String(error?.message ?? error);
+          log(`设置会话模型失败 ${sessionId}（${plan.label}，第 ${attempt}/2 次）: ${reason}`);
           // 会话在 DSH 侧已经不存在：换 effort 重试也没意义，交给外层退役重建。
-          if (/not[- ]?found/i.test(String(error?.message ?? error))) break modelPlans;
+          if (/not[- ]?found/i.test(reason)) break modelPlans;
+          // 这个错误在 provider I/O 前即确定；其他 model-unavailable 仍保留同参数重试。
+          if (plan.effort && /does not support reasoning effort/i.test(reason)) break;
           if (attempt < 2) await sleep(1000);
         }
       }

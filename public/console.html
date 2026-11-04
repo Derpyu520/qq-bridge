@@ -3062,20 +3062,27 @@ async function refreshDshModel() {
     document.getElementById('dshProviderText').textContent = r.provider || '-';
     const select = document.getElementById('dshEffortSelect');
     const labels = r.labels || {};
+    const advertised = Array.isArray(r.options) ? r.options : [];
+    const current = String(r.reasoningEffort || '');
+    const options = current && !advertised.includes(current) ? [current, ...advertised] : advertised;
     select.replaceChildren();
-    for (const option of (r.options || [])) {
+    for (const option of options) {
       const el = document.createElement('option');
       el.value = option;
       const info = labels[option] || {};
       const isDefault = option === (r.providerDefault || r.default);
-      el.textContent = `${option}${isDefault ? '（默认）' : ''}`;
+      const unadvertised = option === current && !advertised.includes(option);
+      el.textContent = option === 'none'
+        ? '不指定（跟随模型）'
+        : `${option}${isDefault ? '（默认）' : ''}${unadvertised ? '（当前配置，目录未列出）' : ''}`;
       if (info.description) el.title = info.description;
       select.appendChild(el);
     }
-    select.value = r.reasoningEffort;
+    select.value = current;
     const parts = [];
     if (r.providerDefault) parts.push(`DSH 出厂默认是 ${r.providerDefault}`);
     parts.push(r.catalogSource === 'dsh' ? '档位取自 DSH 实际公布的能力' : '未能读取 DSH 能力，档位为内置清单');
+    parts.push('不指定表示调用 selectModel 时不携带 reasoningEffort');
     document.getElementById('dshEffortNote').textContent = parts.join('；') + '。';
     document.getElementById('dshEffortSideEffect').textContent = r.globalSideEffect
       ? '注意：切换会同时写入 DSH 的全局默认（~/.dsh/settings.yaml 的 agent-default-model），也就是 Web GUI 里新建会话的默认强度也会跟着变。'
@@ -3256,7 +3263,8 @@ document.getElementById('dshEffortSave').addEventListener('click', async () => {
   msg.textContent = '保存中…';
   msg.className = 'meta';
   const r = await api('/api/dsh/effort', 'POST', { reasoningEffort: effort });
-  msg.textContent = r.ok ? `✅ 已设为 ${r.reasoningEffort}，下一条消息生效` : ('❌ ' + (r.error || '保存失败'));
+  const savedEffort = r.reasoningEffort === 'none' ? '不指定（跟随模型）' : r.reasoningEffort;
+  msg.textContent = r.ok ? `✅ 已设为 ${savedEffort}，下一条消息生效` : ('❌ ' + (r.error || '保存失败'));
   msg.className = r.ok ? 'meta ok' : 'meta err';
   if (r.ok) refreshDshModel();
 });

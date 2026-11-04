@@ -51,6 +51,7 @@ Edit `config.json` and check at least these fields:
 | Field | Value |
 | --- | --- |
 | `dsh.baseUrl` | DSH Web address, default `http://127.0.0.1:3080`; select a provider and model available in DSH |
+| `dsh.provider` / `model` / `reasoningEffort` | Provider, model, and reasoning effort; use an effort advertised by the DSH model catalog, or `none` to omit the field and follow the model default |
 | `snowluma.wsUrl` / `httpUrl` | OneBot WebSocket / HTTP addresses, for example `ws://127.0.0.1:3001` / `http://127.0.0.1:3000`; keep the ports separate |
 | `snowluma.accessToken` / `homeDir` | Your token and SnowLuma installation directory; when HTTP and WS use different tokens, the bridge must be able to discover both from that directory |
 | `ownerQQ` | Your administrator QQ ID |

@@ -3,12 +3,21 @@ import { bridgeHarness } from './audit-bridge-harness.mjs';
 import http from 'node:http';
 
 let failures = 0;
-async function test(name, run) {
-  const h = await bridgeHarness();
+async function test(name, run, options) {
+  const h = await bridgeHarness(options);
   try { await run(h); console.log('PASS', name); }
   catch (error) { failures++; console.error('FAIL', name, error.message); }
   finally { await h.close(); }
 }
+await test('#153 startup accepts explicit none', async (h) => {
+  assert.equal(h.cfg.dsh.reasoningEffort, 'none');
+}, { config: { dsh: { reasoningEffort: 'none' } } });
+await test('#153 startup preserves adapter-owned effort case', async (h) => {
+  assert.equal(h.cfg.dsh.reasoningEffort, 'xHigh');
+}, { config: { dsh: { reasoningEffort: 'xHigh' } } });
+await test('#153 omitted effort keeps the max default', async (h) => {
+  assert.equal(h.cfg.dsh.reasoningEffort, 'max');
+}, { config: { dsh: {} } });
 await test('closed-agent session is not reused after switching to chat', async (h) => {
   h.setMode('closed-agent');
   const privileged = await h.ensureSession('private:123');
@@ -378,8 +387,33 @@ await test('malformed HTTP request targets return 400 without hanging', async (h
     const allowed = await call('/api/status', 'GET', asAgent);
     assert.equal(allowed.status, 200, '/api/status 应对 agent token 放行');
     // 同一批管理端点，管理员（仅控制台令牌）应可正常访问
+    h.api.callUnary = async (method) => {
+      assert.equal(method, 'session.modelCatalog');
+      return { result: { ok: true, value: { groups: [{ id: 'deepseek-official', models: [{
+        id: 'deepseek-flash', reasoning: { efforts: [{ id: 'low', name: 'Low' }, { id: 'xHigh', name: 'Extra High' }], defaultEffort: 'xHigh' }
+      }] }] } } };
+    };
     const adminOk = await call('/api/dsh/model', 'GET', adminOnly);
     assert.equal(adminOk.status, 200, '管理员应能访问 /api/dsh/model');
+    const modelView = JSON.parse(adminOk.body);
+    assert.deepEqual(modelView.options, ['low', 'xHigh', 'none'], '#153 保留适配器档位并始终提供不下发选项');
+    assert.equal(modelView.providerDefault, 'xHigh');
+    h.api.callUnary = async () => ({ result: { ok: true, value: { groups: [{ id: 'deepseek-official', models: [{
+      id: 'deepseek-flash', reasoning: { efforts: [] }
+    }] }] } } });
+    const noEffortView = JSON.parse((await call('/api/dsh/model', 'GET', adminOnly)).body);
+    assert.deepEqual(noEffortView.options, ['none'], '#153 模型无思考档位时只提供不下发');
+    const customSave = await call('/api/dsh/effort', 'POST', adminOnly, { reasoningEffort: 'xHigh' });
+    assert.equal(customSave.status, 200);
+    assert.equal(h.cfg.dsh.reasoningEffort, 'xHigh');
+    assert.equal(JSON.parse((await call('/api/dsh/model', 'GET', adminOnly)).body).reasoningEffort, 'xHigh');
+    const noneSave = await call('/api/dsh/effort', 'POST', adminOnly, { reasoningEffort: 'none' });
+    assert.equal(noneSave.status, 200);
+    assert.equal(h.cfg.dsh.reasoningEffort, 'none');
+    assert.equal(JSON.parse((await call('/api/dsh/model', 'GET', adminOnly)).body).reasoningEffort, 'none');
+    const invalidSave = await call('/api/dsh/effort', 'POST', adminOnly, { reasoningEffort: '' });
+    assert.equal(invalidSave.status, 400);
+    assert.equal(h.cfg.dsh.reasoningEffort, 'none', '无效配置不得覆盖已保存值');
     console.log('PASS agent token cannot reach persona/prompt/effort/whitelist admin endpoints');
   } catch (error) { failures++; console.error('FAIL agent token admin isolation:', error.message); }
   finally { await new Promise((resolve) => server.close(resolve)); await h.close(); }
