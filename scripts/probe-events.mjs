@@ -33,7 +33,7 @@ const done = new Promise((resolve) => {
   const finish = (why) => { clearTimeout(timer); resolve(why); };
   socket.addEventListener('open', () => {
     console.log('   ws open; following session + $events');
-    socket.send(JSON.stringify({ type: 'open', streamId, endpoint: 'session/follow', payload: { args: { request: { address: { kind: 'session', sessionId } } } } }));
+    socket.send(JSON.stringify({ type: 'open', streamId, endpoint: 'session/follow', payload: { args: { request: { address: { kind: 'session', sessionId }, activate: true } } } }));
     socket.send(JSON.stringify({ type: 'open', streamId: eventStreamId, endpoint: '$events', payload: { args: {} } }));
     // 等流建立后再 prompt
     setTimeout(async () => {

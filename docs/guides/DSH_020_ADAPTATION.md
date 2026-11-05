@@ -362,7 +362,7 @@ HTTP transport 下起作用，而三个 MCP server 全是 stdio。清掉是为�
 
 ## 10. 下次 DSH 升级的操作清单（可复用）
 
-1. `node scripts/verify-dsh-021-adaptation.mjs`（先看红在哪；活 DSH 段是主要信号）。
+1. `npm run verify:adaptation`（先看红在哪；活 DSH 段是主要信号；脚本文件名随 DSH 版本改名，入口名不变）。
 2. `npm run scan:tool-names` —— **每次升级必跑**。守住两类漂移：假名静默失效、新能力漏隐藏。
 3. `node scripts/probe-020-protocol.mjs` —— 采样 `session/control` / `session/follow` / `$events` /
    `session/cancel` 的**DSH RPC 返回结构（原始帧）**，与本文 §2.3 §8 对照。

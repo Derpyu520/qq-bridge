@@ -18,24 +18,26 @@
 
 ## 0. 一句话结论
 
-**Web API / 会话协议零漂移；唯一需要改代码的是工具面守卫名单。**
+**Web API / 会话协议零漂移。唯一的“功能性”代码改动是 `session/follow` 显式激活；
+工具面守卫名单的更新是**对账/回归网**——0.2.2 默认并不把 `apply_patch` 或调度工具
+暴露给 QQ preset。**
 
 | 级别 | 问题 | 影响 |
 |---|---|---|
-| **P1** | 0.2.2 新增全局工具 `apply_patch`（dsh-tool-fs：一次多文件新增/编辑/删除/移动） | 守卫名单少藏一层；执行期白名单仍会拒绝调用，属于纵深防御缺口 |
-| **P1** | 调度工具 `schedule_update` / `schedule_delete` 改名 `schedule_view` / `schedule_edit`，旧名不再注册 | 旧名留在 `tools.restrict()` 名单里只会被 try/catch 吞掉；新名不补就少藏一层 |
-| **P2** | `session/follow` 从 0.2.1-rc.3 起默认不再激活冷会话 | DSH 重启后仍有 pending inbox 的 QQ 会话可能停住；已显式传 `activate: true` |
+| **P2** | 工具定义对账：`apply_patch` 进入 0.2.2 安装树（`applyPatch` 默认 `false`） | QQ preset 不挂 `tool-fs`，默认不暴露；守卫新增是回归网，不是修复活跃暴露 |
+| **P2** | 调度面 `schedule_update` / `schedule_delete` 改名 `schedule_view` / `schedule_edit`，旧名不再注册 | QQ preset 不挂 `dsh-tool-schedule`；旧名删除、新名补进回归网 |
+| **P2** | `session/follow` 从 0.2.1-rc.3 起默认不再激活冷会话 | 唯一的**功能性**改动；DSH 重启后恢复带 pending inbox 的会话 |
 | **P3** | DSH 0.2.2 要求 Node.js ≥ 24.9 | 文档/CI 基线；桥接本身仍兼容 22.13+ |
 
-业务逻辑（bridge.js 的收发/队列/机器人格）一行没动；改动全部落在
-**守卫名单 + follow 请求体 + 对账脚本 + 文档/版本**。
+业务逻辑（bridge.js 的收发/队列/机器人格）一行没动；改动落在
+**守卫名单（回归网） + follow 请求体（功能） + 对账脚本 + 文档/版本**。
 
 ---
 
 ## 1. DSH API 兼容性实测：没动
 
 `node scripts/verify-dsh-022-adaptation.mjs` 在**运行中的 0.2.2-rc.1** 上逐项断言，
-**76 通过 / 0 失败**（含 8 项语法检查；workspace-write 沙箱下跳过语法检查，计 68）：
+**77 通过 / 0 失败**（含 8 项语法检查；workspace-write 沙箱下跳过语法检查，计 69）：
 
 | 契约 | 0.2.2 实测 |
 |---|---|
@@ -50,8 +52,10 @@
 | `session/modelCatalog` | 可用（1 组） |
 | 点号 endpoint `/api/session.list` | 仍 404（斜杠式协议未变） |
 | **preset 真跑一回合** | 文本 `"收到"`（提示词变量可解析） |
-| **preset 内 MCP 工具真调用** | `mcp__snowluma-host__snowluma_status` → `isError:false`，随后回复 `"完成"` |
 
+> MCP 工具真调用**不在**这 77 项里：verify 的活体回合只发文本 prompt；
+> MCP 调用由 §6 的 `probe-tools` 单独覆盖。
+>
 > 传输层仍钉在 `@deepseek-ai/dsh-host-apiproxy@0.1.1-rc.2`
 > （`NodeApiClient extends AbstractApiClient`）。它**仍然讲得通 DSH 0.2.2 的 API**——
 > 上面所有断言都是它的实测结果。这是唯一一个版本滞后的依赖，每次升级都要靠
@@ -59,29 +63,36 @@
 
 ---
 
-## 2. 工具面漂移：两份名单 + 一个执行期白名单
+## 2. 工具面定义对账：两份名单 + 一个执行期白名单
 
-### 2.1 现象
+### 2.1 现象：定义变了，默认没有暴露
 
-0.2.2 安装树的全局工具比 0.2.1 多/改了三个名字：
+0.2.2 安装树的工具**定义/默认配置**发生变化，但这不等于 QQ preset 默认暴露：
 
-- 新增 `apply_patch`（`dsh-tool-fs`）；
-- `schedule_update` / `schedule_delete` 改名为 `schedule_view` / `schedule_edit`；
-- 旧调度名不再注册。
+- `dsh-tool-fs` 提供 `apply_patch`（一次多文件新增/编辑/删除/移动），但
+  `applyPatch` 默认 `false`（`dsh-base/cordis.patch.yml` 与
+  `dsh-web-app/presets/standard.patch.yml` 都是 false）；
+- 调度工具 `schedule_update` / `schedule_delete` 改名为
+  `schedule_view` / `schedule_edit`，旧名不再注册；
+- 两个 QQ preset 只挂 persona / tool-web / tool-ask-user / tool-todo / 守卫 /
+  compaction，**不挂** `tool-fs` 或 `dsh-tool-schedule`；
+- `state/tool-restrict.log` 的 `known global tools` 仍只有 4 个
+  （3 个 MCP resource + `working_directory`），说明这些名字默认不在
+  QQ 会话的全局层。
 
-`state/tool-restrict.log` 里能看到守卫在启动早期对未知名字的报错
+`state/tool-restrict.log` 里能看到守卫对未知名字的报错
 （`tools.restrict() names unknown global tool ...`），随后 3 秒重试补藏；
-**新名字不补进去，这一层就永远不生效**。
+默认 QQ 会话里这些名字本来就不在，所以那几条失败不构成活跃暴露。
 
-### 2.2 为什么必须改
+### 2.2 为什么仍然要改
 
-- `ctx.tools.restrict({ deny: [name] })` 对**未知名字整批原子性抛错**，而守卫逐个
-  try/catch 只打日志 ⇒ 拼错/漏掉的名字 = 静默 no-op。
-- 执行期白名单（`ctx.tools.guard`）仍然会拒绝 `apply_patch` 这类本地执行工具，
-  所以这不是“群友能直接跑命令”的 P0；但注册期 schema 会把它列给模型，
-  属于 L7「仿真会话无本地能力」的纵深防御缺口。
-- 旧调度名留在名单里不会害人（会被 try/catch 吞掉），但会持续制造
-  `known global tools` 噪声，并掩盖真正的新名字。
+- 执行期白名单（`ctx.tools.guard`）是最终边界：任何不在 `SAFE_PREFIXES` /
+  `SAFE_EXACT` 的调用都会被拒绝；默认 0.2.2 的 QQ 会话没有因为这三个名字
+  产生新的可执行能力。
+- 但守卫名单是**回归网**：一旦某个 composition / 用户自定义 preset 打开
+  `applyPatch`，或把调度工具挂到全局层，名字必须已经在名单里；否则
+  `tools.restrict()` 对未知名字抛错、被 try/catch 吞掉 = 静默漏藏。
+- 旧调度名已不存在，留着只会制造 `known global tools` 噪声，并掩盖真正的名字。
 
 ### 2.3 改法
 
@@ -98,7 +109,9 @@
 2. `node scripts/test-preset-local-tools.mjs` —— 7/7，含“守卫名单里的每个名字都是
    DSH 真实注册的工具”。
 3. `verify:adaptation` 的 `GUARD_022_NAMES` 断言。
-4. 活体：`probe-tools.mjs qq-chat` / `qq-chat-v2` 都只调 MCP 工具、不调本地工具。
+4. 活体：`probe-tools.mjs qq-chat` / `qq-chat-v2` 都只调 MCP 工具、未出现本地工具调用
+   （`apply_patch` / `str_replace_editor` 已补进探针正则）；它证明当前回合没有本地调用，
+   不能单独证明工具面已隐藏，需结合 §2.1 的 preset 行与 `known global tools`。
 
 ---
 
@@ -157,6 +170,15 @@ request: {
 - 这正是 0.2.1-rc.2 之前 follow 的默认行为，桥接本来就是按那个语义写的。
 - 与官方 Web 客户端一致。
 
+### 4.4 怎么验证
+
+- 协议层：`test-audit-protocol.mjs` 断言 `follow.payload.args.request.activate === true`。
+- 活体：`node src/self-test.js` 通过（桥接客户端 follow + prompt + turn/end + 归档），
+  证明 0.2.2 接受该字段；`verify` §5g 的活体 follow 也带 `activate: true`，
+  字段被拒时回合测试会直接失败。
+- **冷会话 promote 的端到端场景需要 DSH 重启/有 pending inbox，未在本机人为制造**；
+  这一项的语义依据是 DSH 0.2.1-rc.3 的 upgrade guide 与官方 Web 客户端请求体。
+
 ---
 
 ## 5. Node.js 24.9 基线
@@ -199,8 +221,9 @@ CI 的 audit job 加 `[22, 24]` 矩阵，避免只在 22 上验证。
 
 | 套件 | 结果 |
 |---|---|
-| `verify:adaptation`（活 DSH，76 项，含真跑一回合） | **76 通过 / 0 失败** |
+| `verify:adaptation`（活 DSH，77 项，含真跑一回合） | **77 通过 / 0 失败** |
 | `probe-tools qq-chat` / `qq-chat-v2`（真调 MCP 工具） | 两个 preset 均成功、未调本地工具 |
+| `self-test`（桥接客户端 follow + 真回合） | 通过（回复“收到”，会话已归档） |
 | `scan:tool-names` | 325 包 / 83 名；悬空 0；未覆盖危险名 0 |
 | `verify-persona-config` | 17 项全过 |
 | `test:plugin`（qq-mode 宿主插件） | 6/6 |

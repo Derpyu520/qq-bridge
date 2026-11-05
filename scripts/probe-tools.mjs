@@ -39,7 +39,7 @@ const done = new Promise((resolve) => {
   const timer = setTimeout(() => resolve('timeout'), 120_000);
   const finish = (why) => { clearTimeout(timer); resolve(why); };
   socket.addEventListener('open', () => {
-    socket.send(JSON.stringify({ type: 'open', streamId, endpoint: 'session/follow', payload: { args: { request: { address: { kind: 'session', sessionId } } } } }));
+    socket.send(JSON.stringify({ type: 'open', streamId, endpoint: 'session/follow', payload: { args: { request: { address: { kind: 'session', sessionId }, activate: true } } } }));
     socket.send(JSON.stringify({ type: 'open', streamId: eventStreamId, endpoint: '$events', payload: { args: {} } }));
     setTimeout(async () => {
       const p = await rpc('session/prompt', {
@@ -73,7 +73,7 @@ console.log('tool/call:', JSON.stringify(toolCalls));
 console.log('tool/result:', JSON.stringify(toolResults));
 
 const calledMcp = toolCalls.some((c) => String(c.name).startsWith('mcp__snowluma-host__'));
-const calledLocal = toolCalls.some((c) => /^(pwsh|bash|write|edit|read|glob|grep)$/.test(String(c.name)));
+const calledLocal = toolCalls.some((c) => /^(pwsh|bash|write|edit|apply_patch|str_replace_editor|read|glob|grep)$/.test(String(c.name)));
 console.log('\n判定:');
 console.log(`  MCP 工具可调用          : ${calledMcp ? '✅' : '❌ 未观测到 mcp__snowluma-host__ 调用'}`);
 console.log(`  未调用本地危险工具      : ${calledLocal ? '❌ 出现了本地工具调用' : '✅'}`);

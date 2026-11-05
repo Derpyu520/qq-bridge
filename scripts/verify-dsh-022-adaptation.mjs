@@ -14,10 +14,12 @@
 // 以及 terminal / session-query / plugin_market 一族，守卫名单已同轮补齐。
 //
 // 0.2.2 实测结论（2026-11-05，DSH 0.2.2-rc.1）：§5 契约**同样逐项未漂移**；
-// 补齐工具名后 **76 通过 / 0 失败**（含 8 项语法检查；workspace-write 沙箱下
-// 按既有约定跳过语法检查，计 68 通过）。工具面漂移两处：
-//   · 新增 `apply_patch`（dsh-tool-fs：一次多文件新增/编辑/删除/移动）；
-//   · 调度面 `schedule_update` / `schedule_delete` 改名 `schedule_view` / `schedule_edit`。
+// 补齐版本对账后 **77 通过 / 0 失败**（含 8 项语法检查；workspace-write 沙箱下
+// 按既有约定跳过语法检查，计 69 通过）。工具面**定义/默认配置**漂移两处
+// （默认不在 QQ preset 暴露，守卫补作回归网）：
+//   · dsh-tool-fs 提供 `apply_patch`（默认 `applyPatch: false`；QQ preset 不挂 tool-fs）；
+//   · 调度面 `schedule_update` / `schedule_delete` 改名 `schedule_view` / `schedule_edit`
+//     （QQ preset 不挂 dsh-tool-schedule）。
 // 0.2.2 声明的破坏性变更（tools.mode 移除、sessionProjections 注册改异步、
 // agent/request 路由限制、实时 projection 帧改 changes[]、session/list summary
 // 去掉 contextPressure 等）本仓库一处都没用到；`session/follow` 默认不再激活
@@ -247,9 +249,11 @@ check('群聊模式不再重试「无 preset」建会话', /strictPreset \? \[tr
 const pkgJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const lockJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8'));
 const pluginPkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'plugins/qq-mode-console/package.json'), 'utf8'));
+const presetsPkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'plugins/qq-agent-presets/package.json'), 'utf8'));
 check('package-lock.json 顶层 version 与 package.json 一致', lockJson.version === pkgJson.version, `lock=${lockJson.version} pkg=${pkgJson.version}`);
 check('package-lock.json packages[""] version 与 package.json 一致', lockJson.packages?.['']?.version === pkgJson.version, `lock=${lockJson.packages?.['']?.version}`);
 check('qq-mode-console 插件版本与主包一致', pluginPkg.version === pkgJson.version, `plugin=${pluginPkg.version}`);
+check('qq-agent-presets 插件版本与主包一致', presetsPkg.version === pkgJson.version, `plugin=${presetsPkg.version}`);
 for (const f of ['src/mcp-snowluma-safe.js', 'src/mcp-host-server.js', 'src/mcp-web-search-safe.js']) {
   const m = /new McpServer\(\{[^}]*version:\s*'([^']+)'/.exec(fs.readFileSync(path.join(ROOT, f), 'utf8'));
   check(`${f} 的 MCP serverInfo.version 与主包一致`, m?.[1] === pkgJson.version, `声明=${m?.[1]} 主包=${pkgJson.version}`);
@@ -426,7 +430,7 @@ try {
       const timer = setTimeout(() => { try { socket.close(); } catch {} resolve({ reason: null, text, timeout: true }); }, 90_000);
       const finish = (value) => { clearTimeout(timer); try { socket.close(); } catch {} resolve(value); };
       socket.addEventListener('open', () => {
-        socket.send(JSON.stringify({ type: 'open', streamId, endpoint: 'session/follow', payload: { args: { request: { address: { kind: 'session', sessionId: turnSessionId } } } } }));
+        socket.send(JSON.stringify({ type: 'open', streamId, endpoint: 'session/follow', payload: { args: { request: { address: { kind: 'session', sessionId: turnSessionId }, activate: true } } } }));
         setTimeout(() => {
           api.sessions.prompt({ sessionId: turnSessionId, mode: 'queue', content: [{ type: 'text', text: '只回复两个字：收到' }] }).catch(() => {});
         }, 800);
