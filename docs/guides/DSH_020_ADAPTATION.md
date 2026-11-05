@@ -368,7 +368,7 @@ HTTP transport 下起作用，而三个 MCP server 全是 stdio。清掉是为�
    `session/cancel` 的**DSH RPC 返回结构（原始帧）**，与本文 §2.3 §8 对照。
 4. `node scripts/probe-020-settings.mjs` —— 命名空间是否还在、是否还可写。
 5. `npm run test:dsh-inbox` + `npm run test:session-retire:e2e` —— 队列与退役路径。
-6. `npm run test:audit`（30 个脚本）与 `npm run verify:persona`。
+6. `npm run test:audit`（脚本数量以当前 `scripts/test-audit.mjs` 为准）与 `npm run verify:persona`。
 7. 若 DSH 改了 preset / 插件装载机制：`node scripts/setup-dsh.mjs` 后重启 DSH，再看
    `npm run test:setup-idempotent`。
 8. `npm run privacy-scan` + `npm run diagnose:acl`（后者需在**无沙箱**终端跑）。
@@ -500,7 +500,7 @@ SnowLuma 同一账号的 **HTTP token（3000）与 WS token（3001）不同**，
 | `v0.2.0-r4` | r4 —— 表情包/动图链路、DSH 同源联网搜索、issue 修复、整体体检（见附录 J） |
 | `v0.2.1-r1` | r1（0.2.1 线）—— DSH 0.2.1-rc.2 适配，P0 `{{cwd}}` 提示词变量修复 + 工具面守卫补齐（见 [DSH_021_ADAPTATION.md](DSH_021_ADAPTATION.md)）。用 `-r1` 而不是裸 `v0.2.1`：那个标签已被上表撤回的 r2 占用过 |
 | `v0.2.1-r2` | r2（0.2.1 线）—— 会话隔离、安全加固、断线投递与实例归属修复；继续沿用 `rN` 方案 |
-| `v0.2.2-r1` | r1（0.2.2 线）—— DSH 0.2.2-rc.1 适配：`apply_patch` / 调度工具改名、`session/follow` 显式激活、Node 24 基线（见 [DSH_022_ADAPTATION.md](DSH_022_ADAPTATION.md)） |
+| `v0.2.2-r1` | r1（0.2.2 线）—— DSH 0.2.2-rc.1 适配：工具面回归网（`apply_patch` / 调度工具改名）、`session/follow` 显式激活、Node 24 基线（见 [DSH_022_ADAPTATION.md](DSH_022_ADAPTATION.md)） |
 
 `package.json` 是 `"private": true`（不发布到 npm），所以 `0.2.x-rN` 这种 prerelease 写法
 不产生 npm 语义影响；版本号与标签保持一致，便于 `verify:adaptation` 对账。

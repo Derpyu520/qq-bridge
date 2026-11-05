@@ -20,7 +20,7 @@
 //   · dsh-tool-fs 提供 `apply_patch`（默认 `applyPatch: false`；QQ preset 不挂 tool-fs）；
 //   · 调度面 `schedule_update` / `schedule_delete` 改名 `schedule_view` / `schedule_edit`
 //     （QQ preset 不挂 dsh-tool-schedule）。
-// 0.2.2 声明的破坏性变更（tools.mode 移除、sessionProjections 注册改异步、
+// 0.2.2 及相邻版本声明的破坏性变更（tools.mode 移除、sessionProjections 注册改异步、
 // agent/request 路由限制、实时 projection 帧改 changes[]、session/list summary
 // 去掉 contextPressure 等）本仓库一处都没用到；`session/follow` 默认不再激活
 // 冷会话（0.2.1-rc.3），桥接已显式传 `activate: true`（见 src/dsh-client.js）。

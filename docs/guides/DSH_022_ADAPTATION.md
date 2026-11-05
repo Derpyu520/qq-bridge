@@ -129,7 +129,7 @@
 | `attachment-read-access`（rc.3） | 同上，不读附件 | 无 |
 | `model-listing-refresh` / `reasoning-body-props`（rc.4） | 桥接只用 `session/modelCatalog` 的 `groups[].models[].reasoning.efforts`，形状未变 | 无 |
 | `tools.mode` 在 0.2.2 变成 `z.never()`（改挂 executor） | 两个 QQ preset 都没有配置 `tools.mode`；守卫用 `ctx.tools.restrict`，不读该字段 | 无 |
-| `sessionProjections.register` 改异步 / `agent/request` 路由限制 | 桥接不注册 projection、不监听该 waterfall | 无 |
+| `sessionProjections.register` 改异步（0.2.1-rc.2 起） / `agent/request` 路由限制 | 桥接不注册 projection、不监听该 waterfall | 无 |
 | `cordis-loader-entry-trees`（EntryTree.commit / Include journal） | 桥接直接写 profile 文件（`cordis.patch.yml` / `package.json`），不实现 `EntryTree` | 无 |
 | `fs-observation-policy` 默认 off | QQ preset 不挂 fs 工具；主 profile 是否恢复 read-before-write 是部署选择（见 §5.3） | 无（环境侧） |
 | `llm-request-purpose-declarations` / `pi-ai-request-image-count` / `sdk-run-commands` | 桥接不构造辅助 LLM 请求、不走 pi-ai、不用 Python/TS SDK | 无 |
@@ -188,7 +188,8 @@ request: {
 DSH 0.2.2 的 `package.json` 写死 `engines.node >= 24.9.0`；本机是 24.19.0。
 桥接自身没有 24 专属 API，`package.json` 仍保留 `>=22.13.0`，表示“桥接进程
 可以跑在 22.13+；与 DSH 0.2.2 同机部署时由 DSH 要求 24.9+”。文档按这个口径写，
-CI 的 audit job 加 `[22, 24]` 矩阵，避免只在 22 上验证。
+CI 的 audit 主 job 保留原名、跑 Node 24；另加一条 Node 22 兼容 job，
+避免只在其中一条线上“绿”。
 
 ### 5.2 沙箱假失败：不要据此改代码
 
