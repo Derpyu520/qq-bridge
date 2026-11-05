@@ -27,7 +27,7 @@
 
 | 文档 | 内容 | 状态 |
 | --- | --- | --- |
-| [DSH 0.2.1 适配记录](guides/DSH_021_ADAPTATION.md) | DSH 0.2.1-rc.2 适配证据、失效提示词变量与工具守卫 | 🗄️ 2026-10-22，对应 `v0.2.1-r1` |
+| [DSH 0.2.2 适配记录](guides/DSH_022_ADAPTATION.md) | DSH 0.2.2-rc.1 适配证据、工具面漂移、`session/follow` 激活与 Node 24 基线 | ✅ 2026-11-05，对应 `v0.2.2-r1` |
 | [2026-10-31 仓库体检](guides/AUDIT_2026-10-31.md) | 会话资料隔离、发送撤权、网络与路径边界、依赖和历史隐私扫描 | 🗄️ 2026-10-31 |
 | [2026-10-31 issues 核查](guides/ISSUE_STATUS_2026-10-31.md) | 当时未关闭 issues 的逐项结论、验证范围与未复现事项 | 🗄️ 2026-10-31 |
 | [2026-10-31 Code scanning 核查](guides/CODE_SCANNING_2026-10-31.md) | 当时 14 条告警的风险判断、修复与复扫边界 | 🗄️ 2026-10-31 |
@@ -36,7 +36,8 @@
 
 | 文档 | 内容 | 状态 |
 | --- | --- | --- |
-| [DSH 0.2.0 适配记录](guides/DSH_020_ADAPTATION.md) | DSH 0.2.0-rc.2 适配及后续 `v0.2.0-rN` 发布记录 | 🗄️ 历史资料；当前 DSH 适配说明优先看 0.2.1 记录 |
+| [DSH 0.2.1 适配记录](guides/DSH_021_ADAPTATION.md) | DSH 0.2.1-rc.2 适配证据、失效提示词变量与工具守卫 | 🗄️ 2026-10-22，对应 `v0.2.1-r1` |
+| [DSH 0.2.0 适配记录](guides/DSH_020_ADAPTATION.md) | DSH 0.2.0-rc.2 适配及后续 `v0.2.0-rN` 发布记录 | 🗄️ 历史资料；当前 DSH 适配说明优先看 0.2.2 记录 |
 
 ## 本地未入库资料
 
@@ -59,6 +60,6 @@
 | 查看用量与费用口径 | [用量看板](guides/TOKEN_USAGE_CONSOLE.md) |
 | 修改控制台并运行离线回归 | [控制台测试指南](guides/CONSOLE-UI-TESTING.md) |
 | 修改安全相关代码 | [安全基线](guides/SECURITY_BASELINE.md) |
-| 核查 DSH 版本适配 | [0.2.1 适配记录](guides/DSH_021_ADAPTATION.md) |
+| 核查 DSH 版本适配 | [0.2.2 适配记录](guides/DSH_022_ADAPTATION.md) |
 | 查找目录或脚本用途 | [FOLDER_MAP](FOLDER_MAP.md) |
 | 报告安全问题 | [安全策略](../SECURITY.md) |

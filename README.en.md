@@ -26,9 +26,9 @@ QQ ↔ SnowLuma ↔ qq-bridge ↔ DeepSeek Harness ↔ Model provider
 
 ## Quick start
 
-Use **Windows 10 / 11 and Node.js ≥ 22.13**, with these two services running separately:
+Use **Windows 10 / 11 and Node.js ≥ 22.13** (≥24.9 when DSH 0.2.2 runs on the same machine), with these two services running separately:
 
-- **DSH Web**: validation records cover `0.2.0-rc.2` / `0.2.1-rc.2`. See [compatibility](docs/guides/DSH_SETUP.md#兼容范围) for other versions.
+- **DSH Web**: validation records cover `0.2.2-rc.1` (previous: `0.2.1-rc.2`). See [compatibility](docs/guides/DSH_SETUP.md#兼容范围) for other versions.
 - **SnowLuma**: follow the [upstream instructions](https://github.com/SnowLuma/SnowLuma) to install, start, and sign in. Enable its OneBot **WebSocket server** and **HTTP API**.
 
 ### 1. Get the project

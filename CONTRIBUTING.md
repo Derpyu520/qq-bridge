@@ -8,7 +8,7 @@
 | 需要 | 版本 | 说明 |
 | --- | --- | --- |
 | Windows | 10 / 11 | 大量依赖 Windows 的 ACL、控制台编码与进程行为；Linux / macOS 不在支持范围 |
-| Node.js | **>= 22.13** | 见 `package.json` 的 `engines` |
+| Node.js | **>= 22.13** | 见 `package.json` 的 `engines`；与 DSH 0.2.2 同机部署需 >= 24.9 |
 | npm | 随 Node | 仓库带 `package-lock.json`，请用它锁定版本 |
 
 ## 2. 本地跑起来

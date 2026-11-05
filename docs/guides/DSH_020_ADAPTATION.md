@@ -11,6 +11,11 @@
 > 对应提交：`e43186a`（主体）；本文写于 2026-10-02。
 >
 > **上游行为标注**：文中出现的 SnowLuma `[Hook]`、原生组件、逐字节比对、运行时源码等，均为对 SnowLuma 行为的记录或观测；qq-bridge 自身不注入、不挂钩、不修改其本体。
+>
+> **脚本改名提示**：本文写于 0.2.0 适配期间，当时的验证脚本叫
+> `verify-dsh-020-adaptation.mjs`；后续已改名为
+> [`verify-dsh-022-adaptation.mjs`](../../scripts/verify-dsh-022-adaptation.mjs)。
+> 文中出现的旧命令仅作历史记录，当前请用 `npm run verify:adaptation`。
 
 ---
 
@@ -495,8 +500,9 @@ SnowLuma 同一账号的 **HTTP token（3000）与 WS token（3001）不同**，
 | `v0.2.0-r4` | r4 —— 表情包/动图链路、DSH 同源联网搜索、issue 修复、整体体检（见附录 J） |
 | `v0.2.1-r1` | r1（0.2.1 线）—— DSH 0.2.1-rc.2 适配，P0 `{{cwd}}` 提示词变量修复 + 工具面守卫补齐（见 [DSH_021_ADAPTATION.md](DSH_021_ADAPTATION.md)）。用 `-r1` 而不是裸 `v0.2.1`：那个标签已被上表撤回的 r2 占用过 |
 | `v0.2.1-r2` | r2（0.2.1 线）—— 会话隔离、安全加固、断线投递与实例归属修复；继续沿用 `rN` 方案 |
+| `v0.2.2-r1` | r1（0.2.2 线）—— DSH 0.2.2-rc.1 适配：`apply_patch` / 调度工具改名、`session/follow` 显式激活、Node 24 基线（见 [DSH_022_ADAPTATION.md](DSH_022_ADAPTATION.md)） |
 
-`package.json` 是 `"private": true`（不发布到 npm），所以 `0.2.1-rN` 这种 prerelease 写法
+`package.json` 是 `"private": true`（不发布到 npm），所以 `0.2.x-rN` 这种 prerelease 写法
 不产生 npm 语义影响；版本号与标签保持一致，便于 `verify:adaptation` 对账。
 
 ### I. r3 时**未**修、r4 已修的问题

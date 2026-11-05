@@ -95,12 +95,18 @@ jobs:
   audit:
     name: 离线回归（test:audit）
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # DSH 0.2.2 起要求 Node 24.9+；桥接自身仍声明 22.13+。
+        # 两条线都跑，避免只在其中一条上“绿”。
+        node-version: ['22', '24']
     steps:
       - uses: actions/checkout@v5
 
       - uses: actions/setup-node@v5
         with:
-          node-version: '22'
+          node-version: ${{ matrix.node-version }}
           cache: npm
 
       # 注意：不能用 --ignore-scripts。postinstall 会给 @snowluma/sdk 的相对导入补 .js，
