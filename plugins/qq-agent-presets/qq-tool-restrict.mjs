@@ -122,8 +122,8 @@ export const inject = ['tools']
 const LOCAL_EXECUTION_TOOLS = [
   // shell / 进程
   'pwsh', 'bash',
-  // 文件读写
-  'read', 'read_image', 'write', 'edit', 'str_replace_editor',
+  // 文件读写（0.2.2 起 dsh-tool-fs 新增 apply_patch：一次多文件新增/编辑/删除/移动）
+  'read', 'read_image', 'write', 'edit', 'apply_patch', 'str_replace_editor',
   // 文件检索
   'glob', 'grep',
   // 自带运行时（Python/Node/pnpm 的绝对路径）⇒ 等于把"跑代码"递给模型
@@ -149,7 +149,9 @@ const LOCAL_EXECUTION_TOOLS = [
   //   ③ 插件装载权（= 任意代码执行）
   'plugin_manager',
   //   ④ 无人值守的自我调度
-  'schedule_create', 'schedule_list', 'schedule_update', 'schedule_delete',
+  //   0.2.2 对账（2026-11-05）：调度面改名为 create/list/view/edit——旧名 update/delete
+  //   已不存在（restrict 会抛错被吞），新名必须补上，否则注册期少藏一层。
+  'schedule_create', 'schedule_list', 'schedule_view', 'schedule_edit',
   // 0.2.1 新增对账（2026-10-22，见上方长注释）：
   //   ① dsh-base 默认启用 ⇒ 全局层继承
   'working_directory',

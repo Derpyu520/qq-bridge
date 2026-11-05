@@ -61,7 +61,7 @@ const CLOSED_AGENT_PRESETS = ['standard'];
  */
 const LOCAL_EXECUTION_TOOLS = [
   'pwsh', 'bash',
-  'read', 'read_image', 'write', 'edit', 'str_replace_editor',
+  'read', 'read_image', 'write', 'edit', 'apply_patch', 'str_replace_editor',
   'glob', 'grep',
   'load_workspace_dependencies',
   'subagent', 'subagent_fork', 'list_subagent_models',
@@ -76,7 +76,8 @@ const LOCAL_EXECUTION_TOOLS = [
   'list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource',
   'spawn_teammate', 'team_task_create', 'team_task_get', 'team_task_list', 'team_task_update',
   'plugin_manager',
-  'schedule_create', 'schedule_list', 'schedule_update', 'schedule_delete',
+  // 0.2.2 对账（2026-11-05）：调度面 schedule_update/delete 改名 schedule_view/edit。
+  'schedule_create', 'schedule_list', 'schedule_view', 'schedule_edit',
   // 0.2.1 新增对账（2026-10-22）：working_directory 由 dsh-base 默认挂载（全局层继承），
   // terminal 一族 = shell，session_* 能跨会话读事件正文，plugin_market = 装载权。
   'working_directory',

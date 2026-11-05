@@ -1,8 +1,9 @@
-// DSH 适配总验证（0.2.1 版）。
+// DSH 适配总验证（0.2.2 版）。
 //
 // 沿革：0.1.5 建立（verify-dsh-015-adaptation.mjs）→ 0.2.0 改名
-// （verify-dsh-020-adaptation.mjs）→ 0.2.1 改名到本文件名。文件名里的版本号
-// 是**它验的 DSH 版本**，不是仓库版本；一个自称 015 却在验 0.2.0 的脚本只会误导人。
+// （verify-dsh-020-adaptation.mjs）→ 0.2.1 改名（verify-dsh-021-adaptation.mjs）
+// → 0.2.2 改名到本文件名。文件名里的版本号是**它验的 DSH 版本**，不是仓库版本；
+// 一个自称 015 却在验 0.2.0 的脚本只会误导人。
 // `npm run verify:adaptation` 的入口名保持不变，所以既有调用不受影响。
 //
 // 0.2.1 实测结论（2026-10-22）：§5 的活 DSH 契约**逐项未漂移**——铸造 Cookie 鉴权、
@@ -12,12 +13,22 @@
 // 唯一漂移在**工具面**：0.2.1 新增 `working_directory`（dsh-base 默认挂载，全局层继承）
 // 以及 terminal / session-query / plugin_market 一族，守卫名单已同轮补齐。
 //
+// 0.2.2 实测结论（2026-11-05，DSH 0.2.2-rc.1）：§5 契约**同样逐项未漂移**；
+// 补齐工具名后 **76 通过 / 0 失败**（含 8 项语法检查；workspace-write 沙箱下
+// 按既有约定跳过语法检查，计 68 通过）。工具面漂移两处：
+//   · 新增 `apply_patch`（dsh-tool-fs：一次多文件新增/编辑/删除/移动）；
+//   · 调度面 `schedule_update` / `schedule_delete` 改名 `schedule_view` / `schedule_edit`。
+// 0.2.2 声明的破坏性变更（tools.mode 移除、sessionProjections 注册改异步、
+// agent/request 路由限制、实时 projection 帧改 changes[]、session/list summary
+// 去掉 contextPressure 等）本仓库一处都没用到；`session/follow` 默认不再激活
+// 冷会话（0.2.1-rc.3），桥接已显式传 `activate: true`（见 src/dsh-client.js）。
+//
 // 覆盖：
 //   §1 仓库侧 preset persona schema
 //   §2 部署侧 bundle patch / 守卫实现（preset 与 provider 行）
 //   §3 版本身份一致性
 //   §4 语法检查
-//   §5 **运行中的 DSH 0.2.0 实测**（本文件的核心）：
+//   §5 **运行中的 DSH 0.2.2 实测**（本文件的核心）：
 //        · 鉴权：本机签名密钥离线铸造 Cookie
 //        · settings/describe 可用，`qq-mode` 命名空间在列且可写
 //          （0.2.0 删除了 ctx.settings.register()，命名空间改由 entry id + Config 推导）
@@ -137,7 +148,8 @@ const GUARD_020_NAMES = [
   'subagent_codex', 'subagent_claude_code',
   'spawn_teammate', 'team_task_create', 'team_task_get', 'team_task_list', 'team_task_update',
   'plugin_manager',
-  'schedule_create', 'schedule_list', 'schedule_update', 'schedule_delete',
+  // 0.2.2 起 schedule_update / schedule_delete 改名（见 GUARD_022_NAMES），旧名已不注册。
+  'schedule_create', 'schedule_list',
 ];
 /** 0.2.1 对账新增的名字（见守卫长注释里 2026-10-22 那段）。 */
 const GUARD_021_NAMES = [
@@ -150,6 +162,17 @@ const GUARD_021_NAMES = [
   // 装载权 / 写盘起进程 / team 家族
   'plugin_market', 'create_worktree', 'wait_agent',
 ];
+/**
+ * 0.2.2 对账新增的名字（见守卫长注释里 2026-11-05 那段）。
+ * 同一轮删掉了 `schedule_update` / `schedule_delete`：0.2.2 把它们改名为
+ * `schedule_view` / `schedule_edit`，旧名不再注册，留着只会被 restrict 抛错吞掉。
+ */
+const GUARD_022_NAMES = [
+  // dsh-tool-fs 新增：一次多文件新增/编辑/删除/移动
+  'apply_patch',
+  // 调度面改名后的新名字
+  'schedule_view', 'schedule_edit',
+];
 const guardMod = await import(pathToFileURL(canonicalGuardPath).href);
 const guardNames = new Set(guardMod.RESTRICTED_TOOL_NAMES ?? []);
 const optionalNames = new Set(guardMod.OPTIONAL_BUNDLE_TOOL_NAMES ?? []);
@@ -157,6 +180,8 @@ const missingFromGuard = GUARD_020_NAMES.filter((n) => !guardNames.has(n));
 check('守卫已覆盖 0.2.0 新增的危险工具名', missingFromGuard.length === 0, missingFromGuard.join(', ') || `${guardNames.size} 个名字`);
 const missingFromGuard021 = GUARD_021_NAMES.filter((n) => !guardNames.has(n));
 check('守卫已覆盖 0.2.1 新增的危险工具名', missingFromGuard021.length === 0, missingFromGuard021.join(', ') || `${GUARD_021_NAMES.length} 个名字`);
+const missingFromGuard022 = GUARD_022_NAMES.filter((n) => !guardNames.has(n));
+check('守卫已覆盖 0.2.2 新增的危险工具名', missingFromGuard022.length === 0, missingFromGuard022.join(', ') || `${GUARD_022_NAMES.length} 个名字`);
 
 // 守卫名单里的每个名字都必须是 DSH 真实注册的工具：`tools.restrict()` 对未知名字会抛错，
 // 而守卫逐个 try/catch 只打日志 ⇒ 拼错的名字 = 静默 no-op。

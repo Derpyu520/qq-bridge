@@ -750,6 +750,13 @@ export class NodeApiClient extends AbstractApiClient {
             args: {
               request: {
                 address: { kind: 'session', sessionId },
+                // DSH 0.2.1-rc.3 起，session.follow **不再**默认激活冷会话：
+                // 省略 activate 只读历史、不 promote Agent。桥接启动时会重放
+                // state.sessions 里全部会话的 follow；DSH 重启后它们都是冷会话，
+                // 若还有 pending inbox（例如断线前排队的两条消息），不激活就会
+                // 一直停在那里，QQ 上表现为「它不理我了」。显式激活恢复 0.2.1-rc.2
+                // 之前的语义，也是 DSH Web 客户端的做法。
+                activate: true,
                 // 开场快照的历史深度。默认只有 50 条，不足以回填逐轮花费；
                 // 调大只影响首帧体积（每个已 follow 的会话一帧），不改变事件通道语义。
                 maxMessages: FOLLOW_SNAPSHOT_MESSAGES
