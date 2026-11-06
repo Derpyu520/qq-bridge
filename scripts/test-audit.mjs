@@ -29,6 +29,10 @@ const tests = [
   'test-reply-wait.mjs', 'test-preset-prompt.mjs', 'test-installed-preset-sync.mjs', 'test-role-card.mjs',
   // 角色卡注入节奏：首次/换卡/新会话必须全量，其余只给一行提醒（#118）。
   'test-role-injection-cadence.mjs',
+  // 身份归属：persona 与工具描述不得写死厂商形象，形象素材按当前角色名解析。
+  // persona 属于 system prompt、每轮都在，人格卡只按节奏注入 —— 写死的那句会在
+  // 权重和出现频率上同时压过人格卡，换卡也换不掉自称，所以这条要长期钉住。
+  'test-role-neutral-identity.mjs',
   // 体检修复回归：无令牌智能体调用面、send-burst 失败回滚、唤醒限频重试、
   // 定时器类暂存唤醒补发、collector 生命周期、ownerQQ 覆盖语义、预设名校验、
   // wake triggers 白名单、memory-update 边界、wait 租约归一化、md/黑话/表情/账本；

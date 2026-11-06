@@ -6051,9 +6051,18 @@ async function main() {
           if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
           if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
           if (req.headers['x-agent-token'] && !v2ToolEnabled('getSelfImage')) { sendJson({ ok: false, error: '工具未启用：qq_get_self_image' }, 403); return; }
-          const selfPath = path.join(ROOT, 'assets', 'deepseek娘.png');
+          // 形象图跟随当前角色：assets/<角色名>.png。没有就如实说「没有配图」，
+          // 绝不回退到某张写死的图 —— 回退发别家吉祥物，等于把桥接注入的人格覆盖掉。
+          const roleState = readRoleState();
+          const safeName = sanitizeRoleName(roleState.role);
+          const assetsDir = path.resolve(ROOT, 'assets');
+          const selfPath = safeName ? path.resolve(assetsDir, `${safeName}.png`) : '';
+          if (!selfPath || !selfPath.startsWith(assetsDir + path.sep)) { sendJson({ ok: false, error: '当前未设置角色，没有形象图可看' }, 404); return; }
           try {
-            if (!fs.existsSync(selfPath)) { sendJson({ ok: false, error: '未找到 AI 形象图片 assets/deepseek娘.png' }, 404); return; }
+            if (!fs.existsSync(selfPath)) {
+              sendJson({ ok: false, error: `当前角色「${roleState.role}」没有配图（要自拍请把图片存成 assets/${safeName}.png）；被问到样子时按角色卡说，别臆测形象` }, 404);
+              return;
+            }
             const buf = fs.readFileSync(selfPath);
             const mimeType = mimeFromBuffer(buf) || 'image/png';
             sendJson({ ok: true, key, image: { mimeType, data: buf.toString('base64') } });
