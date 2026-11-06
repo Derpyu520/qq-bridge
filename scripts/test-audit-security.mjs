@@ -15,6 +15,10 @@ dns.promises.lookup = async (host) => {
   if (host === 'public.test') return [{ address: '93.184.216.34', family: 4 }];
   if (host === 'mixed.test') return [{ address: '93.184.216.34', family: 4 }, { address: '::1', family: 6 }];
   if (host === 'expanded.test') return [{ address: '0:0:0:0:0:ffff:7f00:1', family: 6 }];
+  // 全部结果都是内网：必须继续拒绝（过滤不能退化成放行）。
+  if (host === 'internal.test') return [{ address: '10.0.0.7', family: 4 }, { address: 'fd00::1', family: 6 }];
+  // Clash fake-ip 形态：公网域名的应答里混进一条 198.18.0.0/15。
+  if (host === 'fakeip.test') return [{ address: '198.18.0.53', family: 4 }, { address: '93.184.216.34', family: 4 }];
   // 双栈主机：IPv6 在前（真实 DNS 的常见顺序），用于验证「IPv4 优先 + 失败切换」。
   if (host === 'dual.test') return [
     { address: '2606:4700:4700::1111', family: 6 },
@@ -97,9 +101,21 @@ test('URLs and every DNS result are validated before opening a connection', asyn
   for (const url of [
     'file:///etc/passwd', 'http://user:pass@public.test/', 'http://127.1/',
     'http://[::ffff:127.0.0.1]/', 'http://localhost./', 'http://host.local./',
-    'http://mixed.test/', 'http://expanded.test/',
+    'http://expanded.test/', 'http://internal.test/',
   ]) await assert.rejects(validateFetchUrl(url));
   assert.equal(transport.requests.length, 0);
+});
+
+test('mixed public/private DNS answers keep only the public addresses', async () => {
+  // 旧策略「有一条内网就整域名拒绝」会把 fake-ip（198.18.0.0/15）环境下的
+  // QQ 图片/表情一次性打死（issue #40）。现在只丢弃内网那几条，
+  // 连接仍然 pin 在校验过的公网 IP 上，DNS rebinding 依旧无效。
+  const mixed = await validateFetchUrl('http://mixed.test/');
+  assert.deepEqual(mixed.addresses, ['93.184.216.34']);
+  const fakeip = await validateFetchUrl('http://fakeip.test/');
+  assert.deepEqual(fakeip.addresses, ['93.184.216.34']);
+  // 全部内网 → 仍然必须拒绝（fail-closed）。
+  await assert.rejects(() => validateFetchUrl('http://internal.test/'), /内网\/本机地址/);
 });
 
 test('HTTP transport pins the validated IP and preserves Host and TLS SNI', async (t) => {

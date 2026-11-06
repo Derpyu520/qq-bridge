@@ -382,6 +382,44 @@ await test('safe-fetch：多地址时按 IPv4 优先并在失败后切换', asyn
   }
 });
 
+await test('safe-fetch：混入 fake-ip 地址时只丢掉那一条，不再整域名拒绝', async () => {
+  // 回归：Clash fake-ip 把公网 CDN 解析到 198.18.0.0/15。旧实现只要有一条内网地址
+  // 就整域名抛错，于是「代理一开，QQ 图片/表情全挂」。现在只过滤掉内网结果。
+  const { default: dns } = await import('node:dns');
+  const original = dns.promises.lookup;
+  dns.promises.lookup = async () => ([
+    { address: '198.18.0.53', family: 4 },
+    { address: '2408:8756:f50:4::17', family: 6 },
+    { address: '116.162.45.14', family: 4 }
+  ]);
+  try {
+    const mod = await import(`../src/safe-fetch.js?fakeip=${Date.now()}`);
+    assert.deepEqual(
+      await mod.resolveSafeAddresses('p.qpic.cn'),
+      ['116.162.45.14', '2408:8756:f50:4::17'],
+      '内网/伪造地址必须被丢弃，公网地址按 IPv4 优先保留'
+    );
+  } finally {
+    dns.promises.lookup = original;
+  }
+});
+
+await test('safe-fetch：全部解析到内网时仍然拒绝（过滤不能变成放行）', async () => {
+  const { default: dns } = await import('node:dns');
+  const original = dns.promises.lookup;
+  dns.promises.lookup = async () => ([
+    { address: '198.18.0.53', family: 4 },
+    { address: '10.0.0.7', family: 4 },
+    { address: 'fd00::1', family: 6 }
+  ]);
+  try {
+    const mod = await import(`../src/safe-fetch.js?allprivate=${Date.now()}`);
+    await assert.rejects(() => mod.resolveSafeAddresses('evil.example'), /内网\/本机地址/);
+  } finally {
+    dns.promises.lookup = original;
+  }
+});
+
 // ── 搜索：空结果 note 必须进入缓存（否则 5 分钟内重复查询拿不到提示） ────────────
 // 不能真联网，所以这里是**结构断言**：note 走的是 `value = {...value, note}`（新建对象），
 // 而缓存存的是引用；先 cache.set 再加 note ⇒ 命中缓存时拿到的正是那个没有 note 的旧对象，

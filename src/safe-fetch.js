@@ -150,13 +150,23 @@ export async function resolveSafeAddresses(hostname) {
     throw new Error(`域名解析失败：${error?.message ?? error}`);
   }
   if (!addresses.length) throw new Error('域名没有解析结果');
-  for (const { address } of addresses) {
-    if (isPrivateIp(address)) {
-      throw new Error('域名解析到内网/本机地址，已阻止');
-    }
+  // 只丢弃**解析到内网段的那几条**，而不是「有一条内网就整个域名拒绝」。
+  //
+  // 为什么：Clash 等工具的 fake-ip 模式会把公网域名解析到 198.18.0.0/15，
+  // 而 isPrivateIp() 必须拦住这个段（否则 SSRF 防护形同虚设）。可一次解析里
+  // 只要混进一条假地址，整个域名就不可达 —— 现象是「QQ 表情/图片时好时坏，
+  // 日志里三条候选 URL 全被 blocked」，且只在代理开着时复现（issue #40）。
+  //
+  // 安全性没有降低：下面 attemptOnce 直接用**校验过的 IP** 建连
+  // （`hostname: address` + 保留 Host/SNI），不会二次解析，
+  // 所以「先返回公网、连接时返回内网」的 DNS rebinding 依旧防得住。
+  // 全部结果都是内网时照旧拒绝，避免把「解析失败」误当成「可以放行」。
+  const publicAddresses = addresses.filter(({ address }) => !isPrivateIp(address));
+  if (!publicAddresses.length) {
+    throw new Error('域名解析到内网/本机地址，已阻止');
   }
-  const ordered = orderAddresses(addresses);
-  return ordered.length ? ordered : [addresses[0].address];
+  const ordered = orderAddresses(publicAddresses);
+  return ordered.length ? ordered : [publicAddresses[0].address];
 }
 
 export async function resolveSafeHost(hostname) {
