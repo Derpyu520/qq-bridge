@@ -41,7 +41,7 @@ body:
     attributes:
       label: qq-bridge 版本
       description: "`package.json` 的 `version`，或 release tag"
-      placeholder: v0.2.2-r1
+      placeholder: v0.2.2-rc1
     validations:
       required: true
 

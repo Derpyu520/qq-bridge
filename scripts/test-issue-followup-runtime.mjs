@@ -140,7 +140,7 @@ try {
       } } }
     };
     const ensure = vm.runInNewContext(`(${reasoningSource.slice(start, end).trim()})`, context);
-    return { ensure, requests };
+    return { ensure, requests, context };
   };
   const modelSuccess = (payload) => ({ result: { ok: true, value: {
     selected: { provider: payload.provider, model: payload.model, reasoningEffort: payload.reasoningEffort }
@@ -149,8 +149,8 @@ try {
   await test('#153 normalizes none and preserves adapter-owned effort identifiers', async () => {
     const normalize = loadReasoningNormalizer();
     assert.equal(normalize('none'), 'none');
-    assert.equal(normalize(' MAX '), 'max');
-    assert.equal(normalize('xHigh'), 'xHigh');
+    assert.equal(normalize(' NONE '), 'none');
+    for (const effort of ['xHigh', 'HIGH', 'Low', 'MAX']) assert.equal(normalize(effort), effort);
     assert.throws(() => normalize(''));
     assert.throws(() => normalize('high\nlow'));
   });
@@ -164,9 +164,11 @@ try {
 
   await test('#153 adapter-owned effort reaches selectModel without case folding', async () => {
     const normalize = loadReasoningNormalizer();
-    const { ensure, requests } = loadEnsureChatModel(normalize('xHigh'), modelSuccess);
-    assert.equal(await ensure('fixture-session'), 'applied');
-    assert.deepEqual(requests.map((r) => r.reasoningEffort), ['xHigh']);
+    for (const effort of ['xHigh', 'HIGH', 'Low', 'MAX']) {
+      const { ensure, requests } = loadEnsureChatModel(normalize(effort), modelSuccess);
+      assert.equal(await ensure('fixture-session'), 'applied');
+      assert.deepEqual(requests.map((r) => r.reasoningEffort), [effort]);
+    }
   });
 
   await test('#55 unsupported reasoning effort retries the configured provider/model without effort', async () => {
@@ -193,6 +195,24 @@ try {
     });
     assert.equal(await ensure('fixture-session'), 'applied');
     assert.deepEqual(requests.map((r) => r.reasoningEffort), ['max', 'max']);
+  });
+
+  await test('effort saved during an in-flight selection is applied on the next message', async () => {
+    let finishFirst;
+    const { ensure, requests, context } = loadEnsureChatModel('max', (payload, count) => {
+      if (count === 1) return new Promise((resolve) => { finishFirst = () => resolve(modelSuccess(payload)); });
+      return modelSuccess(payload);
+    });
+    const selecting = ensure('fixture-session');
+    assert.equal(requests.length, 1);
+    context.cfg.dsh.reasoningEffort = 'none';
+    context.modelSelectionEpoch += 1;
+    finishFirst();
+    assert.equal(await selecting, 'applied');
+    assert.equal(await ensure('fixture-session'), 'applied');
+    assert.deepEqual(requests.map((r) => r.reasoningEffort ?? '<omitted>'), ['max', '<omitted>']);
+    assert.equal(await ensure('fixture-session'), 'applied');
+    assert.equal(requests.length, 2, 'the new epoch is cached only after its selection completes');
   });
 
   await test('#54 directory ACL grants access before removing inheritance, with verification at each step', () => {

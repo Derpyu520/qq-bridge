@@ -44,19 +44,21 @@
 //        · session/modelCatalog 形状
 //        · 点号 endpoint 仍不可用（协议确为斜杠式）
 //
-// 不依赖 SnowLuma；不改动任何用户状态（探测会话会被 archive，探测工作区建在系统临时目录）。
+// 不依赖 SnowLuma。会创建探测会话、写回 qq-mode，并用 selectModel 选择
+// deepseek-official/deepseek-flash/max；DSH 会把这个选择持久化为全局默认模型。
+// 清理时停止并归档探测会话、删除独占的临时目录；不自动恢复全局默认模型，
+// 以免覆盖运行期间用户或其他客户端的并发更改。
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { randomUUID } from 'node:crypto';
-import { dshModulesDir } from './dsh-modules.mjs';
+import { dshHome, dshModulesDir } from './dsh-modules.mjs';
 import { discoverDshSessionCookie, NodeApiClient, unwrap } from '../src/dsh-client.js';
+import { cleanupProbeSession, createProbeDirectory, probeMux, probeTurn } from './adaptation-probe-helpers.mjs';
 
 const ROOT = process.cwd();
 const DSH_MODULES = dshModulesDir();
-const DSH_HOME = path.join(os.homedir(), '.dsh');
+const DSH_HOME = dshHome();
 const BASE = process.env.DSH_BASE_URL || 'http://127.0.0.1:3080';
 
 let pass = 0, fail = 0;
@@ -276,7 +278,9 @@ const SYNTAX_FILES = ['src/bridge.js', 'src/dsh-client.js', 'src/mcp-snowluma-sa
   }
 }
 
-// ── 5. 运行中的 DSH 0.2.0 ───────────────────────────────────────────────────
+// ── 5. 运行中的 DSH 0.2.2 ───────────────────────────────────────────────────
+console.warn('活体验证会创建并归档探测会话、写回 qq-mode，消耗一次模型回合，'
+  + '并将 DSH 全局默认模型改为 deepseek-official/deepseek-flash/max；不会自动恢复默认模型。');
 // 鉴权走与桥接生产代码同一条路：用 ~/.dsh 里持久化的签名密钥离线铸造会话 Cookie。
 // 旧写法（从 ~/.dsh/guard/logs/server-*.out.log 里抓 `?token=`）在 0.1.7 已经死了：
 //   · 进程启动 token 是现生成的 32 字节随机数，只存在内存 WeakMap 里，不落盘；
@@ -311,13 +315,15 @@ check('closed-agent 兜底所需的 standard 预设可用', presetIds.includes('
 const qqMode = st.value?.namespaces?.find((n) => n.ns === 'qq-mode');
 check('settings/describe 列出 qq-mode 命名空间', qqMode !== undefined, st.value?.namespaces?.map((n) => n.ns).length + ' 个命名空间');
 if (qqMode) {
-  check('qq-mode 带 mode 字段', typeof qqMode.value?.mode === 'string', JSON.stringify(qqMode.value));
+  // settings 的 user 层可能已更新而运行时 value 尚未热更新，不能把旧模式写回。
+  const currentMode = Object.hasOwn(qqMode.user ?? {}, 'mode') ? qqMode.user.mode : qqMode.value?.mode;
+  check('qq-mode 带 mode 字段', typeof currentMode === 'string', JSON.stringify({ mode: currentMode }));
   check('qq-mode 带 revision（写入所需）', Number.isInteger(qqMode.revision), String(qqMode.revision));
   // settings/update 是**多参数** RPC：args 是 { ns, patch, expectedRevision } 平铺，
   // 不是 { request: {...} }（传 request 会被网关拒为
   // `gateway/arguments-invalid: missing "ns", "patch"; unexpected "request"`）。
   const writeBack = await rpc('settings/update', {
-    ns: 'qq-mode', patch: { mode: qqMode.value.mode }, expectedRevision: qqMode.revision,
+    ns: 'qq-mode', patch: { mode: currentMode }, expectedRevision: qqMode.revision,
   });
   check(
     'settings/update 可写 qq-mode（参数为平铺多参数，非 request 包装）',
@@ -327,14 +333,12 @@ if (qqMode) {
 }
 
 // ── 5b. session/projections：读会话队列的主路径 ──────────────────────────────
-const probeDir = path.join(os.tmpdir(), 'qq-bridge-verify-020');
-fs.rmSync(probeDir, { recursive: true, force: true });
-fs.mkdirSync(probeDir, { recursive: true });
+const probeDir = createProbeDirectory();
 const api = new NodeApiClient(BASE, undefined, {});
-await api.ensureAuth();
 
 let probeSessionId = null;
 try {
+  await api.ensureAuth();
   const created = unwrap(await api.sessions.create({ cwd: probeDir, agentPreset: 'qq-chat-v2' }), 'session.create');
   probeSessionId = created.sessionId;
   check('session/create 挂 qq-chat-v2 preset 成功', typeof probeSessionId === 'string' && probeSessionId.length > 0, probeSessionId);
@@ -354,20 +358,10 @@ try {
   // ── 5c. control baseline 形状（0.2.0 的核心断裂点）────────────────────────
   const url = new URL('/api/remote.mux', BASE);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-  const baseline = await new Promise((resolve, reject) => {
-    const socket = new WebSocket(url, { headers: { cookie: api.cookie } });
-    const streamId = randomUUID();
-    const timer = setTimeout(() => { try { socket.close(); } catch {} reject(new Error('control baseline 超时')); }, 15_000);
-    const finish = (err, value) => { clearTimeout(timer); try { socket.close(); } catch {} err ? reject(err) : resolve(value); };
-    socket.addEventListener('open', () => socket.send(JSON.stringify({ type: 'open', streamId, endpoint: 'session/control', payload: { args: {} } })));
-    socket.addEventListener('message', (ev) => {
-      let m; try { m = JSON.parse(ev.data); } catch { return; }
-      if (m.streamId !== streamId) return;
-      if (m.type === 'item' && m.value?.type === 'baseline') finish(null, m.value);
-      else if (m.type === 'error' || m.type === 'end') finish(new Error(`control ${m.type}${m.error?.code ? ` (${m.error.code})` : ''}`));
-    });
-    socket.addEventListener('error', () => finish(new Error('control socket error')));
-  }).catch((error) => { skip('session/control 开场 baseline 形状', error.message); return null; });
+  const baseline = await probeMux({
+    url, cookie: api.cookie, endpoint: 'session/control', args: {}, timeoutMs: 15_000,
+    onItem: (value) => value?.type === 'baseline' ? value : undefined,
+  }).catch((error) => { check('session/control 开场 baseline 形状', false, error.message); return null; });
   if (baseline) {
     const bv = baseline.value;
     check('control baseline 是 value.projections（0.2.0 形状）',
@@ -391,19 +385,10 @@ try {
     retireError === null, retireError?.message ?? `removed=${retired?.removed}`);
 
   // ── 5e. $events ready 帧 ─────────────────────────────────────────────────
-  const readyFrame = await new Promise((resolve) => {
-    const socket = new WebSocket(url, { headers: { cookie: api.cookie } });
-    const streamId = randomUUID();
-    const timer = setTimeout(() => { try { socket.close(); } catch {} resolve(null); }, 10_000);
-    const finish = (value) => { clearTimeout(timer); try { socket.close(); } catch {} resolve(value); };
-    socket.addEventListener('open', () => socket.send(JSON.stringify({ type: 'open', streamId, endpoint: '$events', payload: { args: {} } })));
-    socket.addEventListener('message', (ev) => {
-      let m; try { m = JSON.parse(ev.data); } catch { return; }
-      if (m.streamId !== streamId || m.type !== 'item') return;
-      if (m.value?.type === 'ready') finish(m.value);
-    });
-    socket.addEventListener('error', () => finish(null));
-  });
+  const readyFrame = await probeMux({
+    url, cookie: api.cookie, endpoint: '$events', args: {}, timeoutMs: 10_000,
+    onItem: (value) => value?.type === 'ready' ? value : undefined,
+  }).catch(() => null);
   check('$events 下发 ready 帧并带 clientId',
     typeof readyFrame?.clientId === 'string' && readyFrame.clientId.length > 0,
     readyFrame ? `${String(readyFrame.clientId).slice(0, 8)}…` : '未收到 ready 帧');
@@ -422,31 +407,8 @@ try {
   try {
     const turnSession = unwrap(await api.sessions.create({ cwd: probeDir, agentPreset: 'qq-chat-v2' }), 'session.create(turn)');
     turnSessionId = turnSession.sessionId;
-    await api.sessions.selectModel({ sessionId: turnSessionId, provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'max' });
-    const turn = await new Promise((resolve) => {
-      const socket = new WebSocket(url, { headers: { cookie: api.cookie } });
-      const streamId = randomUUID();
-      let text = '';
-      const timer = setTimeout(() => { try { socket.close(); } catch {} resolve({ reason: null, text, timeout: true }); }, 90_000);
-      const finish = (value) => { clearTimeout(timer); try { socket.close(); } catch {} resolve(value); };
-      socket.addEventListener('open', () => {
-        socket.send(JSON.stringify({ type: 'open', streamId, endpoint: 'session/follow', payload: { args: { request: { address: { kind: 'session', sessionId: turnSessionId }, activate: true } } } }));
-        setTimeout(() => {
-          api.sessions.prompt({ sessionId: turnSessionId, mode: 'queue', content: [{ type: 'text', text: '只回复两个字：收到' }] }).catch(() => {});
-        }, 800);
-      });
-      socket.addEventListener('message', (ev) => {
-        let m; try { m = JSON.parse(ev.data); } catch { return; }
-        if (m.streamId !== streamId || m.type !== 'item') return;
-        const e = m.value?.type === 'event' ? m.value.event : null;
-        if (!e) return;
-        if (e.type === 'assistant/message') {
-          for (const block of e.data?.message?.content ?? []) if (block?.type === 'text') text += block.text;
-        }
-        if (e.type === 'turn/end') finish({ reason: e.data?.reason, text });
-      });
-      socket.addEventListener('error', () => finish({ reason: null, text, error: true }));
-    });
+    unwrap(await api.sessions.selectModel({ sessionId: turnSessionId, provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'max' }), 'session.selectModel(turn)');
+    const turn = await probeTurn(api, turnSessionId, { url, cookie: api.cookie, timeoutMs: 90_000 });
     const kind = typeof turn.reason === 'string' ? turn.reason : turn.reason?.kind;
     const why = turn.reason?.error?.message;
     check('preset 真跑一回合：提示词变量可解析且正常结束',
@@ -455,16 +417,20 @@ try {
   } catch (error) {
     check('preset 真跑一回合：提示词变量可解析且正常结束', false, error?.message ?? String(error));
   } finally {
-    if (turnSessionId) { try { await api.callUnary('workspace/archiveSession', { sessionId: turnSessionId }); } catch {} }
+    if (turnSessionId) {
+      const errors = await cleanupProbeSession(api, turnSessionId);
+      check('真实回合探测会话已停止并归档', errors.length === 0, errors.join('; '));
+    }
   }
 } catch (error) {
   check('DSH 实测段无未捕获异常', false, error?.message ?? String(error));
 } finally {
   if (probeSessionId) {
-    try { await api.callUnary('session/cancel', { sessionId: probeSessionId }); } catch {}
-    try { await api.callUnary('workspace/archiveSession', { sessionId: probeSessionId }); } catch {}
+    const errors = await cleanupProbeSession(api, probeSessionId);
+    check('协议探测会话已停止并归档', errors.length === 0, errors.join('; '));
   }
-  try { fs.rmSync(probeDir, { recursive: true, force: true }); } catch {}
+  try { fs.rmSync(probeDir, { recursive: true, force: true }); }
+  catch (error) { check('临时探测目录已删除', false, error?.message ?? String(error)); }
 }
 
 // 点号 endpoint（旧协议）应返回纯文本 404（不是 JSON 信封）——证明协议确为斜杠式

@@ -590,8 +590,8 @@ function normalizeReasoningEffort(value) {
   if (!v || /\p{Cc}/u.test(v)) {
     throw new Error(`思考强度不能为空或包含控制字符；${REASONING_EFFORT_NONE} 表示不指定`);
   }
-  const normalized = v.toLowerCase();
-  if (normalized === REASONING_EFFORT_NONE || REASONING_EFFORT_OPTIONS.includes(normalized)) return normalized;
+  // none 是桥接保留的哨兵；其余档位是适配器的精确 ID，不能改写大小写。
+  if (v.toLowerCase() === REASONING_EFFORT_NONE) return REASONING_EFFORT_NONE;
   return v;
 }
 
@@ -2568,8 +2568,7 @@ async function main() {
   const wakeConfigMissCount = new Map();
   const reverse = new Map(); // sessionId -> conv key
   for (const [key, sessionId] of Object.entries(state.sessions)) reverse.set(sessionId, key);
-  // 新版 DSH 事件流需要显式 follow；启动时为已持久化的 QQ 会话补上。
-  for (const sessionId of Object.values(state.sessions)) api.events.follow(sessionId);
+  // 持久化会话要等当前模式/preset 校验后才 follow；activate 会恢复其待办任务。
   const sessionPromises = new Map(); // key -> create promise（防并发重复创建）
   const promptQueues = new Map(); // key -> { queue: [], running: false }：每个 QQ 会话串行投递 DSH prompt，保证 turn 顺序
 
@@ -3036,7 +3035,7 @@ async function main() {
   };
 
   // 从 DSH settings 读取桥接模式；命名空间未注册时回退本地 state/mode.json
-  async function refreshMode() {
+  async function refreshMode({ requireOnline = false } = {}) {
     try {
       const s = unwrap(await api.settings.describe({}), 'settings.describe');
       // DSH 的默认 preset（`agent-presets` 命名空间的 default）——closed-agent 的兜底值来源
@@ -3079,7 +3078,7 @@ async function main() {
         modeKnown = true;
         return;
       }
-    } catch {}
+    } catch (error) { if (requireOnline) throw error; }
     const local = readJsonSafe(path.join(STATE_DIR, 'mode.json'), null);
     const fromLocal = local ? normalizeModeInput(local.mode) : null;
     if (fromLocal) currentMode = fromLocal;
@@ -3090,15 +3089,17 @@ async function main() {
   }
 
   /** 拉取 DSH 当前可用的 agent preset 清单（供控制台下拉与 closed-agent 兜底使用）。 */
-  async function refreshPresetList() {
+  async function refreshPresetList({ requireOnline = false } = {}) {
     try {
       const { presets: list } = unwrap(await api.agentPresets.list({}), 'agentPresets.list');
+      if (requireOnline && list.length === 0) throw new Error('DSH preset 清单为空，暂不恢复会话');
       dshPresetIds = list.map((p) => String(p.id));
       if (!dshDefaultPreset) {
         const marked = list.find((p) => p.isDefault === true);
         if (marked) dshDefaultPreset = String(marked.id);
       }
     } catch (error) {
+      if (requireOnline) throw error;
       log(`获取 DSH preset 列表失败：${error?.message ?? error}（会话将按配置的 preset 尝试创建）`);
     }
   }
@@ -4608,11 +4609,13 @@ async function main() {
             const group = (catalog?.groups ?? []).find((g) => g?.id === provider);
             const entry = (group?.models ?? []).find((m) => m?.id === model);
             const efforts = entry?.reasoning?.efforts;
-            if (Array.isArray(efforts)) {
-              const valid = efforts.filter((e) => typeof e?.id === 'string' && e.id.length > 0);
+            // DSH 对无思考能力的模型省略 reasoning；这仍是成功读取到的能力，
+            // 不能当作目录失败而虚构 low/high/max 档位。
+            if (entry && (entry.reasoning === undefined || Array.isArray(efforts))) {
+              const valid = (efforts ?? []).filter((e) => typeof e?.id === 'string' && e.id.length > 0);
               options = valid.map((e) => e.id);
               labels = Object.fromEntries(valid.map((e) => [e.id, { name: e.name ?? '', description: e.description ?? '' }]));
-              providerDefault = entry.reasoning.defaultEffort ?? null;
+              providerDefault = entry.reasoning?.defaultEffort ?? null;
               catalogSource = 'dsh';
             }
           } catch (error) {
@@ -8743,7 +8746,8 @@ async function main() {
   // 'not-found' 表示 DSH 侧会话已经不存在（DSH 重启、异常退出、归档竞态），
   // 本地映射已失效，调用方必须退役重建，否则每条消息都会对着一个不存在的会话重试。
   async function ensureChatModel(sessionId) {
-    if (modelAppliedSessions.get(sessionId) === modelSelectionEpoch) return 'applied';
+    const selectionEpoch = modelSelectionEpoch;
+    if (modelAppliedSessions.get(sessionId) === selectionEpoch) return 'applied';
     const provider = String(cfg.dsh?.provider || 'deepseek-official');
     const model = String(cfg.dsh?.model || 'deepseek-flash');
     const configuredEffort = String(cfg.dsh?.reasoningEffort || REASONING_EFFORT_DEFAULT);
@@ -8766,7 +8770,8 @@ async function main() {
           const payload = { sessionId, provider, model };
           if (plan.effort) payload.reasoningEffort = plan.effort;
           const result = unwrap(await api.sessions.selectModel(payload), 'session.selectModel');
-          modelAppliedSessions.set(sessionId, modelSelectionEpoch);
+          // selectModel 等待期间控制台可能保存了新强度；旧请求不能替新配置标记成功。
+          modelAppliedSessions.set(sessionId, selectionEpoch);
           log(`已设置会话模型 ${sessionId} -> ${result.selected.provider}/${result.selected.model} (${result.selected.reasoningEffort ?? '默认'})`);
           return 'applied';
         } catch (error) {
@@ -8784,7 +8789,7 @@ async function main() {
     const message = String(lastError?.message ?? lastError ?? '');
     if (/not[- ]?found/i.test(message)) {
       // 终态失败：记下 epoch，避免退役前（或退役失败时）被反复重试刷屏。
-      modelAppliedSessions.set(sessionId, modelSelectionEpoch);
+      modelAppliedSessions.set(sessionId, selectionEpoch);
       return 'not-found';
     }
     return 'failed';
@@ -12273,6 +12278,16 @@ async function main() {
     return { collector, ended };
   }
 
+  async function* sessionEvents() {
+    // follow(activate:true) 会在快照到达前恢复冷 Agent，不能先订阅再等后台探活撤权。
+    // 每次连接都重新读 DSH：断线期间模式/管理员/preset 也可能已变，旧缓存不足以授权。
+    await withTimeout(refreshMode({ requireOnline: true }), DSH_CONTROL_TIMEOUT_MS, '恢复会话模式校验');
+    await withTimeout(refreshPresetList({ requireOnline: true }), DSH_CONTROL_TIMEOUT_MS, '恢复会话 preset 校验');
+    reconcileSessionPolicies();
+    for (const sessionId of Object.values(state.sessions)) api.events.follow(sessionId);
+    yield* api.events.mux({});
+  }
+
   async function pumpMux() {
     // 事件流重连退避：DSH 侧流被立刻关闭时（例如版本不兼容，见 issue #34），
     // 固定 3 秒重连会以每分钟 20 行的速度刷屏，真正有用的错误反而被淹没。
@@ -12282,7 +12297,7 @@ async function main() {
       let framesThisStream = 0;
       try {
         log('连接 DSH 事件流…');
-        for await (const envelope of api.events.mux({})) {
+        for await (const envelope of sessionEvents()) {
           framesThisStream += 1;
           const frame = envelope.payload;
           // 会话开场快照：喂 token 账本 + 重建未结束回合；其中的**历史** turn/end 绝不能

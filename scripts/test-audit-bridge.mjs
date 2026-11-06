@@ -12,9 +12,11 @@ async function test(name, run, options) {
 await test('#153 startup accepts explicit none', async (h) => {
   assert.equal(h.cfg.dsh.reasoningEffort, 'none');
 }, { config: { dsh: { reasoningEffort: 'none' } } });
-await test('#153 startup preserves adapter-owned effort case', async (h) => {
-  assert.equal(h.cfg.dsh.reasoningEffort, 'xHigh');
-}, { config: { dsh: { reasoningEffort: 'xHigh' } } });
+for (const effort of ['xHigh', 'HIGH', 'Low', 'MAX']) {
+  await test(`#153 startup preserves adapter-owned effort ${effort}`, async (h) => {
+    assert.equal(h.cfg.dsh.reasoningEffort, effort);
+  }, { config: { dsh: { reasoningEffort: effort } } });
+}
 await test('#153 omitted effort keeps the max default', async (h) => {
   assert.equal(h.cfg.dsh.reasoningEffort, 'max');
 }, { config: { dsh: {} } });
@@ -390,23 +392,27 @@ await test('malformed HTTP request targets return 400 without hanging', async (h
     h.api.callUnary = async (method) => {
       assert.equal(method, 'session.modelCatalog');
       return { result: { ok: true, value: { groups: [{ id: 'deepseek-official', models: [{
-        id: 'deepseek-flash', reasoning: { efforts: [{ id: 'low', name: 'Low' }, { id: 'xHigh', name: 'Extra High' }], defaultEffort: 'xHigh' }
+        id: 'deepseek-flash', reasoning: { efforts: ['low', 'xHigh', 'HIGH', 'Low', 'MAX'].map(id => ({ id, name: id })), defaultEffort: 'xHigh' }
       }] }] } } };
     };
     const adminOk = await call('/api/dsh/model', 'GET', adminOnly);
     assert.equal(adminOk.status, 200, '管理员应能访问 /api/dsh/model');
     const modelView = JSON.parse(adminOk.body);
-    assert.deepEqual(modelView.options, ['low', 'xHigh', 'none'], '#153 保留适配器档位并始终提供不下发选项');
+    assert.deepEqual(modelView.options, ['low', 'xHigh', 'HIGH', 'Low', 'MAX', 'none'], '#153 保留适配器档位并始终提供不下发选项');
     assert.equal(modelView.providerDefault, 'xHigh');
     h.api.callUnary = async () => ({ result: { ok: true, value: { groups: [{ id: 'deepseek-official', models: [{
-      id: 'deepseek-flash', reasoning: { efforts: [] }
+      id: 'deepseek-flash', name: 'Model without reasoning controls'
     }] }] } } });
     const noEffortView = JSON.parse((await call('/api/dsh/model', 'GET', adminOnly)).body);
     assert.deepEqual(noEffortView.options, ['none'], '#153 模型无思考档位时只提供不下发');
-    const customSave = await call('/api/dsh/effort', 'POST', adminOnly, { reasoningEffort: 'xHigh' });
-    assert.equal(customSave.status, 200);
-    assert.equal(h.cfg.dsh.reasoningEffort, 'xHigh');
-    assert.equal(JSON.parse((await call('/api/dsh/model', 'GET', adminOnly)).body).reasoningEffort, 'xHigh');
+    assert.equal(noEffortView.catalogSource, 'dsh', '省略 reasoning 是目录公布的无思考能力，不能回退内置档位');
+    assert.equal(noEffortView.providerDefault, null);
+    for (const effort of ['xHigh', 'HIGH', 'Low', 'MAX']) {
+      const customSave = await call('/api/dsh/effort', 'POST', adminOnly, { reasoningEffort: effort });
+      assert.equal(customSave.status, 200);
+      assert.equal(h.cfg.dsh.reasoningEffort, effort);
+      assert.equal(JSON.parse((await call('/api/dsh/model', 'GET', adminOnly)).body).reasoningEffort, effort);
+    }
     const noneSave = await call('/api/dsh/effort', 'POST', adminOnly, { reasoningEffort: 'none' });
     assert.equal(noneSave.status, 200);
     assert.equal(h.cfg.dsh.reasoningEffort, 'none');

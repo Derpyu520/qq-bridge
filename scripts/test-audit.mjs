@@ -20,6 +20,8 @@ const tests = [
   // 且只留下一行日志 —— 必须有登记期断言钉住（活 DSH 侧的实测见
   // scripts/test-dsh-session-retire.mjs）。
   'test-dsh-inbox-projection.mjs',
+  // 活体适配验证自身的离线协议回归：必要端点不能假通过，超时后必须停止并归档。
+  'test-adaptation-probes.mjs',
   'test-md-to-plain.mjs', 'test-slang-learn.mjs', 'test-mux-reconnect.mjs',
   // restart.bat 只能停止经锁/PID 验证的本实例，不能按全机进程名误杀其他项目。
   'test-restart-instance.mjs',

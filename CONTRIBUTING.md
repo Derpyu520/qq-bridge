@@ -33,7 +33,7 @@ npm run test:audit
 | `npm run privacy-scan:history` | 需要完整 clone | 追加扫描全部 git 历史（发布前必跑，历史未清理时会报出已知泄漏） |
 | `npm run verify:adaptation` | **需要活的 DSH** | DSH 协议适配对账（含活体回合），CI 里跑不了 |
 | `npm run test:mcp-servers` | 离线 | 三个 MCP server 的工具清单 |
-| `node src/self-test.js` | 需要 DSH + SnowLuma 在线 | 端到端链路 |
+| `node src/self-test.js` | 仅需 DSH 在线 | DSH 会话、prompt 与事件流；不验证 QQ / SnowLuma 收发 |
 
 `privacy-scan` 的规则文件 `scripts/privacy-rules.json` **不进仓库**（它本身会记录敏感判断依据）。
 没有它时扫描只走内置默认规则；干净 clone 上应当**直接通过**（内置规则已把测试夹具与文档占位符排除）。

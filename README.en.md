@@ -4,6 +4,8 @@
 
 A local message bridge that forwards message events and AI replies between the **OneBot v11 interfaces provided by SnowLuma** and [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness).
 
+Current release candidate: `v0.2.2-rc1` (GitHub prerelease), targeting DSH `0.2.2-rc.1`.
+
 > [!IMPORTANT]
 > **qq-bridge is independently maintained. It is not a SnowLuma subproject and is not affiliated with SnowLuma, DeepSeek, or Tencent / QQ.**
 > It communicates through the **OneBot v11 interfaces** exposed by SnowLuma. The bridge and the SnowLuma backend are deployed and maintained independently, without affiliation, partnership, or endorsement. OneBot v11 is a public protocol, not a proprietary SnowLuma protocol.
