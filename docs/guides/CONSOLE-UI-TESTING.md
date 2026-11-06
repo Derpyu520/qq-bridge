@@ -29,7 +29,7 @@ npm run test:console-ui          # 等价于 node scripts/test-console-ui.mjs
 node scripts/test-console-ui.mjs --artifacts=docs/ui-verification
 ```
 
-脚本使用 Playwright 和 Chromium。优先使用项目内安装的 `playwright`；Windows 上若未安装 Playwright，会自动改用本机 Chrome / Edge，无需下载浏览器。其他环境可安装 Playwright 及其浏览器，或通过以下环境变量指定：
+脚本需要 Playwright 模块，优先使用项目内安装的 `playwright`。Windows 上会优先使用已安装的 Chrome / Edge，省去额外下载浏览器；未找到本机浏览器时使用 Playwright 的 Chromium。可安装 Playwright 及其浏览器，或通过以下环境变量指定：
 
 - `PLAYWRIGHT_MODULE`：Playwright 模块目录（例如 `npm install --no-save playwright` 后指向 `node_modules/playwright`）。
 - `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`：Chromium / Chrome 可执行文件。
@@ -45,14 +45,15 @@ node scripts/test-console-ui.mjs --artifacts=docs/ui-verification
 - 一代社交参数与会话阶段。
 - 黑话添加、搜索、标签切换、确认对话框与学习参数。
 - 测试消息、AI 提醒仅发送到 mock API。
-- 全部 24 次写请求与改造前的 API payload 基线逐项完全比较。
+- 原有 24 次写请求与改造前的 API payload 基线逐项比较；二代配置仅剥离新增的 `sendVoice` 字段，并先独立断言其默认值。
+- ACL「重新检测」请求与语音开关双向保存独立验证，不写入历史基线。
 - 手机 390px 与平板 768px 下十个视图没有页面级横向溢出。
 - 深色模式：切换生效、写入 `localStorage`、刷新后保持、`aria-pressed` 与 `color-scheme` 同步、正文对比度 ≥ 7:1、深色下 390 / 768px 无横向溢出。
 - 未做选择时跟随系统 `prefers-color-scheme`。
 - `prefers-reduced-motion: reduce` 下关闭背景动效、页面切换动画与过渡。
 - 人格管理全流程：新建 → 点列表载入编辑（内容回填、按钮切到「保存修改」）→ 保存修改 → 改名保存（先重命名再保存）→ 删除（确认框自动接受），每步都断言列表随之更新。
 - 仿真提示词：默认可查看且只读、解锁后可编辑、保存后回到只读并提示「需重启 DSH」。
-- 思考强度：档位来自 DSH 公布的能力（low/high/max）、默认 max、可切换保存，并断言页面明示会连带修改 DSH 全局默认。
+- 思考强度：档位来自 DSH 公布的能力（含适配器自定义档位）、默认 max，可切换保存；另有「不指定（跟随模型）」，并断言页面明示会连带修改 DSH 全局默认。
 - 无 JavaScript 错误、未知 API 或外部网络请求。
 
 新增的控制台 API 都已在 `console-ui-fixture.mjs` 里 mock；**改动控制台时若加了新接口，必须同步补 mock**，否则本套件会在「未知 API」这一项失败。
@@ -62,6 +63,9 @@ node scripts/test-console-ui.mjs --artifacts=docs/ui-verification
 ## 基线说明
 
 `console-ui-legacy-ids.json` 保存改造前的 225 个元素 ID。`console-ui-contracts.json` 来自原控制台在相同 fixture 中执行相同操作后的 24 次写请求，包含二代配置的完整嵌套参数。
+
+新增的 `sendVoice` 在历史基线比较前断言为默认 `true`，比较时仅移除这一字段；
+随后另测 `false → true` 两次保存，并严格比较其余完整配置。ACL「重新检测」也在基线比较后独立验证。
 
 只有后端契约经过明确调整时才更新基线。`scripts/fixtures/console.before.html` 是改造前的原版控制台（通常无需改动），重录时运行：
 

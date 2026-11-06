@@ -23,7 +23,7 @@ qq-bridge 会接触本机 OneBot 接入令牌、DSH 会话 Cookie 与控制台�
 这是一个单人维护的项目。**没有 SLA、没有 72 小时承诺**。承诺只有一条：
 只要报告有效，修完之后会在 release notes 里写明，并在 advisory 里登记你的贡献（除非你要求匿名）。
 
-- 受支持版本：**最新一个 release 线**（当前 `v0.2.1-rN`）。更早的版本只做"是否受影响"的确认，不单独发补丁。
+- 受支持版本：**最新一个 release 线**，具体版本以 [GitHub Releases](https://github.com/Derpyu520/qq-bridge/releases) 为准。更早的版本只做"是否受影响"的确认，不单独发补丁。
 - 已公开讨论过、上游已有 CVE 的依赖问题：走 Dependabot，不必单独上报。
 
 ---

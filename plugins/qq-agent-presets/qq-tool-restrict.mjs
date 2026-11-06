@@ -122,8 +122,9 @@ export const inject = ['tools']
 const LOCAL_EXECUTION_TOOLS = [
   // shell / 进程
   'pwsh', 'bash',
-  // 文件读写
-  'read', 'read_image', 'write', 'edit', 'str_replace_editor',
+  // 文件读写（0.2.2 起 dsh-tool-fs 提供 apply_patch；默认 applyPatch=false，
+  // QQ preset 也不挂 tool-fs。列进守卫是回归网：一旦某个 composition 打开它，立刻被挡。）
+  'read', 'read_image', 'write', 'edit', 'apply_patch', 'str_replace_editor',
   // 文件检索
   'glob', 'grep',
   // 自带运行时（Python/Node/pnpm 的绝对路径）⇒ 等于把"跑代码"递给模型
@@ -149,7 +150,10 @@ const LOCAL_EXECUTION_TOOLS = [
   //   ③ 插件装载权（= 任意代码执行）
   'plugin_manager',
   //   ④ 无人值守的自我调度
-  'schedule_create', 'schedule_list', 'schedule_update', 'schedule_delete',
+  //   0.2.2 对账（2026-11-05）：调度面改名为 create/list/view/edit。QQ preset 默认不挂
+  //   调度工具，所以这不是当前暴露；旧名已不存在，新名补进名单作回归网，防止未来
+  //   全局层 / composition 挂载时漏藏。
+  'schedule_create', 'schedule_list', 'schedule_view', 'schedule_edit',
   // 0.2.1 新增对账（2026-10-22，见上方长注释）：
   //   ① dsh-base 默认启用 ⇒ 全局层继承
   'working_directory',

@@ -581,15 +581,17 @@ let modelCatalogInFlight = null;
 // 控制台改强度后递增它，让已在运行的会话在下一条消息重新 selectModel；
 // 放在模块级是为了不依赖 main() 内部声明的执行顺序（避免 TDZ）。
 let modelSelectionEpoch = 0;
-// DeepSeek provider 明确支持的取值（见 dsh-llm-deepseek：其它值会抛 UNSUPPORTED_REASONING_EFFORT）。
-// 'off' 虽然合法（关闭思考），但 QQ 聊天助手依赖思考，控制台不提供该档。
+// 目录不可用时的 DeepSeek 兜底档位。DSH 的档位 id 由适配器定义，其他模型可返回不同取值。
 const REASONING_EFFORT_OPTIONS = ['low', 'high', 'max'];
 const REASONING_EFFORT_DEFAULT = 'max';
+const REASONING_EFFORT_NONE = 'none';
 function normalizeReasoningEffort(value) {
-  const v = String(value ?? '').trim().toLowerCase();
-  if (!REASONING_EFFORT_OPTIONS.includes(v)) {
-    throw new Error(`思考强度只能是 ${REASONING_EFFORT_OPTIONS.join(' / ')}`);
+  const v = String(value ?? '').trim();
+  if (!v || /\p{Cc}/u.test(v)) {
+    throw new Error(`思考强度不能为空或包含控制字符；${REASONING_EFFORT_NONE} 表示不指定`);
   }
+  // none 是桥接保留的哨兵；其余档位是适配器的精确 ID，不能改写大小写。
+  if (v.toLowerCase() === REASONING_EFFORT_NONE) return REASONING_EFFORT_NONE;
   return v;
 }
 
@@ -2566,8 +2568,7 @@ async function main() {
   const wakeConfigMissCount = new Map();
   const reverse = new Map(); // sessionId -> conv key
   for (const [key, sessionId] of Object.entries(state.sessions)) reverse.set(sessionId, key);
-  // 新版 DSH 事件流需要显式 follow；启动时为已持久化的 QQ 会话补上。
-  for (const sessionId of Object.values(state.sessions)) api.events.follow(sessionId);
+  // 持久化会话要等当前模式/preset 校验后才 follow；activate 会恢复其待办任务。
   const sessionPromises = new Map(); // key -> create promise（防并发重复创建）
   const promptQueues = new Map(); // key -> { queue: [], running: false }：每个 QQ 会话串行投递 DSH prompt，保证 turn 顺序
 
@@ -3034,7 +3035,7 @@ async function main() {
   };
 
   // 从 DSH settings 读取桥接模式；命名空间未注册时回退本地 state/mode.json
-  async function refreshMode() {
+  async function refreshMode({ requireOnline = false } = {}) {
     try {
       const s = unwrap(await api.settings.describe({}), 'settings.describe');
       // DSH 的默认 preset（`agent-presets` 命名空间的 default）——closed-agent 的兜底值来源
@@ -3077,7 +3078,7 @@ async function main() {
         modeKnown = true;
         return;
       }
-    } catch {}
+    } catch (error) { if (requireOnline) throw error; }
     const local = readJsonSafe(path.join(STATE_DIR, 'mode.json'), null);
     const fromLocal = local ? normalizeModeInput(local.mode) : null;
     if (fromLocal) currentMode = fromLocal;
@@ -3088,15 +3089,17 @@ async function main() {
   }
 
   /** 拉取 DSH 当前可用的 agent preset 清单（供控制台下拉与 closed-agent 兜底使用）。 */
-  async function refreshPresetList() {
+  async function refreshPresetList({ requireOnline = false } = {}) {
     try {
       const { presets: list } = unwrap(await api.agentPresets.list({}), 'agentPresets.list');
+      if (requireOnline && list.length === 0) throw new Error('DSH preset 清单为空，暂不恢复会话');
       dshPresetIds = list.map((p) => String(p.id));
       if (!dshDefaultPreset) {
         const marked = list.find((p) => p.isDefault === true);
         if (marked) dshDefaultPreset = String(marked.id);
       }
     } catch (error) {
+      if (requireOnline) throw error;
       log(`获取 DSH preset 列表失败：${error?.message ?? error}（会话将按配置的 preset 尝试创建）`);
     }
   }
@@ -4592,7 +4595,7 @@ async function main() {
         if (req.method === 'GET' && url.pathname === '/api/dsh/model') {
           const provider = String(cfg.dsh?.provider || 'deepseek-official');
           const model = String(cfg.dsh?.model || 'deepseek-flash');
-          // 档位优先取 DSH 实际公布的能力（DSH 换档位词汇或换 provider 时自动跟随），失败退回内置白名单。
+          // 档位优先取 DSH 实际公布的能力（DSH 换档位词汇或换 provider 时自动跟随），失败退回内置清单。
           let options = REASONING_EFFORT_OPTIONS.slice();
           let labels = {};
           let providerDefault = null;
@@ -4605,12 +4608,14 @@ async function main() {
             const catalog = unwrap(await modelCatalogInFlight, 'session.modelCatalog');
             const group = (catalog?.groups ?? []).find((g) => g?.id === provider);
             const entry = (group?.models ?? []).find((m) => m?.id === model);
-            const efforts = entry?.reasoning?.efforts ?? [];
-            const advertised = efforts.map((e) => String(e?.id ?? '')).filter((id) => REASONING_EFFORT_OPTIONS.includes(id));
-            if (advertised.length) {
-              options = advertised;
-              labels = Object.fromEntries(efforts.map((e) => [String(e.id), { name: e.name ?? '', description: e.description ?? '' }]));
-              providerDefault = entry.reasoning.defaultEffort ?? null;
+            const efforts = entry?.reasoning?.efforts;
+            // DSH 对无思考能力的模型省略 reasoning；这仍是成功读取到的能力，
+            // 不能当作目录失败而虚构 low/high/max 档位。
+            if (entry && (entry.reasoning === undefined || Array.isArray(efforts))) {
+              const valid = (efforts ?? []).filter((e) => typeof e?.id === 'string' && e.id.length > 0);
+              options = valid.map((e) => e.id);
+              labels = Object.fromEntries(valid.map((e) => [e.id, { name: e.name ?? '', description: e.description ?? '' }]));
+              providerDefault = entry.reasoning?.defaultEffort ?? null;
               catalogSource = 'dsh';
             }
           } catch (error) {
@@ -4621,6 +4626,7 @@ async function main() {
               log(`读取 DSH 模型能力失败，思考强度暂用内置清单：${reason}`);
             }
           }
+          options = [...new Set([...options, REASONING_EFFORT_NONE])];
           sendJson({
             provider,
             model,
@@ -8631,6 +8637,12 @@ async function main() {
   }
 
   function sendMessagesV2(key, messages, delays, replyToMessageId, atUserId = null) {
+    // 先审计整批：令牌可被拆成多段，每段都短于逐条闸门的 12 字符窗口。
+    // 必须在发送第一段前拒绝；onebotSend 仍会在实际发送时再次检查单条。
+    if (hasKnownTokenFragment(messages.join(''))) {
+      log(`发送内容包含会话令牌，已阻止整批发送 (${key})`);
+      return Promise.reject(new Error('发送内容包含会话令牌，已阻止发送'));
+    }
     let sendChain = sendChainFor(key);
     const assertSendAllowed = captureSendGuard(key, { ai: true });
     const [kind, id] = key.split(':');
@@ -8740,14 +8752,16 @@ async function main() {
   // 'not-found' 表示 DSH 侧会话已经不存在（DSH 重启、异常退出、归档竞态），
   // 本地映射已失效，调用方必须退役重建，否则每条消息都会对着一个不存在的会话重试。
   async function ensureChatModel(sessionId) {
-    if (modelAppliedSessions.get(sessionId) === modelSelectionEpoch) return 'applied';
+    const selectionEpoch = modelSelectionEpoch;
+    if (modelAppliedSessions.get(sessionId) === selectionEpoch) return 'applied';
     const provider = String(cfg.dsh?.provider || 'deepseek-official');
     const model = String(cfg.dsh?.model || 'deepseek-flash');
-    const effort = String(cfg.dsh?.reasoningEffort || REASONING_EFFORT_DEFAULT);
+    const configuredEffort = String(cfg.dsh?.reasoningEffort || REASONING_EFFORT_DEFAULT);
+    const effort = configuredEffort === REASONING_EFFORT_NONE ? '' : configuredEffort;
     let lastError = null;
     // 两段式降级（P1，repo-auditor 提的「effort 不对就 100% 哑掉」）：
     //   第 1 段按配置带 reasoningEffort；
-    //   第 2 段去掉 reasoningEffort。
+    //   第 2 段去掉 reasoningEffort。显式 none 直接进入这一段。
     // 为什么需要：模型目录里不同 provider 的模型不一定有 effort 维度（本机 dashscope
     // 的 deepseek-v4.1-flash-1017 / qwen3.8-* 就 efforts=[]），带 effort 的 selectModel 会被拒，
     // 而失败只留一行日志、消息仍靠 DSH 会话默认模型兜着——默认模型也不可用时，QQ 侧就变成
@@ -8762,14 +8776,18 @@ async function main() {
           const payload = { sessionId, provider, model };
           if (plan.effort) payload.reasoningEffort = plan.effort;
           const result = unwrap(await api.sessions.selectModel(payload), 'session.selectModel');
-          modelAppliedSessions.set(sessionId, modelSelectionEpoch);
+          // selectModel 等待期间控制台可能保存了新强度；旧请求不能替新配置标记成功。
+          modelAppliedSessions.set(sessionId, selectionEpoch);
           log(`已设置会话模型 ${sessionId} -> ${result.selected.provider}/${result.selected.model} (${result.selected.reasoningEffort ?? '默认'})`);
           return 'applied';
         } catch (error) {
           lastError = error;
-          log(`设置会话模型失败 ${sessionId}（${plan.label}，第 ${attempt}/2 次）: ${error?.message ?? error}`);
+          const reason = String(error?.message ?? error);
+          log(`设置会话模型失败 ${sessionId}（${plan.label}，第 ${attempt}/2 次）: ${reason}`);
           // 会话在 DSH 侧已经不存在：换 effort 重试也没意义，交给外层退役重建。
-          if (/not[- ]?found/i.test(String(error?.message ?? error))) break modelPlans;
+          if (/not[- ]?found/i.test(reason)) break modelPlans;
+          // 这个错误在 provider I/O 前即确定；其他 model-unavailable 仍保留同参数重试。
+          if (plan.effort && /does not support reasoning effort/i.test(reason)) break;
           if (attempt < 2) await sleep(1000);
         }
       }
@@ -8777,7 +8795,7 @@ async function main() {
     const message = String(lastError?.message ?? lastError ?? '');
     if (/not[- ]?found/i.test(message)) {
       // 终态失败：记下 epoch，避免退役前（或退役失败时）被反复重试刷屏。
-      modelAppliedSessions.set(sessionId, modelSelectionEpoch);
+      modelAppliedSessions.set(sessionId, selectionEpoch);
       return 'not-found';
     }
     return 'failed';
@@ -12266,6 +12284,16 @@ async function main() {
     return { collector, ended };
   }
 
+  async function* sessionEvents() {
+    // follow(activate:true) 会在快照到达前恢复冷 Agent，不能先订阅再等后台探活撤权。
+    // 每次连接都重新读 DSH：断线期间模式/管理员/preset 也可能已变，旧缓存不足以授权。
+    await withTimeout(refreshMode({ requireOnline: true }), DSH_CONTROL_TIMEOUT_MS, '恢复会话模式校验');
+    await withTimeout(refreshPresetList({ requireOnline: true }), DSH_CONTROL_TIMEOUT_MS, '恢复会话 preset 校验');
+    reconcileSessionPolicies();
+    for (const sessionId of Object.values(state.sessions)) api.events.follow(sessionId);
+    yield* api.events.mux({});
+  }
+
   async function pumpMux() {
     // 事件流重连退避：DSH 侧流被立刻关闭时（例如版本不兼容，见 issue #34），
     // 固定 3 秒重连会以每分钟 20 行的速度刷屏，真正有用的错误反而被淹没。
@@ -12275,7 +12303,7 @@ async function main() {
       let framesThisStream = 0;
       try {
         log('连接 DSH 事件流…');
-        for await (const envelope of api.events.mux({})) {
+        for await (const envelope of sessionEvents()) {
           framesThisStream += 1;
           const frame = envelope.payload;
           // 会话开场快照：喂 token 账本 + 重建未结束回合；其中的**历史** turn/end 绝不能

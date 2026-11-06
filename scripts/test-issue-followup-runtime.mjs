@@ -116,32 +116,103 @@ try {
     assert.equal(result.tried[0].token, '(已配置)');
   });
 
-  await test('#55 unsupported reasoning effort retries the configured provider/model without effort', async () => {
-    const source = fs.readFileSync(new URL('../src/bridge.js', import.meta.url), 'utf8');
-    const start = source.indexOf('  async function ensureChatModel(');
-    const end = source.indexOf('\n  async function ensureSession(', start);
+  const reasoningSource = fs.readFileSync(new URL('../src/bridge.js', import.meta.url), 'utf8');
+  const loadReasoningNormalizer = () => {
+    const start = reasoningSource.indexOf('function normalizeReasoningEffort(value)');
+    const end = reasoningSource.indexOf('\n}', start);
+    assert.ok(start >= 0 && end > start);
+    return vm.runInNewContext(`(${reasoningSource.slice(start, end + 2).trim()})`, {
+      REASONING_EFFORT_OPTIONS: ['low', 'high', 'max'], REASONING_EFFORT_NONE: 'none'
+    });
+  };
+  const loadEnsureChatModel = (effort, selectModel) => {
+    const start = reasoningSource.indexOf('  async function ensureChatModel(');
+    const end = reasoningSource.indexOf('\n  async function ensureSession(', start);
     assert.ok(start >= 0 && end > start);
     const requests = [];
     const context = {
       modelAppliedSessions: new Map(), modelSelectionEpoch: 1,
-      cfg: { dsh: { provider: 'fixture-provider', model: 'fixture-model', reasoningEffort: 'max' } },
-      REASONING_EFFORT_DEFAULT: 'max', unwrap, log() {}, sleep: async () => {},
+      cfg: { dsh: { provider: 'fixture-provider', model: 'fixture-model', reasoningEffort: effort } },
+      REASONING_EFFORT_DEFAULT: 'max', REASONING_EFFORT_NONE: 'none', unwrap, log() {}, sleep: async () => {},
       api: { sessions: { selectModel: async (payload) => {
         requests.push(payload);
-        if (payload.reasoningEffort) return { result: { ok: false, error: {
-          code: 'session/model-unavailable', message: 'model does not support reasoning effort "max"'
-        } } };
-        return { result: { ok: true, value: { selected: { provider: payload.provider, model: payload.model } } } };
+        return selectModel(payload, requests.length);
       } } }
     };
-    const ensure = vm.runInNewContext(`(${source.slice(start, end).trim()})`, context);
+    const ensure = vm.runInNewContext(`(${reasoningSource.slice(start, end).trim()})`, context);
+    return { ensure, requests, context };
+  };
+  const modelSuccess = (payload) => ({ result: { ok: true, value: {
+    selected: { provider: payload.provider, model: payload.model, reasoningEffort: payload.reasoningEffort }
+  } } });
+
+  await test('#153 normalizes none and preserves adapter-owned effort identifiers', async () => {
+    const normalize = loadReasoningNormalizer();
+    assert.equal(normalize('none'), 'none');
+    assert.equal(normalize(' NONE '), 'none');
+    for (const effort of ['xHigh', 'HIGH', 'Low', 'MAX']) assert.equal(normalize(effort), effort);
+    assert.throws(() => normalize(''));
+    assert.throws(() => normalize('high\nlow'));
+  });
+
+  await test('#153 none omits reasoningEffort on the first and only selection', async () => {
+    const { ensure, requests } = loadEnsureChatModel('none', modelSuccess);
     assert.equal(await ensure('fixture-session'), 'applied');
-    assert.ok(requests.some((r) => r.reasoningEffort === 'max'));
-    assert.equal(Object.hasOwn(requests.at(-1), 'reasoningEffort'), false);
+    assert.equal(requests.length, 1);
+    assert.equal(Object.hasOwn(requests[0], 'reasoningEffort'), false);
+  });
+
+  await test('#153 adapter-owned effort reaches selectModel without case folding', async () => {
+    const normalize = loadReasoningNormalizer();
+    for (const effort of ['xHigh', 'HIGH', 'Low', 'MAX']) {
+      const { ensure, requests } = loadEnsureChatModel(normalize(effort), modelSuccess);
+      assert.equal(await ensure('fixture-session'), 'applied');
+      assert.deepEqual(requests.map((r) => r.reasoningEffort), [effort]);
+    }
+  });
+
+  await test('#55 unsupported reasoning effort retries the configured provider/model without effort', async () => {
+    const { ensure, requests } = loadEnsureChatModel('max', (payload) => {
+      if (payload.reasoningEffort) return { result: { ok: false, error: {
+        code: 'session/model-unavailable', message: 'model does not support reasoning effort "max"'
+      } } };
+      return modelSuccess(payload);
+    });
+    assert.equal(await ensure('fixture-session'), 'applied');
+    assert.deepEqual(requests.map((r) => r.reasoningEffort ?? '<omitted>'), ['max', '<omitted>']);
     assert.ok(requests.every((r) => r.provider === 'fixture-provider' && r.model === 'fixture-model'));
     const count = requests.length;
     assert.equal(await ensure('fixture-session'), 'applied');
     assert.equal(requests.length, count);
+  });
+
+  await test('#153 other model-unavailable errors retain their same-plan retry', async () => {
+    const { ensure, requests } = loadEnsureChatModel('max', (payload, count) => {
+      if (count === 1) return { result: { ok: false, error: {
+        code: 'session/model-unavailable', message: 'Select an available model before sending a message.'
+      } } };
+      return modelSuccess(payload);
+    });
+    assert.equal(await ensure('fixture-session'), 'applied');
+    assert.deepEqual(requests.map((r) => r.reasoningEffort), ['max', 'max']);
+  });
+
+  await test('effort saved during an in-flight selection is applied on the next message', async () => {
+    let finishFirst;
+    const { ensure, requests, context } = loadEnsureChatModel('max', (payload, count) => {
+      if (count === 1) return new Promise((resolve) => { finishFirst = () => resolve(modelSuccess(payload)); });
+      return modelSuccess(payload);
+    });
+    const selecting = ensure('fixture-session');
+    assert.equal(requests.length, 1);
+    context.cfg.dsh.reasoningEffort = 'none';
+    context.modelSelectionEpoch += 1;
+    finishFirst();
+    assert.equal(await selecting, 'applied');
+    assert.equal(await ensure('fixture-session'), 'applied');
+    assert.deepEqual(requests.map((r) => r.reasoningEffort ?? '<omitted>'), ['max', '<omitted>']);
+    assert.equal(await ensure('fixture-session'), 'applied');
+    assert.equal(requests.length, 2, 'the new epoch is cached only after its selection completes');
   });
 
   await test('#54 directory ACL grants access before removing inheritance, with verification at each step', () => {

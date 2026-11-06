@@ -16,6 +16,86 @@ const slang = [
 const stickers = [{ id: 'scoped-sticker', source: 'manual', url: 'https://public.invalid/sticker',
   noteScope: OTHER, localNote: 'other-group-private-note', tags: ['private-tag'], usage: 'private-usage' }];
 
+// session/follow 的 activate 会恢复冷 Agent；启动/重连必须先验证持久映射的权限。
+{
+  const permitted = 'qqb-g-456-0123456789abcdef0123456789abcdef';
+  const revoked = 'qqb-g-789-0123456789abcdef0123456789abcdef';
+  const privileged = 'qqb-p-123-0123456789abcdef0123456789abcdef';
+  const savedState = {
+    sessions: { [KEY]: permitted, [OTHER]: revoked, 'private:123': privileged },
+    sessionPolicies: {
+      [KEY]: JSON.stringify(['chat', 'qq-chat', null]),
+      [OTHER]: JSON.stringify(['chat', 'qq-chat', null]),
+      'private:123': JSON.stringify(['closed-agent', 'standard', 123]),
+    },
+  };
+  const h = await bridgeHarness({ savedState });
+  try {
+    assert.deepEqual(h.calls.follows, [], 'startup must not register persisted sessions before checking DSH policy');
+    let release;
+    let entered;
+    const started = new Promise((resolve) => { entered = resolve; });
+    h.api.settings.describe = async () => {
+      entered();
+      await new Promise((resolve) => { release = resolve; });
+      return { result: { ok: true, value: { namespaces: [{ ns: 'qq-mode', value: { mode: 'chat' } }] } } };
+    };
+    h.api.agentPresets = { list: async () => ({ result: { ok: true, value: {
+      presets: [{ id: 'standard', isDefault: true }, { id: 'qq-chat' }, { id: 'qq-chat-v2' }],
+    } } }) };
+    let muxOpened = 0;
+    h.api.events.mux = async function* () { muxOpened++; yield { fixture: true }; };
+    const first = h.sessionEvents();
+    const opening = first.next();
+    await started;
+    assert.equal(muxOpened, 0, 'cold agents must stay inactive while policy lookup is pending');
+    assert.deepEqual(h.calls.follows, []);
+    release();
+    await opening;
+    assert.equal(muxOpened, 1);
+    assert.deepEqual(h.calls.follows, [permitted]);
+    assert.equal(h.state.sessions[OTHER], undefined, 'removed allowlist entry must retire before follow');
+    assert.equal(h.state.sessions['private:123'], undefined, 'old privileged preset must retire before follow');
+    assert.ok(h.calls.cancelled.includes(revoked));
+    assert.ok(h.calls.cancelled.includes(privileged));
+    await first.return();
+
+    // 模拟事件流断线后在 DSH 中改模式；再次连接也必须读新策略，不能复用旧缓存。
+    h.api.settings.describe = async () => ({ result: { ok: true, value: {
+      namespaces: [{ ns: 'qq-mode', value: { mode: 'closed-agent' } }],
+    } } });
+    h.calls.follows.length = 0;
+    const reconnect = h.sessionEvents();
+    await reconnect.next();
+    assert.equal(muxOpened, 2);
+    assert.deepEqual(h.calls.follows, []);
+    assert.equal(h.state.sessions[KEY], undefined);
+    assert.ok(h.calls.forgotten.includes(permitted));
+    await reconnect.return();
+    console.log('PASS startup and reconnect validate current DSH policy before activating persisted sessions');
+  } finally { await h.close(); }
+}
+
+for (const failure of ['mode', 'presets', 'empty-presets']) {
+  const h = await bridgeHarness();
+  try {
+    h.api.settings.describe = async () => {
+      if (failure === 'mode') throw new Error('fixture mode unavailable');
+      return { result: { ok: true, value: { namespaces: [] } } };
+    };
+    h.api.agentPresets = { list: async () => {
+      if (failure === 'presets') throw new Error('fixture presets unavailable');
+      return { result: { ok: true, value: { presets: [] } } };
+    } };
+    let opened = false;
+    h.api.events.mux = async function* () { opened = true; };
+    await assert.rejects(h.sessionEvents().next());
+    assert.equal(opened, false, 'failed policy refresh must never open an activating stream using cached permissions');
+    assert.deepEqual(h.calls.follows, []);
+    console.log(`PASS ${failure} lookup failure keeps cold agents inactive`);
+  } finally { await h.close(); }
+}
+
 function call(server, pathname, token, body) {
   return new Promise((resolve, reject) => {
     const req = http.request({ host: '127.0.0.1', port: server.address().port, path: pathname,

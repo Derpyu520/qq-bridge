@@ -11,6 +11,11 @@
 > 对应提交：`e43186a`（主体）；本文写于 2026-10-02。
 >
 > **上游行为标注**：文中出现的 SnowLuma `[Hook]`、原生组件、逐字节比对、运行时源码等，均为对 SnowLuma 行为的记录或观测；qq-bridge 自身不注入、不挂钩、不修改其本体。
+>
+> **脚本改名提示**：本文写于 0.2.0 适配期间，当时的验证脚本叫
+> `verify-dsh-020-adaptation.mjs`；后续已改名为
+> [`verify-dsh-022-adaptation.mjs`](../../scripts/verify-dsh-022-adaptation.mjs)。
+> 文中出现的旧命令仅作历史记录，当前请用 `npm run verify:adaptation`。
 
 ---
 
@@ -357,13 +362,13 @@ HTTP transport 下起作用，而三个 MCP server 全是 stdio。清掉是为�
 
 ## 10. 下次 DSH 升级的操作清单（可复用）
 
-1. `node scripts/verify-dsh-021-adaptation.mjs`（先看红在哪；活 DSH 段是主要信号）。
+1. `npm run verify:adaptation`（先看红在哪；活 DSH 段是主要信号；脚本文件名随 DSH 版本改名，入口名不变）。
 2. `npm run scan:tool-names` —— **每次升级必跑**。守住两类漂移：假名静默失效、新能力漏隐藏。
 3. `node scripts/probe-020-protocol.mjs` —— 采样 `session/control` / `session/follow` / `$events` /
    `session/cancel` 的**DSH RPC 返回结构（原始帧）**，与本文 §2.3 §8 对照。
 4. `node scripts/probe-020-settings.mjs` —— 命名空间是否还在、是否还可写。
 5. `npm run test:dsh-inbox` + `npm run test:session-retire:e2e` —— 队列与退役路径。
-6. `npm run test:audit`（30 个脚本）与 `npm run verify:persona`。
+6. `npm run test:audit`（脚本数量以当前 `scripts/test-audit.mjs` 为准）与 `npm run verify:persona`。
 7. 若 DSH 改了 preset / 插件装载机制：`node scripts/setup-dsh.mjs` 后重启 DSH，再看
    `npm run test:setup-idempotent`。
 8. `npm run privacy-scan` + `npm run diagnose:acl`（后者需在**无沙箱**终端跑）。
@@ -483,9 +488,11 @@ SnowLuma 同一账号的 **HTTP token（3000）与 WS token（3001）不同**，
 > （事件流水线订阅更全、`bot_status`、markdown 带 text、收发修复），
 > **不会修「原生 hook 挂不上 QQ」**——那类问题要走 SnowLuma 自己的排查（QQ 版本、杀软拦注入、权限）。
 
-### H. 版本号方案（自本版起）
+### H. 版本号方案（历史 rN 与当前候选发布）
 
-主版本号与 DSH 同步，后缀 `rN` 表示「同一 DSH 版本下桥接的第 N 次发布」：
+历史发布的主版本号与 DSH 同步，后缀 `rN` 表示「同一 DSH 版本下桥接的第 N 次发布」。
+0.2.2 线改用 `rcN` 表示桥接的候选发布，并在 GitHub 标记为 prerelease；
+已经发布的历史标签保持原名：
 
 | 标签 | 说明 |
 | --- | --- |
@@ -495,9 +502,11 @@ SnowLuma 同一账号的 **HTTP token（3000）与 WS token（3001）不同**，
 | `v0.2.0-r4` | r4 —— 表情包/动图链路、DSH 同源联网搜索、issue 修复、整体体检（见附录 J） |
 | `v0.2.1-r1` | r1（0.2.1 线）—— DSH 0.2.1-rc.2 适配，P0 `{{cwd}}` 提示词变量修复 + 工具面守卫补齐（见 [DSH_021_ADAPTATION.md](DSH_021_ADAPTATION.md)）。用 `-r1` 而不是裸 `v0.2.1`：那个标签已被上表撤回的 r2 占用过 |
 | `v0.2.1-r2` | r2（0.2.1 线）—— 会话隔离、安全加固、断线投递与实例归属修复；继续沿用 `rN` 方案 |
+| `v0.2.2-rc1` | 0.2.2 线第 1 个候选发布 —— DSH 0.2.2-rc.1 适配：自定义思考强度、冷会话恢复与权限先验、工具面回归网、Node 24 基线（见 [DSH_022_ADAPTATION.md](DSH_022_ADAPTATION.md)） |
 
-`package.json` 是 `"private": true`（不发布到 npm），所以 `0.2.1-rN` 这种 prerelease 写法
-不产生 npm 语义影响；版本号与标签保持一致，便于 `verify:adaptation` 对账。
+`package.json` 是 `"private": true`（不发布到 npm）；包版本与标签保持一致，便于
+`verify:adaptation` 对账。桥接 `0.2.2-rc1` 与上游 DSH `0.2.2-rc.1` 分别计数，
+不应互相替换。
 
 ### I. r3 时**未**修、r4 已修的问题
 

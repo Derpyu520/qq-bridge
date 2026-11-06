@@ -115,7 +115,7 @@ if (wsId) {
     // ③ follow 该会话，采样 snapshot 帧
     socket.send(JSON.stringify({
       type: 'open', streamId: streamIds.follow, endpoint: 'session/follow',
-      payload: { args: { request: { address: { kind: 'session', sessionId }, maxMessages: 5 } } }
+      payload: { args: { request: { address: { kind: 'session', sessionId }, activate: true, maxMessages: 5 } } }
     }));
 
     // ② 非激活投影读取

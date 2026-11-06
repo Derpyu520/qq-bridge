@@ -4,6 +4,8 @@
 
 A local message bridge that forwards message events and AI replies between the **OneBot v11 interfaces provided by SnowLuma** and [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness).
 
+Current release candidate: `v0.2.2-rc1` (GitHub prerelease), targeting DSH `0.2.2-rc.1`.
+
 > [!IMPORTANT]
 > **qq-bridge is independently maintained. It is not a SnowLuma subproject and is not affiliated with SnowLuma, DeepSeek, or Tencent / QQ.**
 > It communicates through the **OneBot v11 interfaces** exposed by SnowLuma. The bridge and the SnowLuma backend are deployed and maintained independently, without affiliation, partnership, or endorsement. OneBot v11 is a public protocol, not a proprietary SnowLuma protocol.
@@ -26,9 +28,9 @@ QQ ↔ SnowLuma ↔ qq-bridge ↔ DeepSeek Harness ↔ Model provider
 
 ## Quick start
 
-Use **Windows 10 / 11 and Node.js ≥ 22.13**, with these two services running separately:
+Use **Windows 10 / 11 and Node.js ≥ 22.13** (≥24.9 when DSH 0.2.2 runs on the same machine), with these two services running separately:
 
-- **DSH Web**: validation records cover `0.2.0-rc.2` / `0.2.1-rc.2`. See [compatibility](docs/guides/DSH_SETUP.md#兼容范围) for other versions.
+- **DSH Web**: validation records cover `0.2.2-rc.1` (previous: `0.2.1-rc.2`). See [compatibility](docs/guides/DSH_SETUP.md#兼容范围) for other versions.
 - **SnowLuma**: follow the [upstream instructions](https://github.com/SnowLuma/SnowLuma) to install, start, and sign in. Enable its OneBot **WebSocket server** and **HTTP API**.
 
 ### 1. Get the project
@@ -51,6 +53,7 @@ Edit `config.json` and check at least these fields:
 | Field | Value |
 | --- | --- |
 | `dsh.baseUrl` | DSH Web address, default `http://127.0.0.1:3080`; select a provider and model available in DSH |
+| `dsh.provider` / `model` / `reasoningEffort` | Provider, model, and reasoning effort; use an effort advertised by the DSH model catalog, or `none` to omit the field and follow the model default |
 | `snowluma.wsUrl` / `httpUrl` | OneBot WebSocket / HTTP addresses, for example `ws://127.0.0.1:3001` / `http://127.0.0.1:3000`; keep the ports separate |
 | `snowluma.accessToken` / `homeDir` | Your token and SnowLuma installation directory; when HTTP and WS use different tokens, the bridge must be able to discover both from that directory |
 | `ownerQQ` | Your administrator QQ ID |

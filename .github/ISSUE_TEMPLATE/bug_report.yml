@@ -41,7 +41,7 @@ body:
     attributes:
       label: qq-bridge 版本
       description: "`package.json` 的 `version`，或 release tag"
-      placeholder: v0.2.1-r1
+      placeholder: v0.2.2-rc1
     validations:
       required: true
 
@@ -50,7 +50,7 @@ body:
     attributes:
       label: DSH 版本
       description: "`dsh --version` 的输出，或安装包的版本号"
-      placeholder: 0.2.1-rc.2
+      placeholder: 0.2.2-rc.1
     validations:
       required: true
 

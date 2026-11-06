@@ -20,8 +20,8 @@
 > 切换回 `chat` 后，owner 私聊也回到 qq-chat 安全预设。
 >
 > 注：DSH 0.1.5 已不存在 `router-standard` preset。桥接现在留空表示「用 DSH 默认 preset」，
-> 并在启动时读取 `agentPresets/list` 校验；填了不存在的 preset 名会回退到默认值并打警告，
-> 绝不会创建出「无 preset」会话（那会被 DSH 套上 `standard`，对 QQ 群是安全回归）。
+> 并在启动时读取 `agentPresets/list` 校验；只有 `closed-agent` 管理员私聊允许在 preset 不存在时回退默认值并打警告。
+> `chat` / `reserved` / `reserved2` 的 QQ 安全 preset 缺失时会拒绝创建会话，绝不回退到 `standard`（否则 QQ 群会获得本地工具）。
 
 ## 权限分层
 

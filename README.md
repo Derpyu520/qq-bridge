@@ -4,6 +4,8 @@
 
 qq-bridge 是一个本地消息桥接工具，在 SnowLuma 提供的 **OneBot v11 接口**与 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/deepseek-harness) 之间转发消息事件和 AI 回复。
 
+当前候选版本：`v0.2.2-rc1`（GitHub prerelease），适配目标为 DSH `0.2.2-rc.1`。
+
 > [!IMPORTANT]
 > **qq-bridge 是独立维护的第三方工具，不是 SnowLuma 的子项目，也不隶属于 SnowLuma、DeepSeek 或腾讯 / QQ。**
 > 本项目通过 SnowLuma 提供的 **OneBot v11 接口**互通；桥接与 SnowLuma 后端分别部署、独立维护，无隶属、合作或背书关系。OneBot v11 是公开协议，并非 SnowLuma 专有协议。
@@ -26,9 +28,9 @@ QQ ↔ SnowLuma ↔ qq-bridge ↔ DeepSeek Harness ↔ 模型服务
 
 ## 快速开始
 
-准备好 **Windows 10 / 11、Node.js ≥ 22.13**，以及以下两个独立运行的服务：
+准备好 **Windows 10 / 11、Node.js ≥ 22.13**（与 DSH 0.2.2 同机部署需 ≥24.9），以及以下两个独立运行的服务：
 
-- **DSH Web**：当前有 `0.2.0-rc.2` / `0.2.1-rc.2` 的验证记录，其他版本见[兼容范围](docs/guides/DSH_SETUP.md#兼容范围)。
+- **DSH Web**：当前有 `0.2.2-rc.1` 的验证记录（上一版为 `0.2.1-rc.2`），其他版本见[兼容范围](docs/guides/DSH_SETUP.md#兼容范围)。
 - **SnowLuma**：请自行按[上游文档](https://github.com/SnowLuma/SnowLuma)安装、启动并登录，开启 OneBot **WebSocket 服务端**和 **HTTP API**。
 
 ### 1. 获取项目
@@ -51,6 +53,7 @@ Copy-Item config.example.json config.json
 | 字段 | 填写内容 |
 | --- | --- |
 | `dsh.baseUrl` | DSH Web 地址，默认 `http://127.0.0.1:3080`；模型选择需与 DSH 中可用的配置一致 |
+| `dsh.provider` / `model` / `reasoningEffort` | 模型提供方、模型名与思考强度；强度可使用 DSH 模型目录公布的档位，设为 `none` 表示不下发该字段、跟随模型默认 |
 | `snowluma.wsUrl` / `httpUrl` | OneBot WebSocket / HTTP 地址，示例分别为 `ws://127.0.0.1:3001` / `http://127.0.0.1:3000`，不要混用端口 |
 | `snowluma.accessToken` / `homeDir` | 按实际配置填写令牌与 SnowLuma 安装目录；HTTP、WS 令牌不同时，需能从该目录发现各自令牌 |
 | `ownerQQ` | 你的管理员 QQ 号 |

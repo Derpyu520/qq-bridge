@@ -1,8 +1,9 @@
-// DSH 适配总验证（0.2.1 版）。
+// DSH 适配总验证（0.2.2 版）。
 //
 // 沿革：0.1.5 建立（verify-dsh-015-adaptation.mjs）→ 0.2.0 改名
-// （verify-dsh-020-adaptation.mjs）→ 0.2.1 改名到本文件名。文件名里的版本号
-// 是**它验的 DSH 版本**，不是仓库版本；一个自称 015 却在验 0.2.0 的脚本只会误导人。
+// （verify-dsh-020-adaptation.mjs）→ 0.2.1 改名（verify-dsh-021-adaptation.mjs）
+// → 0.2.2 改名到本文件名。文件名里的版本号是**它验的 DSH 版本**，不是仓库版本；
+// 一个自称 015 却在验 0.2.0 的脚本只会误导人。
 // `npm run verify:adaptation` 的入口名保持不变，所以既有调用不受影响。
 //
 // 0.2.1 实测结论（2026-10-22）：§5 的活 DSH 契约**逐项未漂移**——铸造 Cookie 鉴权、
@@ -12,12 +13,24 @@
 // 唯一漂移在**工具面**：0.2.1 新增 `working_directory`（dsh-base 默认挂载，全局层继承）
 // 以及 terminal / session-query / plugin_market 一族，守卫名单已同轮补齐。
 //
+// 0.2.2 实测结论（2026-11-05，DSH 0.2.2-rc.1）：§5 契约**同样逐项未漂移**；
+// 补齐版本对账后 **77 通过 / 0 失败**（含 8 项语法检查；workspace-write 沙箱下
+// 按既有约定跳过语法检查，计 69 通过）。工具面**定义/默认配置**漂移两处
+// （默认不在 QQ preset 暴露，守卫补作回归网）：
+//   · dsh-tool-fs 提供 `apply_patch`（默认 `applyPatch: false`；QQ preset 不挂 tool-fs）；
+//   · 调度面 `schedule_update` / `schedule_delete` 改名 `schedule_view` / `schedule_edit`
+//     （QQ preset 不挂 dsh-tool-schedule）。
+// 0.2.2 及相邻版本声明的破坏性变更（tools.mode 移除、sessionProjections 注册改异步、
+// agent/request 路由限制、实时 projection 帧改 changes[]、session/list summary
+// 去掉 contextPressure 等）本仓库一处都没用到；`session/follow` 默认不再激活
+// 冷会话（0.2.1-rc.3），桥接已显式传 `activate: true`（见 src/dsh-client.js）。
+//
 // 覆盖：
 //   §1 仓库侧 preset persona schema
 //   §2 部署侧 bundle patch / 守卫实现（preset 与 provider 行）
 //   §3 版本身份一致性
 //   §4 语法检查
-//   §5 **运行中的 DSH 0.2.0 实测**（本文件的核心）：
+//   §5 **运行中的 DSH 0.2.2 实测**（本文件的核心）：
 //        · 鉴权：本机签名密钥离线铸造 Cookie
 //        · settings/describe 可用，`qq-mode` 命名空间在列且可写
 //          （0.2.0 删除了 ctx.settings.register()，命名空间改由 entry id + Config 推导）
@@ -31,19 +44,21 @@
 //        · session/modelCatalog 形状
 //        · 点号 endpoint 仍不可用（协议确为斜杠式）
 //
-// 不依赖 SnowLuma；不改动任何用户状态（探测会话会被 archive，探测工作区建在系统临时目录）。
+// 不依赖 SnowLuma。会创建探测会话、写回 qq-mode，并用 selectModel 选择
+// deepseek-official/deepseek-flash/max；DSH 会把这个选择持久化为全局默认模型。
+// 清理时停止并归档探测会话、删除独占的临时目录；不自动恢复全局默认模型，
+// 以免覆盖运行期间用户或其他客户端的并发更改。
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { randomUUID } from 'node:crypto';
-import { dshModulesDir } from './dsh-modules.mjs';
+import { dshHome, dshModulesDir } from './dsh-modules.mjs';
 import { discoverDshSessionCookie, NodeApiClient, unwrap } from '../src/dsh-client.js';
+import { cleanupProbeSession, createProbeDirectory, probeMux, probeTurn } from './adaptation-probe-helpers.mjs';
 
 const ROOT = process.cwd();
 const DSH_MODULES = dshModulesDir();
-const DSH_HOME = path.join(os.homedir(), '.dsh');
+const DSH_HOME = dshHome();
 const BASE = process.env.DSH_BASE_URL || 'http://127.0.0.1:3080';
 
 let pass = 0, fail = 0;
@@ -137,7 +152,8 @@ const GUARD_020_NAMES = [
   'subagent_codex', 'subagent_claude_code',
   'spawn_teammate', 'team_task_create', 'team_task_get', 'team_task_list', 'team_task_update',
   'plugin_manager',
-  'schedule_create', 'schedule_list', 'schedule_update', 'schedule_delete',
+  // 0.2.2 起 schedule_update / schedule_delete 改名（见 GUARD_022_NAMES），旧名已不注册。
+  'schedule_create', 'schedule_list',
 ];
 /** 0.2.1 对账新增的名字（见守卫长注释里 2026-10-22 那段）。 */
 const GUARD_021_NAMES = [
@@ -150,6 +166,17 @@ const GUARD_021_NAMES = [
   // 装载权 / 写盘起进程 / team 家族
   'plugin_market', 'create_worktree', 'wait_agent',
 ];
+/**
+ * 0.2.2 对账新增的名字（见守卫长注释里 2026-11-05 那段）。
+ * 同一轮删掉了 `schedule_update` / `schedule_delete`：0.2.2 把它们改名为
+ * `schedule_view` / `schedule_edit`，旧名不再注册，留着只会被 restrict 抛错吞掉。
+ */
+const GUARD_022_NAMES = [
+  // dsh-tool-fs 新增：一次多文件新增/编辑/删除/移动
+  'apply_patch',
+  // 调度面改名后的新名字
+  'schedule_view', 'schedule_edit',
+];
 const guardMod = await import(pathToFileURL(canonicalGuardPath).href);
 const guardNames = new Set(guardMod.RESTRICTED_TOOL_NAMES ?? []);
 const optionalNames = new Set(guardMod.OPTIONAL_BUNDLE_TOOL_NAMES ?? []);
@@ -157,6 +184,8 @@ const missingFromGuard = GUARD_020_NAMES.filter((n) => !guardNames.has(n));
 check('守卫已覆盖 0.2.0 新增的危险工具名', missingFromGuard.length === 0, missingFromGuard.join(', ') || `${guardNames.size} 个名字`);
 const missingFromGuard021 = GUARD_021_NAMES.filter((n) => !guardNames.has(n));
 check('守卫已覆盖 0.2.1 新增的危险工具名', missingFromGuard021.length === 0, missingFromGuard021.join(', ') || `${GUARD_021_NAMES.length} 个名字`);
+const missingFromGuard022 = GUARD_022_NAMES.filter((n) => !guardNames.has(n));
+check('守卫已覆盖 0.2.2 新增的危险工具名', missingFromGuard022.length === 0, missingFromGuard022.join(', ') || `${GUARD_022_NAMES.length} 个名字`);
 
 // 守卫名单里的每个名字都必须是 DSH 真实注册的工具：`tools.restrict()` 对未知名字会抛错，
 // 而守卫逐个 try/catch 只打日志 ⇒ 拼错的名字 = 静默 no-op。
@@ -222,9 +251,11 @@ check('群聊模式不再重试「无 preset」建会话', /strictPreset \? \[tr
 const pkgJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const lockJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8'));
 const pluginPkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'plugins/qq-mode-console/package.json'), 'utf8'));
+const presetsPkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'plugins/qq-agent-presets/package.json'), 'utf8'));
 check('package-lock.json 顶层 version 与 package.json 一致', lockJson.version === pkgJson.version, `lock=${lockJson.version} pkg=${pkgJson.version}`);
 check('package-lock.json packages[""] version 与 package.json 一致', lockJson.packages?.['']?.version === pkgJson.version, `lock=${lockJson.packages?.['']?.version}`);
 check('qq-mode-console 插件版本与主包一致', pluginPkg.version === pkgJson.version, `plugin=${pluginPkg.version}`);
+check('qq-agent-presets 插件版本与主包一致', presetsPkg.version === pkgJson.version, `plugin=${presetsPkg.version}`);
 for (const f of ['src/mcp-snowluma-safe.js', 'src/mcp-host-server.js', 'src/mcp-web-search-safe.js']) {
   const m = /new McpServer\(\{[^}]*version:\s*'([^']+)'/.exec(fs.readFileSync(path.join(ROOT, f), 'utf8'));
   check(`${f} 的 MCP serverInfo.version 与主包一致`, m?.[1] === pkgJson.version, `声明=${m?.[1]} 主包=${pkgJson.version}`);
@@ -247,7 +278,9 @@ const SYNTAX_FILES = ['src/bridge.js', 'src/dsh-client.js', 'src/mcp-snowluma-sa
   }
 }
 
-// ── 5. 运行中的 DSH 0.2.0 ───────────────────────────────────────────────────
+// ── 5. 运行中的 DSH 0.2.2 ───────────────────────────────────────────────────
+console.warn('活体验证会创建并归档探测会话、写回 qq-mode，消耗一次模型回合，'
+  + '并将 DSH 全局默认模型改为 deepseek-official/deepseek-flash/max；不会自动恢复默认模型。');
 // 鉴权走与桥接生产代码同一条路：用 ~/.dsh 里持久化的签名密钥离线铸造会话 Cookie。
 // 旧写法（从 ~/.dsh/guard/logs/server-*.out.log 里抓 `?token=`）在 0.1.7 已经死了：
 //   · 进程启动 token 是现生成的 32 字节随机数，只存在内存 WeakMap 里，不落盘；
@@ -282,13 +315,15 @@ check('closed-agent 兜底所需的 standard 预设可用', presetIds.includes('
 const qqMode = st.value?.namespaces?.find((n) => n.ns === 'qq-mode');
 check('settings/describe 列出 qq-mode 命名空间', qqMode !== undefined, st.value?.namespaces?.map((n) => n.ns).length + ' 个命名空间');
 if (qqMode) {
-  check('qq-mode 带 mode 字段', typeof qqMode.value?.mode === 'string', JSON.stringify(qqMode.value));
+  // settings 的 user 层可能已更新而运行时 value 尚未热更新，不能把旧模式写回。
+  const currentMode = Object.hasOwn(qqMode.user ?? {}, 'mode') ? qqMode.user.mode : qqMode.value?.mode;
+  check('qq-mode 带 mode 字段', typeof currentMode === 'string', JSON.stringify({ mode: currentMode }));
   check('qq-mode 带 revision（写入所需）', Number.isInteger(qqMode.revision), String(qqMode.revision));
   // settings/update 是**多参数** RPC：args 是 { ns, patch, expectedRevision } 平铺，
   // 不是 { request: {...} }（传 request 会被网关拒为
   // `gateway/arguments-invalid: missing "ns", "patch"; unexpected "request"`）。
   const writeBack = await rpc('settings/update', {
-    ns: 'qq-mode', patch: { mode: qqMode.value.mode }, expectedRevision: qqMode.revision,
+    ns: 'qq-mode', patch: { mode: currentMode }, expectedRevision: qqMode.revision,
   });
   check(
     'settings/update 可写 qq-mode（参数为平铺多参数，非 request 包装）',
@@ -298,14 +333,12 @@ if (qqMode) {
 }
 
 // ── 5b. session/projections：读会话队列的主路径 ──────────────────────────────
-const probeDir = path.join(os.tmpdir(), 'qq-bridge-verify-020');
-fs.rmSync(probeDir, { recursive: true, force: true });
-fs.mkdirSync(probeDir, { recursive: true });
+const probeDir = createProbeDirectory();
 const api = new NodeApiClient(BASE, undefined, {});
-await api.ensureAuth();
 
 let probeSessionId = null;
 try {
+  await api.ensureAuth();
   const created = unwrap(await api.sessions.create({ cwd: probeDir, agentPreset: 'qq-chat-v2' }), 'session.create');
   probeSessionId = created.sessionId;
   check('session/create 挂 qq-chat-v2 preset 成功', typeof probeSessionId === 'string' && probeSessionId.length > 0, probeSessionId);
@@ -325,20 +358,10 @@ try {
   // ── 5c. control baseline 形状（0.2.0 的核心断裂点）────────────────────────
   const url = new URL('/api/remote.mux', BASE);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-  const baseline = await new Promise((resolve, reject) => {
-    const socket = new WebSocket(url, { headers: { cookie: api.cookie } });
-    const streamId = randomUUID();
-    const timer = setTimeout(() => { try { socket.close(); } catch {} reject(new Error('control baseline 超时')); }, 15_000);
-    const finish = (err, value) => { clearTimeout(timer); try { socket.close(); } catch {} err ? reject(err) : resolve(value); };
-    socket.addEventListener('open', () => socket.send(JSON.stringify({ type: 'open', streamId, endpoint: 'session/control', payload: { args: {} } })));
-    socket.addEventListener('message', (ev) => {
-      let m; try { m = JSON.parse(ev.data); } catch { return; }
-      if (m.streamId !== streamId) return;
-      if (m.type === 'item' && m.value?.type === 'baseline') finish(null, m.value);
-      else if (m.type === 'error' || m.type === 'end') finish(new Error(`control ${m.type}${m.error?.code ? ` (${m.error.code})` : ''}`));
-    });
-    socket.addEventListener('error', () => finish(new Error('control socket error')));
-  }).catch((error) => { skip('session/control 开场 baseline 形状', error.message); return null; });
+  const baseline = await probeMux({
+    url, cookie: api.cookie, endpoint: 'session/control', args: {}, timeoutMs: 15_000,
+    onItem: (value) => value?.type === 'baseline' ? value : undefined,
+  }).catch((error) => { check('session/control 开场 baseline 形状', false, error.message); return null; });
   if (baseline) {
     const bv = baseline.value;
     check('control baseline 是 value.projections（0.2.0 形状）',
@@ -362,19 +385,10 @@ try {
     retireError === null, retireError?.message ?? `removed=${retired?.removed}`);
 
   // ── 5e. $events ready 帧 ─────────────────────────────────────────────────
-  const readyFrame = await new Promise((resolve) => {
-    const socket = new WebSocket(url, { headers: { cookie: api.cookie } });
-    const streamId = randomUUID();
-    const timer = setTimeout(() => { try { socket.close(); } catch {} resolve(null); }, 10_000);
-    const finish = (value) => { clearTimeout(timer); try { socket.close(); } catch {} resolve(value); };
-    socket.addEventListener('open', () => socket.send(JSON.stringify({ type: 'open', streamId, endpoint: '$events', payload: { args: {} } })));
-    socket.addEventListener('message', (ev) => {
-      let m; try { m = JSON.parse(ev.data); } catch { return; }
-      if (m.streamId !== streamId || m.type !== 'item') return;
-      if (m.value?.type === 'ready') finish(m.value);
-    });
-    socket.addEventListener('error', () => finish(null));
-  });
+  const readyFrame = await probeMux({
+    url, cookie: api.cookie, endpoint: '$events', args: {}, timeoutMs: 10_000,
+    onItem: (value) => value?.type === 'ready' ? value : undefined,
+  }).catch(() => null);
   check('$events 下发 ready 帧并带 clientId',
     typeof readyFrame?.clientId === 'string' && readyFrame.clientId.length > 0,
     readyFrame ? `${String(readyFrame.clientId).slice(0, 8)}…` : '未收到 ready 帧');
@@ -393,31 +407,8 @@ try {
   try {
     const turnSession = unwrap(await api.sessions.create({ cwd: probeDir, agentPreset: 'qq-chat-v2' }), 'session.create(turn)');
     turnSessionId = turnSession.sessionId;
-    await api.sessions.selectModel({ sessionId: turnSessionId, provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'max' });
-    const turn = await new Promise((resolve) => {
-      const socket = new WebSocket(url, { headers: { cookie: api.cookie } });
-      const streamId = randomUUID();
-      let text = '';
-      const timer = setTimeout(() => { try { socket.close(); } catch {} resolve({ reason: null, text, timeout: true }); }, 90_000);
-      const finish = (value) => { clearTimeout(timer); try { socket.close(); } catch {} resolve(value); };
-      socket.addEventListener('open', () => {
-        socket.send(JSON.stringify({ type: 'open', streamId, endpoint: 'session/follow', payload: { args: { request: { address: { kind: 'session', sessionId: turnSessionId } } } } }));
-        setTimeout(() => {
-          api.sessions.prompt({ sessionId: turnSessionId, mode: 'queue', content: [{ type: 'text', text: '只回复两个字：收到' }] }).catch(() => {});
-        }, 800);
-      });
-      socket.addEventListener('message', (ev) => {
-        let m; try { m = JSON.parse(ev.data); } catch { return; }
-        if (m.streamId !== streamId || m.type !== 'item') return;
-        const e = m.value?.type === 'event' ? m.value.event : null;
-        if (!e) return;
-        if (e.type === 'assistant/message') {
-          for (const block of e.data?.message?.content ?? []) if (block?.type === 'text') text += block.text;
-        }
-        if (e.type === 'turn/end') finish({ reason: e.data?.reason, text });
-      });
-      socket.addEventListener('error', () => finish({ reason: null, text, error: true }));
-    });
+    unwrap(await api.sessions.selectModel({ sessionId: turnSessionId, provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'max' }), 'session.selectModel(turn)');
+    const turn = await probeTurn(api, turnSessionId, { url, cookie: api.cookie, timeoutMs: 90_000 });
     const kind = typeof turn.reason === 'string' ? turn.reason : turn.reason?.kind;
     const why = turn.reason?.error?.message;
     check('preset 真跑一回合：提示词变量可解析且正常结束',
@@ -426,16 +417,20 @@ try {
   } catch (error) {
     check('preset 真跑一回合：提示词变量可解析且正常结束', false, error?.message ?? String(error));
   } finally {
-    if (turnSessionId) { try { await api.callUnary('workspace/archiveSession', { sessionId: turnSessionId }); } catch {} }
+    if (turnSessionId) {
+      const errors = await cleanupProbeSession(api, turnSessionId);
+      check('真实回合探测会话已停止并归档', errors.length === 0, errors.join('; '));
+    }
   }
 } catch (error) {
   check('DSH 实测段无未捕获异常', false, error?.message ?? String(error));
 } finally {
   if (probeSessionId) {
-    try { await api.callUnary('session/cancel', { sessionId: probeSessionId }); } catch {}
-    try { await api.callUnary('workspace/archiveSession', { sessionId: probeSessionId }); } catch {}
+    const errors = await cleanupProbeSession(api, probeSessionId);
+    check('协议探测会话已停止并归档', errors.length === 0, errors.join('; '));
   }
-  try { fs.rmSync(probeDir, { recursive: true, force: true }); } catch {}
+  try { fs.rmSync(probeDir, { recursive: true, force: true }); }
+  catch (error) { check('临时探测目录已删除', false, error?.message ?? String(error)); }
 }
 
 // 点号 endpoint（旧协议）应返回纯文本 404（不是 JSON 信封）——证明协议确为斜杠式

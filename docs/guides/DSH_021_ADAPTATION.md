@@ -13,6 +13,11 @@
 > 版本身份：桥接 `v0.2.1-r1`（版本号方案见 DSH_020 附录 H：主版本与 DSH 同步，
 > `r1` = 0.2.1 线第 1 次发布）。不用裸 `v0.2.1` 是因为历史上那次被撤回的标签
 > 已经用过这个名字（commit `9bb7b98` 仍在历史里），重名只会让标签列表更难解释。
+>
+> **脚本改名提示**：本文写于 0.2.1 适配期间，当时的验证脚本叫
+> `verify-dsh-021-adaptation.mjs`；0.2.2 适配时已改名为
+> [`verify-dsh-022-adaptation.mjs`](../../scripts/verify-dsh-022-adaptation.mjs)。
+> 文中出现的旧命令仅作历史记录，当前请用 `npm run verify:adaptation`。
 
 ---
 

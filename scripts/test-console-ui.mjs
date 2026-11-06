@@ -144,29 +144,6 @@ try {
     assert.deepEqual(await clickWrite('#secSave', '/api/security'), { interceptNotify: false });
   });
 
-  // state/ 的 ACL 收紧需要管理员权限，未提权时桥接会明确报告 hardened:false。
-  // 控制台必须把这件事**显式**呈现（含可复制的提权命令），而不是让用户以为已经安全；
-  // 用户按提示处理后点「重新检测」应当转为成功态。
-  await test('Unhardened state directory surfaces a warning with the exact command', async () => {
-    await navigate('access');
-    await page.waitForFunction(() => document.getElementById('stateDirWarn')?.style.display !== 'none');
-    const shown = await page.evaluate(() => ({
-      path: document.getElementById('stateDirPath').textContent,
-      cmd: document.getElementById('stateDirCmd').textContent,
-    }));
-    assert.match(shown.path, /state/, '应当显示 state 目录路径');
-    assert.match(shown.cmd, /icacls/, '应当给出可复制的提权命令');
-    // 只验证按钮确实发起「重新检测」请求，**不**写进/触发 baseline 的写载荷契约
-    // （baseline 记录的是改版前控制台的表单写载荷，这条不算表单写）。
-    await page.waitForFunction(() => document.getElementById('stateDirReharden') !== null);
-    const [request] = await Promise.all([
-      page.waitForRequest(r => new URL(r.url()).pathname === '/api/security' && r.method() === 'POST'),
-      page.click('#stateDirReharden'),
-    ]);
-    assert.deepEqual(JSON.parse(request.postData() || '{}'), { rehardenStateDir: true });
-    await page.waitForFunction(() => document.getElementById('stateDirWarn')?.style.display === 'none');
-  });
-
   await test('Second-generation complete save payload, units, zero values and tool switches', async () => {
     await fill('v2AgentPreset', 'contract-v2');
     await fill('v2RecSleepMin', 7);
@@ -248,9 +225,42 @@ try {
     assert(results.every(x => x.ok), 'Cannot record a baseline from a failed suite');
     await writeFile(baselinePath, JSON.stringify(fixture.requests, null, 2) + '\n');
     console.log(`Recorded original API contracts: ${baselinePath}`);
-  } else await test('All submitted payloads exactly match the pre-redesign console baseline', async () => {
+  } else await test('Legacy submitted payloads exactly match the pre-redesign console baseline', async () => {
     const expected = JSON.parse(await readFile(baselinePath, 'utf8'));
-    assert.deepEqual(fixture.requests, expected);
+    const legacyRequests = fixture.requests.map(request => {
+      if (original || request.method !== 'POST' || request.path !== '/api/socialV2/config') return request;
+      // 语音开关是在冻结基线后新增的字段，默认值与双向切换另外验证；其余字段原样比较。
+      const { sendVoice, ...legacyTools } = request.body.tools;
+      assert.equal(sendVoice, true, '新增语音工具开关应按默认值提交');
+      return { ...request, body: { ...request.body, tools: legacyTools } };
+    });
+    assert.deepEqual(legacyRequests, expected);
+  });
+
+  // 新增功能在冻结基线比较后独立验证，避免把原控制台没有的写请求录入历史基线。
+  if (!original) await test('Unhardened state directory surfaces a warning with the exact command', async () => {
+    await navigate('access');
+    await page.waitForFunction(() => document.getElementById('stateDirWarn')?.style.display !== 'none');
+    const shown = await page.evaluate(() => ({
+      path: document.getElementById('stateDirPath').textContent,
+      cmd: document.getElementById('stateDirCmd').textContent,
+    }));
+    assert.match(shown.path, /state/, '应当显示 state 目录路径');
+    assert.match(shown.cmd, /icacls/, '应当给出可复制的提权命令');
+    assert.deepEqual(await clickWrite('#stateDirReharden', '/api/security'), { rehardenStateDir: true });
+    await page.waitForFunction(() => document.getElementById('stateDirWarn')?.style.display === 'none');
+  });
+
+  if (!original) await test('Voice tool switch submits both values without changing the other configuration', async () => {
+    const saved = fixture.requests.findLast(request => request.path === '/api/socialV2/config').body;
+    const toggle = await reveal('[data-v2-tool="sendVoice"]');
+    assert.equal(await toggle.isChecked(), true);
+    await toggle.setChecked(false);
+    assert.deepEqual(await clickWrite('#v2ConfigSaveTop', '/api/socialV2/config'), {
+      ...saved, tools: { ...saved.tools, sendVoice: false },
+    });
+    await toggle.setChecked(true);
+    assert.deepEqual(await clickWrite('#v2ConfigSave', '/api/socialV2/config'), saved);
   });
 
   if (!original) await test('Token usage panel renders totals, per-conversation and per-turn cost', async () => {
@@ -320,13 +330,13 @@ try {
     // 切范围：重新请求并按生产同一套桶宽阶梯换粒度
     // （24h→30min / 3d→2h / 7d→6h / 30d→24h，桶数始终 ≤ 48）
     await page.click('#usageChartControls [data-usage-hours="168"]');
-    await page.waitForFunction(() => /每格 \d+ 分钟/.test(document.getElementById('usageChartHint')?.textContent || '')
+    await page.waitForFunction(() => /每格 360 分钟/.test(document.getElementById('usageChartHint')?.textContent || '')
       && document.querySelector('#usageChartControls [data-usage-hours="168"]')?.classList.contains('active'));
     assert.match(await page.textContent('#usageChartHint'), /每格 360 分钟/, '切到 7 天后桶宽变成 6 小时');
 
     // 粗桶会把高峰窗口整个包在中间 → 必须标『跨时段』（细桶边界对齐则不会，这也是真账本的行为）
     await page.click('#usageChartControls [data-usage-hours="720"]');
-    await page.waitForFunction(() => /每格 \d+ 分钟/.test(document.getElementById('usageChartHint')?.textContent || '')
+    await page.waitForFunction(() => /每格 1440 分钟/.test(document.getElementById('usageChartHint')?.textContent || '')
       && document.querySelector('#usageChartControls [data-usage-hours="720"]')?.classList.contains('active'));
     assert.match(await page.textContent('#usageChartHint'), /每格 1440 分钟/, '切到 30 天后桶宽变成 24 小时');
     const coarse = await page.evaluate(() => ({
@@ -345,7 +355,8 @@ try {
 
     // 回到 24 小时，避免影响后续断言
     await page.click('#usageChartControls [data-usage-hours="24"]');
-    await page.waitForFunction(() => document.querySelector('#usageChartControls [data-usage-hours="24"]')?.classList.contains('active'));
+    await page.waitForFunction(() => /每格 30 分钟/.test(document.getElementById('usageChartHint')?.textContent || '')
+      && document.querySelector('#usageChartControls [data-usage-hours="24"]')?.classList.contains('active'));
   });
 
   if (!original) await test('Mobile and tablet layouts have no document-level horizontal overflow', async () => {
@@ -530,25 +541,47 @@ try {
     await page.waitForFunction(() => document.getElementById('roleInjectMaxMsg').textContent.includes('6000'));
   });
 
-  if (!original) await test('思考强度：档位来自 DSH、默认 max、可切换并明示全局副作用', async () => {
+  if (!original) await test('思考强度：支持 DSH 自定义档位与显式不下发，默认 max 不变', async () => {
     await navigate('overview');
     await page.waitForFunction(() => document.getElementById('dshEffortSelect').options.length > 0);
     const options = await page.locator('#dshEffortSelect option').evaluateAll((nodes) => nodes.map((n) => n.value));
-    assert.deepEqual(options, ['low', 'high', 'max'], `档位应来自 DSH 公布的能力，实际 ${options.join(',')}`);
+    assert.deepEqual(options, ['low', 'medium', 'high', 'max', 'none'], `档位应来自 DSH 公布的能力，实际 ${options.join(',')}`);
+    assert.match(await page.locator('#dshEffortSelect option[value="none"]').textContent(), /不指定/);
     assert.equal(await page.locator('#dshEffortSelect').inputValue(), 'max', '默认应为 max');
     assert.match(await page.locator('#dshEffortSideEffect').textContent(), /全局默认/, '必须说明会连带改 DSH 全局默认');
-    await page.locator('#dshEffortSelect').selectOption('high');
+    await page.locator('#dshEffortSelect').selectOption('medium');
     const [saved] = await Promise.all([
       page.waitForResponse(r => new URL(r.url()).pathname === '/api/dsh/effort' && r.request().method() === 'POST'),
       page.locator('#dshEffortSave').click(),
     ]);
     assert.equal(saved.status(), 200);
-    assert.equal((await saved.json()).reasoningEffort, 'high');
-    assert.match(await page.locator('#dshEffortMsg').textContent(), /high/);
+    assert.equal((await saved.json()).reasoningEffort, 'medium');
+    assert.match(await page.locator('#dshEffortMsg').textContent(), /medium/);
+    await page.locator('#dshEffortSelect').selectOption('none');
+    const [noneSaved] = await Promise.all([
+      page.waitForResponse(r => new URL(r.url()).pathname === '/api/dsh/effort' && r.request().method() === 'POST'),
+      page.locator('#dshEffortSave').click(),
+    ]);
+    assert.equal(noneSaved.status(), 200);
+    assert.equal((await noneSaved.json()).reasoningEffort, 'none');
     // 改回默认，避免影响后续断言
     await page.locator('#dshEffortSelect').selectOption('max');
     await page.locator('#dshEffortSave').click();
     await page.waitForFunction(() => document.getElementById('dshEffortSelect').value === 'max');
+    await page.route('**/api/dsh/model', (route) => route.fulfill({ json: {
+      provider: 'fixture-provider', model: 'fixture-model', reasoningEffort: 'legacyHigh',
+      options: ['low', 'none'], labels: {}, default: 'max', providerDefault: 'low', catalogSource: 'dsh', globalSideEffect: true,
+    } }));
+    try {
+      await page.evaluate(() => refreshDshModel());
+      const current = page.locator('#dshEffortSelect option[value="legacyHigh"]');
+      assert.equal(await current.count(), 1);
+      assert.match(await current.textContent(), /当前配置，目录未列出/);
+      assert.equal(await page.locator('#dshEffortSelect').inputValue(), 'legacyHigh');
+    } finally {
+      await page.unroute('**/api/dsh/model');
+      await page.evaluate(() => refreshDshModel());
+    }
   });
 
   if (artifacts) {

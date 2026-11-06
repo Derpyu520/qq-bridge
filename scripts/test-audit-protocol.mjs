@@ -313,6 +313,9 @@ test('transient follow errors preserve subscriptions and close transport for ret
   const socket = FakeWebSocket.sockets.at(-1);
   socket.open();
   const follow = socket.frames.find((frame) => frame.endpoint === 'session/follow');
+  // DSH 0.2.1-rc.3 起 follow 默认被动；桥接必须显式激活，否则重启后带 pending
+  // inbox 的冷会话不会续跑。这条断言钉住请求体，防止以后又被“简化”掉。
+  assert.equal(follow.payload.args.request.activate, true, 'follow must request activation');
   socket.frame({ type: 'error', streamId: follow.streamId, error: { code: 'gateway/internal' } });
   await next;
   const ending = iterator.next();
