@@ -274,6 +274,31 @@
       "normalizeTimeoutMs": 25000
     }
   },
+  "memory": {
+    "enabled": true,
+    "dir": "state/memory",
+    "budgetChars": 1600,
+    "anchorMaxChars": 400,
+    "eventThreshold": 0.45,
+    "recentDays": 7,
+    "recallMinW": 0.35,
+    "maxEventsRead": 5000,
+    "pruneIntervalMs": 21600000,
+    "migrateSocialV2": true,
+    "weights": {
+      "importance": 0.30,
+      "confidence": 0.20,
+      "source": 0.15,
+      "recency": 0.15,
+      "access": 0.10,
+      "relation": 0.10
+    },
+    "forgetting": {
+      "tauFastDays": 1.5,
+      "tauSlowDays": 30,
+      "fastShare": 0.6
+    }
+  },
   "webSearch": {
     "provider": "auto",
     "apiKey": "",
