@@ -10,6 +10,7 @@ import { renderPatch } from '../scripts/build-agent-preset-patches.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import http from 'node:http';
+import net from 'node:net';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -208,6 +209,132 @@ function atomicWriteText(file, text) {
     try { fs.unlinkSync(tmp); } catch {}
     throw error;
   }
+}
+
+// ── 控制台登录凭证（HttpOnly cookie） ──────────────────────────────────────
+//
+// 为什么用 cookie 而不是 localStorage：localStorage 里的令牌任何脚本都读得到，
+// 控制台一旦出现一次 XSS（哪怕是依赖里的、或是哪天内联脚本里拼错了一个模板），
+// 拿到的就是**持久**的最高权限凭证。HttpOnly 让 JS 读不到它，凭证只在浏览器
+// 与桥接之间传递；JS 想发管理请求仍然可以（浏览器会自动带 cookie），但读不走。
+//
+// 为什么没有 Secure：控制台默认跑在 http://127.0.0.1:3100（明文回环），加了
+// Secure 浏览器会直接丢弃 cookie，登录会永远失败。要上 TLS 就由反代负责，
+// 那时再考虑给这个属性加开关（目前没有反代场景）。
+//
+// SameSite=Strict 兜住了写操作的 CSRF：跨站请求根本不会带上这个 cookie。
+// 这是与下面「非 GET 必须 application/json + Origin 校验」并行的第二道。
+const CONSOLE_COOKIE = 'qq_bridge_console';
+const CONSOLE_COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 天：免得每天开一次控制台就要重新登录
+
+/** 从 Cookie 头里取一个值。只做最小解析，够控制台用。 */
+function readCookieValue(header, name) {
+  for (const part of String(header ?? '').split(';')) {
+    const eq = part.indexOf('=');
+    if (eq < 0) continue;
+    if (part.slice(0, eq).trim() !== name) continue;
+    try { return decodeURIComponent(part.slice(eq + 1).trim()); } catch { return ''; }
+  }
+  return '';
+}
+
+/**
+ * 生成 Set-Cookie 值。
+ *
+ * Path=/ 让静态页和 /api/* 都带上；令牌字符集是 [A-Za-z0-9_-]，不需要编码。
+ * 传 maxAge=0 表示删除（退出登录）。
+ */
+function consoleCookieHeader(token, maxAge = CONSOLE_COOKIE_MAX_AGE) {
+  return `${CONSOLE_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}`;
+}
+
+/** 定长比较；长度不同直接返回 false（timingSafeEqual 对不等长会抛错）。 */
+function timingSafeStringEqual(a, b) {
+  const x = Buffer.from(String(a ?? ''), 'utf8');
+  const y = Buffer.from(String(b ?? ''), 'utf8');
+  return x.length === y.length && x.length > 0 && crypto.timingSafeEqual(x, y);
+}
+
+/**
+ * 控制台登录页（未通过鉴权时 GET / 返回）。
+ *
+ * 为什么不用 `prompt()`：`prompt()` 里输错一次就只留下一个空对话框，既说不清
+ * 「是没填令牌」还是「令牌填错了」，也没法回显提示。
+ *
+ * 表单不把令牌放进 URL：这里用 JSON POST 到 /api/console/login 换取一个
+ * HttpOnly cookie，再 `location.replace('/')` 进控制台。所以令牌不会留在
+ * 地址栏、历史记录或任何 JS 可读的存储里。
+ * 另外保留 `?token=` 引导（方便把入口链接发给自己）：服务端校验通过后
+ * 直接 303 到不带参数的路径并下发 cookie，同样不会把令牌留进历史记录。
+ */
+function consoleLoginPage(reason) {
+  const invalid = reason === 'invalid';
+  const title = invalid ? '控制台令牌错误' : '需要控制台令牌';
+  const hint = invalid
+    ? '刚才填的令牌不对。请重新输入访问令牌。'
+    : '这个控制台启用了访问鉴权，请输入访问令牌。';
+  // 登录页自身不引入任何外部资源；错误原因只来自两个内部常量，不会把用户输入
+  // 回显进 HTML（避免在登录页制造反射型 XSS）。
+  return `<!doctype html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>${title}</title>
+<style>
+:root{color-scheme:light dark}
+body{margin:0;min-height:100vh;display:grid;place-items:center;font:14px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;background:#0f1115;color:#e6e8ee}
+form{width:min(360px,calc(100vw - 48px));background:#171a21;border:1px solid #2a2f3a;border-radius:14px;padding:22px}
+h1{margin:0 0 6px;font-size:17px}
+p{margin:0 0 16px;color:#9aa3b2;font-size:13px}
+p.err{color:#ff8a8a}
+input{width:100%;box-sizing:border-box;padding:10px 12px;border-radius:9px;border:1px solid #333a47;background:#0f1115;color:inherit;font-size:14px}
+input:focus{outline:2px solid #4a6cf7;outline-offset:1px;border-color:transparent}
+button{margin-top:12px;width:100%;padding:10px 12px;border:0;border-radius:9px;background:#4a6cf7;color:#fff;font-size:14px;cursor:pointer}
+button:disabled{opacity:.6;cursor:default}
+small{display:block;margin-top:12px;color:#6f7887;font-size:12px}
+</style></head>
+<body>
+<form id="loginForm" autocomplete="on">
+  <h1>${title}</h1>
+  <p id="loginHint"${invalid ? ' class="err"' : ''}>${hint}</p>
+  <input id="loginToken" name="token" type="password" autocomplete="current-password" spellcheck="false" autofocus required aria-label="控制台访问令牌" placeholder="访问令牌">
+  <button id="loginSubmit" type="submit">进入控制台</button>
+  <small>登录凭证保存在 HttpOnly cookie 里（页面脚本读不到），刷新 / 重开 / 新标签页都不用再输入。令牌本身可在 config.json 的 consoleToken 或 state/console-token 里查看。</small>
+</form>
+<script>
+(() => {
+  const form = document.getElementById('loginForm');
+  const input = document.getElementById('loginToken');
+  const hint = document.getElementById('loginHint');
+  const submit = document.getElementById('loginSubmit');
+  const fail = (msg) => { hint.textContent = msg; hint.className = 'err'; input.value = ''; input.focus(); };
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const token = input.value.trim();
+    if (!token) { fail('请输入访问令牌。'); return; }
+    submit.disabled = true;
+    hint.textContent = '正在验证…';
+    hint.className = '';
+    try {
+      const res = await fetch('/api/console/login', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ token }),
+      });
+      if (res.ok) { location.replace('/'); return; }
+      if (res.status === 401) { fail('令牌错误，请重新输入。'); return; }
+      fail('登录失败（HTTP ' + res.status + '），请稍后重试。');
+    } catch {
+      fail('无法连接桥接，请确认服务在运行。');
+    } finally {
+      submit.disabled = false;
+    }
+  });
+})();
+</script>
+</body></html>`;
 }
 
 // 控制台鉴权 token：未配置时自动生成并持久化到 state/console-token，避免默认无鉴权。
@@ -698,10 +825,60 @@ function ignoredSender(id, cfg) {
 }
 
 // ── 配置 ────────────────────────────────────────────────────────────────────
+/**
+ * 主机名（RFC 1123）：标签由字母/数字/连字符组成，不能以连字符开头或结尾，
+ * 总长 ≤ 253。允许结尾一个点（FQDN 的习惯写法）。
+ */
+const HOSTNAME_RE = /^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/;
+
+function isValidHostname(value) {
+  if (typeof value !== 'string') return false;
+  const host = value.endsWith('.') ? value.slice(0, -1) : value;
+  if (!host || host.length > 253) return false;
+  return HOSTNAME_RE.test(host);
+}
+
+/** 通配地址：监听所有网卡（含 tailscale0 之类）。 */
+function isWildcardHost(host) {
+  return host === '0.0.0.0' || host === '::';
+}
+
+/**
+ * 控制台对外监听地址的规范化与校验。
+ *
+ * 接受三种写法，或留空：
+ *   - 留空 = 只监听回环（默认，行为不变）；
+ *   - 具体 IP（如 192.168.1.10、::1）；
+ *   - 主机名（如 nas.local）—— 交给系统解析，解析不了就绑定失败（不致命，见下）；
+ *   - 通配地址 0.0.0.0 / :: = 监听所有网卡。
+ *
+ * IPv6 字面量允许带方括号（和 Host 头一致），内部统一去掉括号再比较。
+ *
+ * 注意：无论填哪种，**对外监听都要求 config.json 里显式设置 consoleToken** ——
+ * 自动生成的令牌只适合本机回环那种「只有你能碰到」的场景。规则见
+ * startConsoleServer() 里的对外监听器。
+ */
+function normalizeConsoleHost(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  const bare = raw.startsWith('[') && raw.endsWith(']') ? raw.slice(1, -1) : raw;
+  if (net.isIP(bare)) return bare;
+  if (isValidHostname(bare)) return bare;
+  throw new Error('consoleHost 必须是具体 IP、主机名（如 192.168.1.10、nas.local）或留空（只监听回环）');
+}
+
 function loadConfig() {
   const p = path.join(ROOT, 'config.json');
   const file = readJsonSafe(p, null, true);
   if (!file || typeof file !== 'object' || Array.isArray(file)) throw new Error(`配置格式错误：${p}`);
+  // 控制台对外监听地址：非法值退化成「只监听回环」（暴露更少才是安全的那一侧），
+  // 而不是让整个桥接起不来 —— 配置文件里一个笔误不该把 QQ 通道一起打死。
+  let consoleHost = '';
+  try {
+    consoleHost = normalizeConsoleHost(file.consoleHost);
+  } catch (error) {
+    log(`⚠️  config.consoleHost 非法（${error?.message ?? error}）：已忽略，控制台只监听回环`);
+  }
   const cfg = {
     dsh: {
       baseUrl: 'http://127.0.0.1:3080',
@@ -741,6 +918,11 @@ function loadConfig() {
     sendDelayMs: file.sendDelayMs ?? 300,
     questionTimeoutMs: file.questionTimeoutMs ?? 5 * 60 * 1000,
     consolePort: file.consolePort ?? 3100,
+    // 控制台额外监听地址（可选）：留空 = 只监听回环（默认，行为不变）。
+    // 填 '192.168.1.10' 之类具体地址时，控制台**同时**在该地址上开一个监听器，
+    // 于是局域网内可用 http://<host>:<port> 访问；回环监听器保留 —— MCP 工具进程
+    // （src/mcp-snowluma-safe.js）走 127.0.0.1，不该因为对外开放而被迫改地址。
+    consoleHost,
     consoleToken: file.consoleToken ?? '',
     // 价目表覆盖项（可选）。留空即用 src/model-prices.js 的官方默认价。
     pricing: file.pricing ?? null,
@@ -3590,6 +3772,28 @@ async function main() {
 
   // ── 本地控制台（独立 Web 面板，不依赖 DSH WebUI） ───────────────────────────
   // 模式/角色/静默状态都存 state/*.json，桥接即时感知；此服务只读写这些文件。
+  //
+  // 控制台监听现状（供 /api/console/access 如实报告「配置值」与「实际生效值」的差异）：
+  // 监听器是**启动时**创建的，所以改了 consoleHost 必须重启桥接才生效 ——
+  // 这里不假装热生效，接口把两者分开返回，界面据此提示「待重启」。
+  let consoleLanHost = '';   // 实际已绑定的对外监听地址（'' = 只监听回环）
+  let consoleBoundPort = 0;  // 控制台实际监听的端口（配置端口为 0 时是系统分配的）
+
+  /**
+   * config.json 里是否**显式**配置了合法的控制台令牌。
+   *
+   * 对外监听（consoleHost）必须满足这个条件：自动生成的令牌只适合「只有本机能
+   * 碰到控制台」的场景，它落在 state/console-token，靠文件系统权限兜底；
+   * 一旦控制台开始对外监听，这个前提就不成立了。
+   *
+   * 每次都重新读 cfg.consoleToken，而不是复用启动时的快照 —— 控制台里改令牌会
+   * 热更新 cfg（并写回 config.json），所以「现在配了没有」是随时会变的。
+   */
+  const explicitConsoleTokenNow = () => {
+    const token = String(cfg.consoleToken ?? '').trim();
+    return token.length >= 16 && token.length <= 128 && /^[A-Za-z0-9_-]+$/.test(token);
+  };
+
   function v2ToolEnabled(flag) {
     return cfg.socialV2?.tools?.[flag] !== false;
   }
@@ -3609,6 +3813,16 @@ async function main() {
     if (!consoleToken) throw new Error('控制台令牌为空：拒绝以无鉴权方式启动控制台 API');
     if (!tokenValid && configuredToken) log(`控制台 config.consoleToken 长度/字符不合法，已忽略并回退到自动生成令牌`);
     if (!configuredToken) log('控制台未配置 consoleToken，已自动生成并保存到 state/console-token');
+    // 对外监听（consoleHost）**必须**配一个管理员显式设置的令牌。
+    //
+    // 自动生成的令牌只适合「只有本机能碰到控制台」的场景：它落在 state/console-token，
+    // 靠文件系统权限兜底。一旦控制台开始对外监听，这个前提就不成立了 ——
+    // 令牌会出现在每一次跨机请求里（哪怕只是输错时也不该由机器替管理员决定）。
+    // 所以对外监听这条路要求 config.json 里**显式**写了 consoleToken；
+    // 没写就**不开**对外监听器（失败关闭：暴露更少才是安全的那一侧），
+    // 本机回环控制台照常可用，管理员改完配置重启即可。
+    const hasExplicitConsoleToken = explicitConsoleTokenNow();
+    const wantsLanListener = Boolean(String(cfg.consoleHost ?? '').trim());
     // 二代会话级隔离：MCP 工具调用时若带 x-agent-token，则必须匹配该会话的 agentToken。
     // 控制台/管理端请求不带此头，仍走 consoleToken 管理通道。
     //
@@ -3669,7 +3883,7 @@ async function main() {
       );
     };
 
-    const server = http.createServer(async (req, res) => {
+    const consoleHandler = async (req, res) => {
       let url;
       try { url = new URL(req.url ?? '/', `http://127.0.0.1:${port}`); }
       catch {
@@ -3758,39 +3972,156 @@ async function main() {
         res.end();
         return;
       }
-      // Host 头校验（DNS rebinding 硬化）：控制台只监听 127.0.0.1，因此合法请求的 Host
+      // Host 头校验（DNS rebinding 硬化）：控制台默认只监听 127.0.0.1，因此合法请求的 Host
       // 只可能是 127.0.0.1 / localhost / [::1] 加本端口。攻击者用一个 TTL=0 的域名解析到
       // 127.0.0.1 时，浏览器会把 evil.com:3100 当作同源，Origin 校验随之失效；卡住 Host
       // 这一层后，这类请求在进入任何业务分支之前就被拒掉。
       // 反代/端口转发场景会被一并拒绝——这是有意的（要远程访问请用 SSH 隧道并自行承担）。
-      const hostHeader = String(req.headers.host ?? '');
+      //
+      // 配置了 consoleHost（对外监听）时，**按监听器分别判定**：
+      //   · 回环监听器：永远只接受回环 Host —— DNS rebinding 硬化的底线不能因为
+      //     「反正开了对外监听」就一起失效；
+      //   · 对外监听器：放行配置里那个地址（IP 或主机名）本身。绑 0.0.0.0 / :: 时
+      //     它监听所有网卡，Host 可能是这台机器的任意地址 —— 那种情况下唯一的门槛
+      //     是控制台令牌（而对外监听本来就强制要求显式设置令牌）。
+      // 怎么知道是从哪个监听器进来的？req.socket.localAddress 就是连接实际落到
+      // 哪个本地地址上的（IPv4-mapped 的 ::ffff: 前缀要去掉）。
+      const hostHeader = String(req.headers.host ?? '').toLowerCase();
       // 用**实际绑定端口**而不是配置值：测试夹具用 consolePort: 0 让系统分配端口，
       // 配置里那个 0 不是请求里的 Host 端口。请求必然发生在 listen 之后，所以这里拿得到。
       const boundPort = server.address()?.port ?? port;
-      const allowedHosts = [`127.0.0.1:${boundPort}`, `localhost:${boundPort}`, `[::1]:${boundPort}`];
-      if (!allowedHosts.includes(hostHeader.toLowerCase())) {
+      const localAddress = String(req.socket?.localAddress ?? '').replace(/^::ffff:/i, '');
+      const onLoopbackListener = localAddress === '127.0.0.1' || localAddress === '::1';
+      const loopbackHosts = [`127.0.0.1:${boundPort}`, `localhost:${boundPort}`, `[::1]:${boundPort}`];
+      const lanHost = String(cfg.consoleHost ?? '').trim().toLowerCase();
+      // 按**监听器**分别判定：
+      //   · 回环监听器：只接受回环三形态 —— DNS rebinding 硬化的底线，不能因为
+      //     「反正开了对外监听」就一起失效；
+      //   · 对外监听器 + 绑具体地址：只接受配置里那个地址本身（IP 或主机名）；
+      //   · 对外监听器 + 绑通配地址（0.0.0.0 / ::）：它监听所有网卡，来路的
+      //     本机地址与 Host 都可能是这台机器的任意一个 —— 这种部署下唯一的门槛
+      //     是控制台令牌，而对外监听本来就强制要求显式令牌。
+      let hostAllowed;
+      if (onLoopbackListener) {
+        hostAllowed = loopbackHosts.includes(hostHeader);
+      } else if (lanHost && isWildcardHost(lanHost)) {
+        hostAllowed = true;
+      } else if (lanHost) {
+        // Host 头里 IPv6 要带方括号（[::1]:3100），IPv4/主机名是裸的（192.168.1.10:3100）——
+        // 放行形态错了，浏览器发来的 Host 就对不上，会被这层误杀。
+        const bare = lanHost.includes(':') ? `[${lanHost}]` : lanHost;
+        // 部分客户端（非浏览器）会省略默认端口以外的端口号？反过来更常见的是带端口，
+        // 但裸 IP 的 Host 也出现过 —— 只放行**精确等于**该地址的那两种形态。
+        hostAllowed = [`${bare}:${boundPort}`, bare].includes(hostHeader);
+      } else {
+        hostAllowed = false;
+      }
+      if (!hostAllowed) {
         sendJson({ ok: false, error: `Host 头不被允许（${hostHeader || '缺失'}）：控制台只接受本机回环访问` }, 403);
         return;
       }
-      // 控制台鉴权：所有请求需带 x-console-token 或 ?token=
+      // 写请求的 CSRF 门槛：必须是 application/json，且（若带 Origin）来自本机页面。
+      // 默认未配 consoleToken 时，这可阻止任意网页用表单/跨站请求触发
+      // /api/restart、/api/workspace/reset、/api/role 等破坏性接口。
+      // 抽成函数是因为登录 / 登出发生在令牌门**之前**（它们本身就是在建立/销毁凭证），
+      // 也必须过同一道门槛。
+      const writeRequestBlocked = () => {
+        if (req.method === 'GET') return null;
+        const ctype = String(req.headers['content-type'] ?? '');
+        if (!ctype.toLowerCase().includes('application/json')) {
+          return { status: 415, error: '请求必须是 application/json' };
+        }
+        const origin = req.headers['origin'];
+        if (!origin) return null;
+        let originHost = '';
+        try { originHost = new URL(String(origin)).host.toLowerCase(); } catch {}
+        // 与 Host 白名单同一口径，按监听器分别判定（回环监听器只认回环三形态；
+        // 对外监听器才放行配置里那个地址；绑通配地址时 Origin 不再限制，
+        // 令牌是唯一门槛）。
+        let originAllowed;
+        if (onLoopbackListener) {
+          originAllowed = loopbackHosts.includes(originHost);
+        } else if (lanHost && isWildcardHost(lanHost)) {
+          originAllowed = true;
+        } else if (lanHost) {
+          const bare = lanHost.includes(':') ? `[${lanHost}]` : lanHost;
+          originAllowed = [`${bare}:${boundPort}`, bare].includes(originHost);
+        } else {
+          originAllowed = false;
+        }
+        return originAllowed ? null : { status: 403, error: '跨站请求被拒绝' };
+      };
+
+      // ── 登录 / 登出 ────────────────────────────────────────────────────────
+      // 这两个端点必须在令牌门**之前**处理：它们的作用就是获得 / 丢弃凭证。
+      if (url.pathname === '/api/console/login' || url.pathname === '/api/console/logout') {
+        // 只允许 POST：GET 的登出可以被任意网页用一张 <img> 触发（登出 CSRF），
+        // 登录也不该能从 URL 触发。
+        if (req.method !== 'POST') {
+          sendJson({ ok: false, error: '该接口只接受 POST' }, 405);
+          return;
+        }
+        const blocked = writeRequestBlocked();
+        if (blocked) { sendJson({ ok: false, error: blocked.error }, blocked.status); return; }
+        if (url.pathname === '/api/console/login') {
+          const body = await readBody();
+          // 与令牌门同一口径：逐字节比较，不做 trim（页面表单已在客户端 trim）。
+          const token = String(body?.token ?? '');
+          if (!timingSafeStringEqual(token, consoleToken)) {
+            // 登录失败只说「令牌错误」：这里没有「没带令牌」的歧义，空输入直接算错。
+            sendJson({ ok: false, code: 'console-token-invalid', error: '控制台令牌错误：请重新输入访问令牌' }, 401);
+            return;
+          }
+          res.setHeader('Set-Cookie', consoleCookieHeader(consoleToken));
+          sendJson({ ok: true });
+          return;
+        }
+        // 登出：Max-Age=0 让浏览器立刻丢弃这个 cookie。响应里不透露令牌。
+        res.setHeader('Set-Cookie', consoleCookieHeader('', 0));
+        sendJson({ ok: true });
+        return;
+      }
+
+      // ── 令牌门 ────────────────────────────────────────────────────────────
+      // 三个来源，优先级：显式头（脚本 / CLI / 测试）> ?token=（首次引导）> cookie（浏览器）。
       // 定长比较：`!==` 会在第一个不同的字符处短路，理论上可被本机进程用响应时延逐字节试探。
-      // 令牌是 192 bit 随机值且只监听回环，所以这是纵深防御而非在野漏洞。
-      const suppliedToken = String(url.searchParams.get('token') ?? req.headers['x-console-token'] ?? '');
-      const tokenMatches = (() => {
-        if (!consoleToken) return false; // 上面已拒绝空令牌；真出现也只许失败关闭，绝不 return true
-        const a = Buffer.from(suppliedToken, 'utf8');
-        const b = Buffer.from(consoleToken, 'utf8');
-        if (a.length !== b.length) return false;
-        return crypto.timingSafeEqual(a, b);
-      })();
+      // 令牌是 192 bit 随机值且默认只监听回环，所以这是纵深防御而非在野漏洞。
+      // 不做 trim：令牌必须逐字节相等，`"token "` 这种变体不能被当成同一个令牌。
+      const headerToken = String(req.headers['x-console-token'] ?? '');
+      const queryToken = String(url.searchParams.get('token') ?? '');
+      const cookieToken = readCookieValue(req.headers.cookie, CONSOLE_COOKIE);
+      const suppliedToken = headerToken || queryToken || cookieToken;
+      const tokenSource = headerToken ? 'header' : queryToken ? 'query' : cookieToken ? 'cookie' : '';
+      const tokenMatches = Boolean(consoleToken) && timingSafeStringEqual(suppliedToken, consoleToken);
       if (consoleToken && !tokenMatches) {
+        // 把「没带令牌」和「令牌不对」分开：前端据此提示「请登录」还是「令牌错误」，
+        // 而不是统一丢一句「未授权」让人猜。code 是稳定契约，error 才是给人看的文案。
+        const missing = !suppliedToken;
         if (req.method === 'GET' && url.pathname === '/') {
           res.writeHead(401, { 'content-type': 'text/html; charset=utf-8', ...SECURITY_HEADERS });
-          res.end('<!doctype html><meta charset="utf-8"><title>需要令牌</title><script>const t=prompt(\'请输入控制台访问令牌\');if(t)location.href=\'/?token=\'+encodeURIComponent(t);</script>');
+          res.end(consoleLoginPage(missing ? 'missing' : 'invalid'));
         } else {
-          sendJson({ ok: false, error: '未授权：请提供控制台访问令牌' }, 401);
+          sendJson({
+            ok: false,
+            code: missing ? 'console-token-missing' : 'console-token-invalid',
+            error: missing
+              ? '未提供控制台令牌：请先登录控制台'
+              : '控制台令牌错误：请重新输入访问令牌',
+          }, 401);
         }
         return;
+      }
+      // 通过 `?token=` 引导进来时，立刻 303 到不带参数的同一路径并下发 cookie：
+      // 令牌不进地址栏历史，也不用依赖前端脚本去抹。
+      if (tokenSource === 'query' && req.method === 'GET' && !url.pathname.startsWith('/api/')) {
+        res.writeHead(303, { location: url.pathname, 'Set-Cookie': consoleCookieHeader(consoleToken), ...SECURITY_HEADERS });
+        res.end();
+        return;
+      }
+      // 用头或 query 验证通过（或 cookie 与当前令牌不一致，比如刚在别的标签页改过令牌）时，
+      // 顺手把 cookie 刷成当前值。cookie 本身已经对就不重发，免得每个请求都带一个 Set-Cookie。
+      if (tokenSource !== 'cookie' && cookieToken !== consoleToken) {
+        res.setHeader('Set-Cookie', consoleCookieHeader(consoleToken));
       }
       // 智能体调用隔离（集中关卡）。
       //
@@ -3828,24 +4159,10 @@ async function main() {
           }
         }
       }
-      // CSRF 防护：所有写操作必须是 application/json，且（若带 Origin）必须来自本机页面。
-      // 默认未配 consoleToken 时，这可阻止任意网页用表单/跨站请求触发
-      // /api/restart、/api/workspace/reset、/api/role 等破坏性接口。
-      if (req.method !== 'GET') {
-        const ctype = String(req.headers['content-type'] ?? '');
-        if (!ctype.toLowerCase().includes('application/json')) {
-          sendJson({ ok: false, error: '请求必须是 application/json' }, 415);
-          return;
-        }
-        const origin = req.headers['origin'];
-        if (origin) {
-          let originHost = '';
-          try { originHost = new URL(String(origin)).host; } catch {}
-          if (![`127.0.0.1:${boundPort}`, `localhost:${boundPort}`, `[::1]:${boundPort}`].includes(originHost)) {
-            sendJson({ ok: false, error: '跨站请求被拒绝' }, 403);
-            return;
-          }
-        }
+      // CSRF 防护：走与登录/登出同一个门槛（非 GET 必须 application/json + Origin 校验）。
+      {
+        const blocked = writeRequestBlocked();
+        if (blocked) { sendJson({ ok: false, error: blocked.error }, blocked.status); return; }
       }
       try {
         // 空 agent token 一律拒绝，防止 MCP 传入空字符串时被当作“管理端/无 token”绕过校验
@@ -4591,6 +4908,62 @@ async function main() {
           return;
         }
 
+        // ── 控制台对外访问地址（写 config.json；监听器启动时创建，需重启才生效）──
+        // 为什么单独一个端点而不是塞进 /api/status：/api/status 有智能体可见的分支，
+        // 控制台的监听地址属于管理面信息（对外暴露面），不该混进那个接口。
+        if (url.pathname === '/api/console/access') {
+          if (req.method === 'GET') {
+            sendJson({
+              ok: true,
+              consoleHost: cfg.consoleHost ?? '',
+              effectiveConsoleHost: consoleLanHost,
+              consolePort: consoleBoundPort || (cfg.consolePort ?? 3100),
+              consoleTokenConfigured: explicitConsoleTokenNow(),
+            });
+            return;
+          }
+          if (req.method === 'POST') {
+            const body = await readBody();
+            if (!body || typeof body !== 'object' || body.consoleHost === undefined) {
+              sendJson({ ok: false, error: '缺少 consoleHost 字段（留空字符串表示只监听回环）' }, 400);
+              return;
+            }
+            let wanted = '';
+            try {
+              wanted = normalizeConsoleHost(body.consoleHost);
+            } catch (error) {
+              sendJson({ ok: false, error: error?.message ?? 'consoleHost 无效' }, 400);
+              return;
+            }
+            const configFile = path.join(ROOT, 'config.json');
+            // fail-fast：配置文件损坏时直接 500，绝不回写（与白名单保存同一口径）
+            const file = readConfigObject(configFile);
+            file.consoleHost = wanted;
+            atomicWriteJson(configFile, file);
+            cfg.consoleHost = wanted;
+            // 监听器是**启动时**创建的，改配置不会热生效：如实告诉界面「需重启」，
+            // 而不是让界面显示一个假的「已生效」。
+            const restartRequired = wanted !== consoleLanHost;
+            // 对外监听要求显式令牌：没配就等于「重启后也不会开对外监听」，
+            // 这里如实告诉界面，别让它显示一个假的「已生效」。
+            const tokenReady = explicitConsoleTokenNow();
+            const willExpose = Boolean(wanted) && !tokenReady;
+            log(`控制台：对外监听地址已更新为 ${wanted || '（只监听回环）'}${restartRequired ? '，需重启桥接后生效' : ''}${willExpose ? '；⚠️ 缺少显式 consoleToken，重启后不会开对外监听' : ''}`);
+            sendJson({
+              ok: true,
+              consoleHost: wanted,
+              effectiveConsoleHost: consoleLanHost,
+              consolePort: consoleBoundPort || (cfg.consolePort ?? 3100),
+              consoleTokenConfigured: tokenReady,
+              restartRequired,
+              warning: willExpose
+                ? '对外监听要求在 config.json 里显式设置 consoleToken（至少 16 位，仅 A-Za-z0-9_-）；当前没有，重启后不会开对外监听。'
+                : '',
+            });
+            return;
+          }
+        }
+
         // ── DSH 模型与思考强度 ───────────────────────────────────────────────
         if (req.method === 'GET' && url.pathname === '/api/dsh/model') {
           const provider = String(cfg.dsh?.provider || 'deepseek-official');
@@ -4727,6 +5100,9 @@ async function main() {
           cfg.consoleToken = generated ? '' : newToken;
           atomicWriteText(path.join(STATE_DIR, 'console-token'), newToken);
           consoleToken = newToken;
+          // 当前这个浏览器如果是用 cookie 登录的，它的 cookie 里还是旧令牌 ——
+          // 顺手换成新的，否则改完令牌下一个请求就把自己踢下线。
+          res.setHeader('Set-Cookie', consoleCookieHeader(newToken));
           log(`控制台：访问令牌已${generated ? '重新生成' : '手动修改'}（不记录完整值）`);
           sendJson({ ok: true, token: newToken, generated });
           return;
@@ -7794,10 +8170,69 @@ async function main() {
         const status = Number(error?.statusCode) || 500;
         sendJson({ ok: false, error: error?.message ?? String(error) }, status);
       }
-    });
-    server.listen(port, '127.0.0.1', () => {
-      log(`本地控制台已启动：http://127.0.0.1:${port}`);
-    });
+    };
+    const server = http.createServer(consoleHandler);
+    // 附加监听器（对外那个）挂在 server 上：关停路径与测试夹具需要能一并关掉 ——
+    // 否则它会一直占着端口，Node 的事件循环也不会退出（测试进程会挂住）。
+    server.extraListeners = [];
+    const lanHost = String(cfg.consoleHost ?? '').trim();
+    // 对外监听必须配一个**显式**的 consoleToken（见上面 hasExplicitConsoleToken 的说明）。
+    // 没配就不开对外监听器 —— 失败关闭：暴露更少才是安全的那一侧。
+    if (wantsLanListener && !hasExplicitConsoleToken) {
+      log(`⛔ 控制台对外监听已跳过：配置了 consoleHost="${lanHost}"，但 config.json 里没有合法的 consoleToken（至少 16 位，仅 A-Za-z0-9_-）。对外暴露的管理入口必须用管理员显式设置的强令牌；自动生成的令牌只适合本机回环。请设置 consoleToken 后重启桥接。`);
+    }
+    const lanEnabled = wantsLanListener && hasExplicitConsoleToken;
+    // 通配地址（0.0.0.0 / ::）单独处理：
+    //   - 同一端口上不能再单独绑 127.0.0.1（会 EADDRINUSE），而通配监听器本来
+    //     就覆盖回环，MCP 工具进程走 127.0.0.1 依然通；
+    //   - 回环请求靠 req.socket.localAddress 区分（见 Host 校验处），白名单照旧严格。
+    const wildcard = lanEnabled && isWildcardHost(lanHost);
+    // 额外的对外监听器（可选）：consoleHost 配置了就多开一个监听器。
+    // 为什么单独开而不是把回环那个换成绑 0.0.0.0：
+    //   - 绑具体地址时，用它精确控制暴露面（不像 0.0.0.0 那样把 tailscale0
+    //     等所有网卡一起暴露）；
+    //   - 回环监听器必须留着 —— MCP 工具进程（src/mcp-snowluma-safe.js 的 agentApiBase）
+    //     固定走 http://127.0.0.1:<consolePort>，它不该受对外开放影响；
+    //   - 两个监听器共用同一个 handler、同一份鉴权与 Host 白名单逻辑。
+    //
+    // 端口取回环监听器的**实际**端口（server.address()），而不是配置里的 port：
+    // 配置端口为 0 时系统会分配一个随机端口，两个监听器必须落在同一个端口上，
+    // 否则「配置值」与「实际监听」会各说各话（外部访问的是哪一个就成了玄学）。
+    const startLanListener = () => {
+      if (!lanEnabled) return;
+      const lanPort = server.address()?.port ?? port;
+      try {
+        const lanServer = http.createServer(consoleHandler);
+        server.extraListeners.push(lanServer);
+        lanServer.on('error', (error) => {
+          // 对外监听失败**不致命**：回环控制台仍然可用（管理端不至于失联）。
+          log(`控制台对外监听失败（${lanHost}:${lanPort}）: ${error?.message ?? error}`);
+        });
+        lanServer.listen(lanPort, lanHost, () => {
+          consoleLanHost = lanHost;
+          log(`本地控制台已启动（对外）：http://${lanHost}:${lanPort}`);
+        });
+      } catch (error) {
+        log(`控制台对外监听失败（${lanHost}:${lanPort}）: ${error?.message ?? error}`);
+      }
+    };
+    if (wildcard) {
+      // 只开通配监听器（它覆盖回环，也覆盖所有网卡）。
+      server.listen(port, lanHost, () => {
+        consoleBoundPort = server.address()?.port ?? port;
+        consoleLanHost = lanHost;
+        log(`本地控制台已启动（所有网卡）：http://${lanHost}:${consoleBoundPort}`);
+      });
+    } else {
+      // 回环监听器：MCP 工具进程与本机脚本走 127.0.0.1，永远保留。
+      server.listen(port, '127.0.0.1', () => {
+        consoleBoundPort = server.address()?.port ?? port;
+        log(`本地控制台已启动：http://127.0.0.1:${consoleBoundPort}`);
+        // 对外监听器等回环监听**成功之后**再建：端口用回环那个的实际端口，
+        // 保证两个监听器永远在同一个端口上。
+        startLanListener();
+      });
+    }
     // 端口被占用说明已有实例在跑：以 exit 2 退出，守护脚本会识别为"已有实例"而不是无限重启
     server.on('error', (error) => {
       log(`控制台服务错误: ${error?.message ?? error}`);
