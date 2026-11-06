@@ -2074,6 +2074,32 @@ button:active:not(:disabled) {
       </div>
 
       </div></details>
+<details class="settings-group"><summary>语音合成音色（BreezeBlue）</summary><div class="settings-content">
+      <div class="meta" style="margin-bottom:8px">
+        API key 只写入服务器 <code>state/breezeblue.json</code>（权限 600），不会回显到页面；留空保存不会覆盖已存 key。
+        保存后下一条 AI 语音自动使用这个 Voice ID；Breeze 失败时仍回退 Edge。
+      </div>
+      <div class="row" style="flex-wrap:wrap;gap:8px;align-items:center">
+        <label style="flex:0 0 auto">API Key</label>
+        <input type="password" id="breezeApiKey" placeholder="留空保持已保存的 key" autocomplete="new-password" spellcheck="false" style="flex:1;min-width:220px">
+        <label style="flex:0 0 auto">Voice ID</label>
+        <input type="text" id="breezeVoiceId" placeholder="voc_..." autocomplete="off" spellcheck="false" style="width:220px">
+      </div>
+      <div class="row" style="flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px">
+        <label style="flex:0 0 auto">模型</label>
+        <select id="breezeModelId" style="width:230px">
+          <option value="breeze-tts-2">breeze-tts-2（中文）</option>
+          <option value="breeze-tts-2-multilingual">breeze-tts-2-multilingual</option>
+        </select>
+        <label style="flex:0 0 auto">语言</label>
+        <input type="text" id="breezeLanguage" value="zh" maxlength="2" style="width:64px">
+        <label style="flex:0 0 auto"><input type="checkbox" id="breezeEnabled" style="width:auto"> 启用</label>
+        <button id="breezeSave" type="button">保存并应用</button>
+        <button id="breezeTest" type="button" class="btn-secondary">测试合成</button>
+        <span id="breezeMsg" class="meta"></span>
+      </div>
+      <div id="breezeStatus" class="meta" style="margin-top:8px">读取中…</div>
+    </div></details>
 <details class="settings-group"><summary>唤醒推荐值（仅参考，AI 可不遵守）</summary><div class="settings-content">
       <div class="row">
         <label style="flex:1">默认模式</label>
@@ -3262,6 +3288,69 @@ async function sendVoiceFromConsole() {
   }
 }
 
+// ── BreezeBlue 音色配置 ───────────────────────────────────────────────────
+async function loadBreezeConfig() {
+  const status = document.getElementById('breezeStatus');
+  const msg = document.getElementById('breezeMsg');
+  try {
+    const r = await api('/api/voice/breeze-config');
+    if (!r.ok) throw new Error(r.error || '读取失败');
+    const c = r.config || {};
+    const keyEl = document.getElementById('breezeApiKey');
+    keyEl.value = '';
+    keyEl.placeholder = c.hasApiKey ? '已保存（留空不改）' : 'brz_...';
+    document.getElementById('breezeVoiceId').value = c.voiceId || '';
+    document.getElementById('breezeModelId').value = c.modelId || 'breeze-tts-2';
+    document.getElementById('breezeLanguage').value = c.languageCode || 'zh';
+    document.getElementById('breezeEnabled').checked = c.enabled !== false;
+    status.textContent = '当前：' + (c.voiceId ? c.voiceId : '未配置 Voice ID')
+      + (c.hasApiKey ? '；API key 已保存' : '；API key 未配置')
+      + (c.enabled === false ? '；已停用' : '');
+    status.className = 'meta';
+    if (msg) msg.textContent = '';
+  } catch (error) {
+    if (status) { status.textContent = '读取失败：' + (error && error.message ? error.message : error); status.className = 'meta err'; }
+  }
+}
+
+async function saveBreezeConfig() {
+  const msg = document.getElementById('breezeMsg');
+  const apiKey = document.getElementById('breezeApiKey').value.trim();
+  const body = {
+    voiceId: document.getElementById('breezeVoiceId').value.trim(),
+    modelId: document.getElementById('breezeModelId').value,
+    languageCode: document.getElementById('breezeLanguage').value.trim().toLowerCase(),
+    enabled: document.getElementById('breezeEnabled').checked
+  };
+  if (apiKey) body.apiKey = apiKey;
+  if (msg) { msg.textContent = '保存中…'; msg.className = 'meta'; }
+  try {
+    const r = await api('/api/voice/breeze-config', 'POST', body);
+    if (!r.ok) throw new Error(r.error || '保存失败');
+    if (msg) { msg.textContent = '✅ 已保存，下一条 AI 语音会自动使用这个音色'; msg.className = 'meta ok'; }
+    await loadBreezeConfig();
+  } catch (error) {
+    if (msg) { msg.textContent = '❌ ' + (error && error.message ? error.message : error); msg.className = 'meta err'; }
+  }
+}
+
+async function testBreezeVoice() {
+  const msg = document.getElementById('breezeMsg');
+  if (msg) { msg.textContent = '合成中…'; msg.className = 'meta'; }
+  try {
+    const r = await api('/api/voice/breeze-test', 'POST', { text: '你好，我是柚柚。这是当前音色的试听。' });
+    if (!r.ok) throw new Error(r.error || '试听失败');
+    if (msg) {
+      msg.textContent = '✅ 已生成试听：' + (r.detail || '') + '（语音库：' + (r.file || '') + '）';
+      msg.className = 'meta ok';
+    }
+    voiceLibraryLoaded = false;
+    if (typeof loadVoiceLibrary === 'function') loadVoiceLibrary(true);
+  } catch (error) {
+    if (msg) { msg.textContent = '❌ ' + (error && error.message ? error.message : error); msg.className = 'meta err'; }
+  }
+}
+
 // ── 二代仿真模式（reserved2）配置 ─────────────────────────────────────────
 async function loadV2Config() {
   try {
@@ -3842,6 +3931,8 @@ document.getElementById('v2ConfigSave').addEventListener('click', saveV2Config);
 document.getElementById('v2ConfigSaveTop').addEventListener('click', saveV2Config);
 document.getElementById('voiceRefreshBtn').addEventListener('click', () => loadVoiceLibrary(true));
 document.getElementById('voiceSendBtn').addEventListener('click', sendVoiceFromConsole);
+document.getElementById('breezeSave').addEventListener('click', saveBreezeConfig);
+document.getElementById('breezeTest').addEventListener('click', testBreezeVoice);
 async function refreshV2Activity() {
   try {
     const r = await api('/api/socialV2/activity');
@@ -5047,7 +5138,7 @@ document.getElementById('usageClear').addEventListener('click', async () => {
 
 setConsolePage(location.hash.slice(1), { updateHash:false });
 
-refresh(); refreshRoles(); refreshWhitelist(); refreshSessions(); refreshPending(); refreshPresets(); loadSocialForm(); loadV2Config(); refreshV2Activity(); loadV2ToolLog(); loadV2SessionOptions(); refreshSocialStatus(); refreshSlang(); loadSlangConfig(); loadSecurity(); refreshSimPrompt(); refreshDshModel(); refreshUsage(); refreshUsageChart(); refreshUsageRecent();
+refresh(); refreshRoles(); refreshWhitelist(); refreshSessions(); refreshPending(); refreshPresets(); loadSocialForm(); loadV2Config(); loadBreezeConfig(); refreshV2Activity(); loadV2ToolLog(); loadV2SessionOptions(); refreshSocialStatus(); refreshSlang(); loadSlangConfig(); loadSecurity(); refreshSimPrompt(); refreshDshModel(); refreshUsage(); refreshUsageChart(); refreshUsageRecent();
 setInterval(() => { refresh(); refreshSessions(); refreshPending(); refreshSocialStatus(); refreshSlang(); }, 3000);
 // 用量看板只在本页可见时轮询：既保证「实时」，又不让其它页白白多打两份接口。
 setInterval(() => { if (currentConsolePage !== 'usage') return; refreshUsage(); refreshUsageChart(); refreshUsageRecent(); }, 3000);
