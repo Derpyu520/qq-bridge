@@ -191,7 +191,8 @@ request: {
 ### 4.5 思考强度兼容与热切换
 
 - 控制台使用 DSH 目录中的精确档位 ID（保留大小写，包含适配器自定义值和 `off`）。
-  模型未声明 `reasoning` 能力时只提供 `none`；目录不可用时回退 `low / high / max / none`。
+  模型未声明 `reasoning` 能力时，API 能力列表仅公布 `none`；目录不可用时回退 `low / high / max / none`。
+  控制台仍保留未列出的当前配置，并标注“当前配置，目录未列出”，供管理员识别和切换。
 - `none` 表示 `selectModel` 不携带 `reasoningEffort`，使用适配器默认值；不代表关闭思考。
   `none` 是桥接保留值，大小写变体也按此解释；其他档位须填写目录中的精确 ID。
 - 明确拒绝指定强度时，保持 provider/model 并去掉强度重试；其他临时失败仍保留原参数重试。
