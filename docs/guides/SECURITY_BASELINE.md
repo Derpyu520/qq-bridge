@@ -51,7 +51,7 @@
 | 机制 | 位置 | 行为 |
 | --- | --- | --- |
 | 敏感信息拦截 | `auditAndSend()` / `SENSITIVE_RE` / `assertOutboundAuditOk()` | 回复含本机路径、UNC、凭据赋值形态 → **整条拦截不发**；语音按文件名审计；错误文本、审批理由、工具名同样过审 |
-| 会话令牌防外发 | `redactKnownTokensOnly()` + `onebotSend()` | 所有已知 agent token 在发送前脱敏；文本里若仍出现已知令牌则**直接抛错不发** |
+| 会话令牌防外发 | `redactKnownTokensOnly()` + `sendMessagesV2()` + `onebotSend()` | 已知 agent token 在发送前脱敏；分条批次先拼接预检，命中则整批不发，防止短片段逐条通过；实际发送前仍逐条复核 |
 | CQ 注入 | `onebotSend()` | 出站文本一律包成 `{type:'text'}` 段并做 `[CQ:` → `[CQ：` 转义，杜绝 CQ 码注入 |
 | @ 限制 | `onebotSend()` | `atUserId` 只接受正整数，禁止 `@all` |
 | 发送限流 | `socialV2.send.*` / `voice.*` / `sticker.collect.*` | 每分钟/每小时硬上限，超限拒绝并退避 |

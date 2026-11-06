@@ -8637,6 +8637,12 @@ async function main() {
   }
 
   function sendMessagesV2(key, messages, delays, replyToMessageId, atUserId = null) {
+    // 先审计整批：令牌可被拆成多段，每段都短于逐条闸门的 12 字符窗口。
+    // 必须在发送第一段前拒绝；onebotSend 仍会在实际发送时再次检查单条。
+    if (hasKnownTokenFragment(messages.join(''))) {
+      log(`发送内容包含会话令牌，已阻止整批发送 (${key})`);
+      return Promise.reject(new Error('发送内容包含会话令牌，已阻止发送'));
+    }
     let sendChain = sendChainFor(key);
     const assertSendAllowed = captureSendGuard(key, { ai: true });
     const [kind, id] = key.split(':');
