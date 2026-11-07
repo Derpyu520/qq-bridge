@@ -1,34 +1,83 @@
-// Pure resolver for the SnowLuma OneBot WebSocket token.
+// Pure resolver for the SnowLuma OneBot WebSocket target (URL + token pair).
 //
 // SnowLuma keeps two different tokens per account: the HTTP access token and the WebSocket access token.
 // Passing the HTTP token to the WebSocket client is rejected by the gateway (close code 1006 / unauthorized
-// upgrade), so the bridge must use a WS token for the first handshake as well:
-//   1. an explicit `snowluma.wsToken` from config (recommended for isolated lanes),
-//   2. the WS token discovered from the account's SnowLuma config,
-//   3. the HTTP token only as a flagged compatibility fallback (may fail authentication).
-// The resolver never invents a success claim; `warning` is non-null whenever the fallback is used.
+// upgrade), so the first handshake must use a WS token **for the same endpoint**:
+//   1. endpoint following disabled: use the configured URL/token; accept a discovered token only when the
+//      discovered endpoint matches the configured one exactly (no cross-account credential reuse);
+//   2. endpoint following enabled: use the discovered account pair, unless the configured endpoint matches
+//      the discovered endpoint and an explicit token is configured (explicit wins for the same account).
+// The HTTP token is only a flagged compatibility fallback; the resolver never claims WS auth success.
 
-export function resolveWsToken({ configuredWsToken, discovered, httpToken } = {}) {
-  const cfg = typeof configuredWsToken === 'string' ? configuredWsToken.trim() : '';
-  if (cfg) return { token: cfg, source: 'config', warning: null };
+function normalizeUrl(value) {
+  try {
+    return new URL(String(value)).href.replace(/\/+$/, '');
+  } catch {
+    return null;
+  }
+}
 
-  const disc = discovered && discovered.ok && typeof discovered.wsToken === 'string'
-    ? discovered.wsToken.trim()
-    : '';
-  if (disc) return { token: disc, source: 'discovery', warning: null };
+export function resolveWsTarget({
+  configuredWsUrl,
+  configuredWsToken,
+  httpToken,
+  discovered,
+  followEndpoint,
+} = {}) {
+  const cfgUrl = String(configuredWsUrl || '').trim();
+  const cfgNorm = normalizeUrl(cfgUrl);
+  const cfgToken = typeof configuredWsToken === 'string' ? configuredWsToken.trim() : '';
+  const follow = followEndpoint !== false;
+  const discOk = !!(discovered
+    && discovered.ok
+    && typeof discovered.wsUrl === 'string'
+    && typeof discovered.wsToken === 'string'
+    && discovered.wsToken.trim());
+  const discUrl = discOk ? String(discovered.wsUrl) : '';
+  const discNorm = discOk ? normalizeUrl(discUrl) : null;
+  const discToken = discOk ? discovered.wsToken.trim() : '';
+
+  if (discOk && follow) {
+    if (cfgToken && cfgNorm && discNorm === cfgNorm) {
+      return { url: cfgUrl || discUrl, token: cfgToken, source: 'config', warning: null };
+    }
+    const warning = cfgToken
+      ? 'endpoint following is enabled; using the discovered account WS endpoint/token pair and ignoring the '
+        + 'configured wsToken'
+      : null;
+    return { url: discUrl, token: discToken, source: 'discovery-pair', warning };
+  }
+
+  if (discOk && !follow && cfgNorm && discNorm === cfgNorm) {
+    if (cfgToken) return { url: cfgUrl, token: cfgToken, source: 'config', warning: null };
+    return { url: cfgUrl, token: discToken, source: 'discovery-same-endpoint', warning: null };
+  }
+
+  if (cfgToken) {
+    return {
+      url: cfgUrl,
+      token: cfgToken,
+      source: 'config',
+      warning: discOk
+        ? 'discovered WS endpoint differs and endpoint following is disabled; using the configured endpoint/token'
+        : null,
+    };
+  }
 
   const http = typeof httpToken === 'string' ? httpToken.trim() : '';
   if (http) {
     return {
+      url: cfgUrl,
       token: http,
       source: 'http-fallback',
-      warning: 'SnowLuma WS token not found; falling back to the HTTP token (WS authentication may fail)',
+      warning: 'no WS token available; falling back to the HTTP token (WS authentication may fail)',
     };
   }
 
   return {
+    url: cfgUrl,
     token: undefined,
     source: 'none',
-    warning: 'No SnowLuma WS token and no HTTP token available; the WS connection cannot authenticate',
+    warning: 'no compatible SnowLuma WS token available; the WS connection cannot authenticate',
   };
 }

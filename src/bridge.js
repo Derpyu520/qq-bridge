@@ -28,7 +28,7 @@ import { safeFetchBuffer, looksLikeImageBuffer } from './safe-fetch.js';
 import { normalizeImageForModel } from './media-normalize.js';
 import { AUDIO_EXTS, cleanupTemp, describeAudio, formatBytes, formatDuration, inspectAudio, listAudioFiles, parseTargetKey, processAudioVolume, resolveAudioProcessing, resolveAudioSource, safeJoinLibrary } from './send-voice-lib.js';
 import { discoverSnowLumaConnection, persistSnowLumaEndpoint, persistToken } from './snowluma-conn.js';
-import { resolveWsToken } from './ws-token.js';
+import { resolveWsTarget } from './ws-token.js';
 import { hardenDir, manualDirCommand } from './state-acl.mjs';
 import { extractForwardIds, forwardIdFromData, sanitizeForwardId, formatForwardResponse } from './forward.js';
 import { resolvePriceTable } from './model-prices.js';
@@ -12768,23 +12768,29 @@ async function main() {
   }
 
   // QQ 侧（SnowLuma OneBot WebSocket 客户端）
-  // SnowLuma 每个账号的 HTTP token 与 WS token 不同；WS 首次握手就必须用 WS token。
-  // 先自发现一次，按 config.wsToken → 发现值 → HTTP token（带警告的兼容回退）解析，不打印任何 token 值。
+  // SnowLuma 每个账号的 HTTP token 与 WS token 不同；WS 首次握手必须用**同一端点**的 WS token。
+  // 有显式 wsToken 且关闭端点跟随时跳过发现（避免无谓的 HTTP 探测）；其余情况自发现一次。
+  const followEndpoint = cfg.snowluma?.followDiscoveredEndpoint !== false;
+  const skipDiscovery = !followEndpoint && typeof cfg.snowluma.wsToken === 'string' && !!cfg.snowluma.wsToken.trim();
   let initialDiscovery = null;
-  try {
-    initialDiscovery = await discoverSnowLumaConnection({ cfg, timeoutMs: 4000 });
-  } catch (error) {
-    initialDiscovery = null;
+  if (!skipDiscovery) {
+    try {
+      initialDiscovery = await discoverSnowLumaConnection({ cfg, timeoutMs: 4000 });
+    } catch (error) {
+      initialDiscovery = null;
+    }
   }
-  const initialToken = resolveWsToken({
+  const initialTarget = resolveWsTarget({
+    configuredWsUrl: cfg.snowluma.wsUrl,
     configuredWsToken: cfg.snowluma.wsToken,
+    httpToken: cfg.snowluma.accessToken,
     discovered: initialDiscovery,
-    httpToken: cfg.snowluma.accessToken
+    followEndpoint
   });
-  if (initialToken.warning) log('⚠️ ' + initialToken.warning);
+  if (initialTarget.warning) log('⚠️ ' + initialTarget.warning);
   const bot = new SnowLumaWebSocketClient({
-    url: cfg.snowluma.wsUrl,
-    accessToken: initialToken.token,
+    url: initialTarget.url,
+    accessToken: initialTarget.token,
     reconnect: true
   });
 
@@ -12916,7 +12922,9 @@ async function main() {
     const acceptWsToken = !!r.wsUrl && typeof r.wsToken === 'string'
       && (followEndpoint || sameEndpoint(r.wsUrl, cfg.snowluma.wsUrl));
     const httpToken = acceptHttpToken ? r.token : cfg.snowluma.accessToken;
-    const wsToken = (acceptWsToken ? r.wsToken : bot.accessToken) || undefined;
+    // 显式配置的 wsToken 是该实例的契约：自愈/重连不得在没有同端点证据时把它换掉。
+    const explicitWsToken = typeof cfg.snowluma.wsToken === 'string' ? cfg.snowluma.wsToken.trim() : '';
+    const wsToken = explicitWsToken || (acceptWsToken ? r.wsToken : bot.accessToken) || undefined;
     const wsUrl = followEndpoint && acceptWsToken ? r.wsUrl : cfg.snowluma.wsUrl;
     const wsChanged = bot.accessToken !== wsToken || bot.url !== wsUrl;
     bot.accessToken = wsToken;
