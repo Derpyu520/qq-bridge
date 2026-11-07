@@ -81,3 +81,31 @@ export function resolveWsTarget({
     warning: 'no compatible SnowLuma WS token available; the WS connection cannot authenticate',
   };
 }
+
+// Shared URL/token pair plan for startup and self-heal. Both call sites must use this function so the
+// endpoint-follow policy and the explicit-token precedence cannot drift apart; `current` is the WS client's
+// present state and only drives `changed`, never the selection itself.
+export function planWsPairUpdate({
+  configuredWsUrl,
+  configuredWsToken,
+  httpToken,
+  discovered,
+  followEndpoint,
+  currentUrl,
+  currentToken,
+} = {}) {
+  const target = resolveWsTarget({
+    configuredWsUrl,
+    configuredWsToken,
+    httpToken,
+    discovered,
+    followEndpoint,
+  });
+  return {
+    url: target.url,
+    token: target.token,
+    source: target.source,
+    warning: target.warning,
+    changed: currentUrl !== target.url || currentToken !== target.token,
+  };
+}

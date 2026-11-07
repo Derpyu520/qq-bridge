@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveWsTarget } from '../src/ws-token.js';
+import { resolveWsTarget, planWsPairUpdate } from '../src/ws-token.js';
 
 const disc = (url, token) => ({ ok: true, wsUrl: url, wsToken: token });
 
@@ -108,4 +108,50 @@ test('whitespace-only values are treated as absent', () => {
   const r = resolveWsTarget({ configuredWsUrl: 'ws://127.0.0.1:3001', configuredWsToken: '   ', httpToken: '  ' });
   assert.equal(r.token, undefined);
   assert.equal(r.source, 'none');
+});
+
+// Self-heal / startup consistency: the same plan function drives both, so a close event cannot pair the
+// explicit A token with the discovered B endpoint.
+test('follow on: plan selects the discovered pair and stays there after a close event', () => {
+  const base = {
+    configuredWsUrl: 'ws://127.0.0.1:3001',
+    configuredWsToken: 'Token-A',
+    discovered: { ok: true, wsUrl: 'ws://127.0.0.1:3999', wsToken: 'Token-B' },
+    followEndpoint: true,
+  };
+  const first = planWsPairUpdate({ ...base, currentUrl: 'ws://127.0.0.1:3001', currentToken: 'Token-A' });
+  assert.equal(first.url, 'ws://127.0.0.1:3999');
+  assert.equal(first.token, 'Token-B');
+  assert.equal(first.changed, true);
+  const again = planWsPairUpdate({ ...base, currentUrl: first.url, currentToken: first.token });
+  assert.equal(again.url, 'ws://127.0.0.1:3999');
+  assert.equal(again.token, 'Token-B');
+  assert.equal(again.changed, false);
+});
+
+test('follow off + different endpoint: plan keeps the configured pair', () => {
+  const plan = planWsPairUpdate({
+    configuredWsUrl: 'ws://127.0.0.1:3001',
+    configuredWsToken: 'Token-A',
+    discovered: { ok: true, wsUrl: 'ws://127.0.0.1:3999', wsToken: 'Token-B' },
+    followEndpoint: false,
+    currentUrl: 'ws://127.0.0.1:3001',
+    currentToken: 'Token-A',
+  });
+  assert.equal(plan.url, 'ws://127.0.0.1:3001');
+  assert.equal(plan.token, 'Token-A');
+  assert.match(plan.warning, /endpoint following is disabled/);
+});
+
+test('follow off + same endpoint: plan keeps the explicit token', () => {
+  const plan = planWsPairUpdate({
+    configuredWsUrl: 'ws://127.0.0.1:3001',
+    configuredWsToken: 'Token-A',
+    discovered: { ok: true, wsUrl: 'ws://127.0.0.1:3001/', wsToken: 'Token-B' },
+    followEndpoint: false,
+    currentUrl: 'ws://127.0.0.1:3001',
+    currentToken: 'Token-A',
+  });
+  assert.equal(plan.token, 'Token-A');
+  assert.equal(plan.changed, false);
 });

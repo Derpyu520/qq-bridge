@@ -28,7 +28,7 @@ import { safeFetchBuffer, looksLikeImageBuffer } from './safe-fetch.js';
 import { normalizeImageForModel } from './media-normalize.js';
 import { AUDIO_EXTS, cleanupTemp, describeAudio, formatBytes, formatDuration, inspectAudio, listAudioFiles, parseTargetKey, processAudioVolume, resolveAudioProcessing, resolveAudioSource, safeJoinLibrary } from './send-voice-lib.js';
 import { discoverSnowLumaConnection, persistSnowLumaEndpoint, persistToken } from './snowluma-conn.js';
-import { resolveWsTarget } from './ws-token.js';
+import { resolveWsTarget, planWsPairUpdate } from './ws-token.js';
 import { hardenDir, manualDirCommand } from './state-acl.mjs';
 import { extractForwardIds, forwardIdFromData, sanitizeForwardId, formatForwardResponse } from './forward.js';
 import { resolvePriceTable } from './model-prices.js';
@@ -12919,36 +12919,45 @@ async function main() {
       catch { return false; }
     };
     const acceptHttpToken = followEndpoint || sameEndpoint(r.baseUrl, cfg.snowluma.httpUrl || 'http://127.0.0.1:3000');
-    const acceptWsToken = !!r.wsUrl && typeof r.wsToken === 'string'
-      && (followEndpoint || sameEndpoint(r.wsUrl, cfg.snowluma.wsUrl));
+    // 启动与自愈共用同一套 URL/token 配对规则（resolveWsTarget / planWsPairUpdate），
+    // 并且必须基于**变更前**的配置计算，避免把 A 端点的显式 token 贴到 B 端点。
+    const preWsUrl = cfg.snowluma.wsUrl;
+    const preWsToken = cfg.snowluma.wsToken;
+    const plan = planWsPairUpdate({
+      configuredWsUrl: preWsUrl,
+      configuredWsToken: preWsToken,
+      httpToken: cfg.snowluma.accessToken,
+      discovered: r,
+      followEndpoint,
+      currentUrl: bot.url,
+      currentToken: bot.accessToken
+    });
+    if (plan.warning) log('⚠️ ' + plan.warning);
     const httpToken = acceptHttpToken ? r.token : cfg.snowluma.accessToken;
     // 显式配置的 wsToken 是该实例的契约：自愈/重连不得在没有同端点证据时把它换掉。
-    const explicitWsToken = typeof cfg.snowluma.wsToken === 'string' ? cfg.snowluma.wsToken.trim() : '';
-    const wsToken = explicitWsToken || (acceptWsToken ? r.wsToken : bot.accessToken) || undefined;
-    const wsUrl = followEndpoint && acceptWsToken ? r.wsUrl : cfg.snowluma.wsUrl;
-    const wsChanged = bot.accessToken !== wsToken || bot.url !== wsUrl;
-    bot.accessToken = wsToken;
+    const wsChanged = plan.changed;
+    bot.accessToken = plan.token;
     // 端口也是 per-account 的（实测：换账号后 WS 从 3001 之类变到别的端口），
     // 只换 token 不换 URL 会一直 1006 重连。
-    bot.url = wsUrl;
+    bot.url = plan.url;
     if (wsChanged) log('🔄 SnowLuma WS 连接已更新');
     if (acceptHttpToken && cfg.snowluma.accessToken !== httpToken) {
       log('🔄 SnowLuma HTTP token 已更新');
       cfg.snowluma.accessToken = httpToken;
     }
-    if (!acceptHttpToken || !acceptWsToken) {
+    if (!acceptHttpToken) {
       log('   已按 snowluma.followDiscoveredEndpoint=false 忽略其他端点及其凭据');
     }
     // 把确认可用的端点写回 config.json：下次启动直接就对了，不用再自愈一遍。
     // ⚠️ 必须在**改 cfg 之前**算出要写什么，但写文件时对照的是**文件里**的旧值 ——
     //    这里显式传 wsUrl，且不依赖 cfg 的内存值来判断"是否需要写"。
     // 关掉端点跟随时不写 URL：否则"我设了别处"这件事会被自愈持久化地抹掉。
-    cfg.snowluma.wsUrl = wsUrl;
+    cfg.snowluma.wsUrl = plan.url;
     if (followEndpoint && r.baseUrl) cfg.snowluma.httpUrl = r.baseUrl;
     try {
       const w = persistSnowLumaEndpoint(path.join(ROOT, 'config.json'), {
         ...(acceptHttpToken ? { accessToken: httpToken } : {}),
-        ...(followEndpoint ? { wsUrl, httpUrl: r.baseUrl } : {})
+        ...(followEndpoint ? { wsUrl: plan.url, httpUrl: r.baseUrl } : {})
       });
       if (w.updated) log(`   已写回 config.json：${Object.keys(w.changed).join(' / ')}`);
       else log('   config.json 端点已是最新，无需改写');
