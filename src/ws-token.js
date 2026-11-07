@@ -3,10 +3,11 @@
 // SnowLuma keeps two different tokens per account: the HTTP access token and the WebSocket access token.
 // Passing the HTTP token to the WebSocket client is rejected by the gateway (close code 1006 / unauthorized
 // upgrade), so the first handshake must use a WS token **for the same endpoint**:
-//   1. endpoint following disabled: use the configured URL/token; accept a discovered token only when the
-//      discovered endpoint matches the configured one exactly (no cross-account credential reuse);
-//   2. endpoint following enabled: use the discovered account pair, unless the configured endpoint matches
-//      the discovered endpoint and an explicit token is configured (explicit wins for the same account).
+//   1. an explicit `snowluma.wsToken` always pins its configured `wsUrl`; discovery never rebinds that pair
+//      (a discovered different endpoint is ignored with a warning);
+//   2. with no explicit token and endpoint following enabled, use the discovered account pair;
+//   3. with no explicit token and following disabled, accept a discovered token only when the discovered
+//      endpoint matches the configured endpoint exactly (no cross-account credential reuse).
 // The HTTP token is only a flagged compatibility fallback; the resolver never claims WS auth success.
 
 function normalizeUrl(value) {
@@ -125,8 +126,8 @@ export function planConfigUpdate({
       httpUrl: configuredHttpUrl,
       persist: {},
       warning: hasExplicitWsToken && followEndpoint !== false
-        ? 'configured wsToken is explicit; keeping the configured endpoint in config and using the discovered '
-          + 'pair at runtime only'
+        ? 'configured wsToken is explicit; keeping its configured endpoint/token pair in config and for '
+          + 'runtime (the discovered endpoint is ignored)'
         : null,
     };
   }

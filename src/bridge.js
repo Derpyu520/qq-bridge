@@ -12769,6 +12769,7 @@ async function main() {
 
   // QQ 侧（SnowLuma OneBot WebSocket 客户端）
   // SnowLuma 每个账号的 HTTP token 与 WS token 不同；WS 首次握手必须用**同一端点**的 WS token。
+  // 显式 wsToken 会钉住其配置端点（发现到的其他端点不生效）；只有未显式配置时才按发现结果跟随。
   // 有显式 wsToken 且关闭端点跟随时跳过发现（避免无谓的 HTTP 探测）；其余情况自发现一次。
   const followEndpoint = cfg.snowluma?.followDiscoveredEndpoint !== false;
   const skipDiscovery = !followEndpoint && typeof cfg.snowluma.wsToken === 'string' && !!cfg.snowluma.wsToken.trim();
@@ -12946,7 +12947,8 @@ async function main() {
     });
     if (configUpdate.warning) log('⚠️ ' + configUpdate.warning);
     const httpToken = acceptHttpToken ? r.token : cfg.snowluma.accessToken;
-    // 显式配置的 wsToken 是该实例的契约：自愈/重连不得在没有同端点证据时把它换掉。
+    // 显式配置的 wsToken 钉住其配置端点：自愈/重连不得把发现到的其他端点与它配成一对，
+    // 也不得把发现到的 URL 持久化在旧显式 token 旁边。
     const wsChanged = plan.changed;
     bot.accessToken = plan.token;
     // 端口也是 per-account 的（实测：换账号后 WS 从 3001 之类变到别的端口），
@@ -13016,8 +13018,8 @@ async function main() {
     snowlumaHealth.connected = false;
     log(`SnowLuma 连接断开（code=${info?.code ?? '?'}），重连中…`);
     // 连不上时最常见的原因就是换了 QQ 账号 → token 变了；顺手自愈。
-    // 注意 1006 在**每次启动**都可能出现一次：HTTP token 与 WS token 是两个不同的值，
-    // config.json 里存的是前者，WS 需要用自愈发现的那个（详见 bot.connect() 处的说明）。
+    // 首次握手已经使用同一端点的 WS token（显式配置或发现），正常启动不再依赖 1006 自愈；
+    // 若仍出现 1006，自愈会按同一套 URL/token 配对规则重算一次。
     void healTokenIfStale(`close code=${info?.code ?? '?'}`);
   });
   bot.on('error', (error) => {
