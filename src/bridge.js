@@ -28,6 +28,7 @@ import { safeFetchBuffer, looksLikeImageBuffer } from './safe-fetch.js';
 import { normalizeImageForModel } from './media-normalize.js';
 import { AUDIO_EXTS, cleanupTemp, describeAudio, formatBytes, formatDuration, inspectAudio, listAudioFiles, parseTargetKey, processAudioVolume, resolveAudioProcessing, resolveAudioSource, safeJoinLibrary } from './send-voice-lib.js';
 import { discoverSnowLumaConnection, persistSnowLumaEndpoint, persistToken } from './snowluma-conn.js';
+import { resolveWsToken } from './ws-token.js';
 import { hardenDir, manualDirCommand } from './state-acl.mjs';
 import { extractForwardIds, forwardIdFromData, sanitizeForwardId, formatForwardResponse } from './forward.js';
 import { resolvePriceTable } from './model-prices.js';
@@ -12767,9 +12768,23 @@ async function main() {
   }
 
   // QQ 侧（SnowLuma OneBot WebSocket 客户端）
+  // SnowLuma 每个账号的 HTTP token 与 WS token 不同；WS 首次握手就必须用 WS token。
+  // 先自发现一次，按 config.wsToken → 发现值 → HTTP token（带警告的兼容回退）解析，不打印任何 token 值。
+  let initialDiscovery = null;
+  try {
+    initialDiscovery = await discoverSnowLumaConnection({ cfg, timeoutMs: 4000 });
+  } catch (error) {
+    initialDiscovery = null;
+  }
+  const initialToken = resolveWsToken({
+    configuredWsToken: cfg.snowluma.wsToken,
+    discovered: initialDiscovery,
+    httpToken: cfg.snowluma.accessToken
+  });
+  if (initialToken.warning) log('⚠️ ' + initialToken.warning);
   const bot = new SnowLumaWebSocketClient({
     url: cfg.snowluma.wsUrl,
-    accessToken: cfg.snowluma.accessToken || undefined,
+    accessToken: initialToken.token,
     reconnect: true
   });
 
