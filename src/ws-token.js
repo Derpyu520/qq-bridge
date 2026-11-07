@@ -37,31 +37,27 @@ export function resolveWsTarget({
   const discNorm = discOk ? normalizeUrl(discUrl) : null;
   const discToken = discOk ? discovered.wsToken.trim() : '';
 
-  if (discOk && follow) {
-    if (cfgToken && cfgNorm && discNorm === cfgNorm) {
-      return { url: cfgUrl || discUrl, token: cfgToken, source: 'config', warning: null };
-    }
-    const warning = cfgToken
-      ? 'endpoint following is enabled; using the discovered account WS endpoint/token pair and ignoring the '
-        + 'configured wsToken'
-      : null;
-    return { url: discUrl, token: discToken, source: 'discovery-pair', warning };
-  }
-
-  if (discOk && !follow && cfgNorm && discNorm === cfgNorm) {
-    if (cfgToken) return { url: cfgUrl, token: cfgToken, source: 'config', warning: null };
-    return { url: cfgUrl, token: discToken, source: 'discovery-same-endpoint', warning: null };
-  }
-
+  // An explicit wsToken pins the configured endpoint: persisting another URL while keeping this token would
+  // create a mismatched pair across heals/restarts. Discovery only supplies the token when no explicit token
+  // is configured.
   if (cfgToken) {
+    const mismatch = !!(discOk && cfgNorm && discNorm && discNorm !== cfgNorm);
     return {
       url: cfgUrl,
       token: cfgToken,
       source: 'config',
-      warning: discOk
-        ? 'discovered WS endpoint differs and endpoint following is disabled; using the configured endpoint/token'
+      warning: mismatch
+        ? 'explicit wsToken pins the configured endpoint; the discovered endpoint was ignored'
         : null,
     };
+  }
+
+  if (discOk && follow) {
+    return { url: discUrl, token: discToken, source: 'discovery-pair', warning: null };
+  }
+
+  if (discOk && !follow && cfgNorm && discNorm === cfgNorm) {
+    return { url: cfgUrl, token: discToken, source: 'discovery-same-endpoint', warning: null };
   }
 
   const http = typeof httpToken === 'string' ? httpToken.trim() : '';
@@ -107,5 +103,37 @@ export function planWsPairUpdate({
     source: target.source,
     warning: target.warning,
     changed: currentUrl !== target.url || currentToken !== target.token,
+  };
+}
+
+// Decide what to persist after a heal. Persisting a discovered endpoint together with an *old* explicit
+// token would create a mismatched pair in config.json (url=B, token=Token-A), so an explicit token keeps the
+// configured endpoint authoritative in config; the runtime may still use the discovered pair.
+export function planConfigUpdate({
+  plan,
+  followEndpoint,
+  configuredWsToken,
+  configuredWsUrl,
+  configuredHttpUrl,
+  discoveredBaseUrl,
+} = {}) {
+  const hasExplicitWsToken = typeof configuredWsToken === 'string' && configuredWsToken.trim() !== '';
+  const persistEndpoint = followEndpoint !== false && !hasExplicitWsToken;
+  if (!persistEndpoint) {
+    return {
+      wsUrl: configuredWsUrl,
+      httpUrl: configuredHttpUrl,
+      persist: {},
+      warning: hasExplicitWsToken && followEndpoint !== false
+        ? 'configured wsToken is explicit; keeping the configured endpoint in config and using the discovered '
+          + 'pair at runtime only'
+        : null,
+    };
+  }
+  return {
+    wsUrl: plan.url,
+    httpUrl: discoveredBaseUrl || configuredHttpUrl,
+    persist: { wsUrl: plan.url, httpUrl: discoveredBaseUrl },
+    warning: null,
   };
 }

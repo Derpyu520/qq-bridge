@@ -1,86 +1,83 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveWsTarget, planWsPairUpdate } from '../src/ws-token.js';
+import { resolveWsTarget, planWsPairUpdate, planConfigUpdate } from '../src/ws-token.js';
 
 const disc = (url, token) => ({ ok: true, wsUrl: url, wsToken: token });
 
-test('follow enabled + same endpoint + explicit token: explicit config wins', () => {
+test('explicit token + follow + different endpoint: configured pair pinned, discovery ignored', () => {
   const r = resolveWsTarget({
     configuredWsUrl: 'ws://127.0.0.1:3001',
-    configuredWsToken: ' cfg-token ',
-    discovered: disc('ws://127.0.0.1:3001/', 'disc-token'),
+    configuredWsToken: 'Token-A',
+    discovered: disc('ws://127.0.0.1:3999', 'Token-B'),
     followEndpoint: true,
   });
   assert.equal(r.url, 'ws://127.0.0.1:3001');
-  assert.equal(r.token, 'cfg-token');
+  assert.equal(r.token, 'Token-A');
   assert.equal(r.source, 'config');
+  assert.match(r.warning, /pins the configured endpoint/);
+});
+
+test('explicit token + follow + same endpoint: configured pair, no warning', () => {
+  const r = resolveWsTarget({
+    configuredWsUrl: 'ws://127.0.0.1:3001',
+    configuredWsToken: 'Token-A',
+    discovered: disc('ws://127.0.0.1:3001/', 'Token-B'),
+    followEndpoint: true,
+  });
+  assert.equal(r.token, 'Token-A');
   assert.equal(r.warning, null);
 });
 
-test('follow enabled + different endpoint: discovered pair wins and warns', () => {
+test('no explicit token + follow: discovered pair used', () => {
   const r = resolveWsTarget({
     configuredWsUrl: 'ws://127.0.0.1:3001',
-    configuredWsToken: 'cfg-token',
-    discovered: disc('ws://127.0.0.1:3999', 'disc-token'),
+    discovered: disc('ws://127.0.0.1:3999', 'Token-B'),
     followEndpoint: true,
   });
   assert.equal(r.url, 'ws://127.0.0.1:3999');
-  assert.equal(r.token, 'disc-token');
-  assert.equal(r.source, 'discovery-pair');
-  assert.match(r.warning, /ignoring the configured wsToken/);
-});
-
-test('follow enabled + discovery only: discovered pair used', () => {
-  const r = resolveWsTarget({
-    configuredWsUrl: 'ws://127.0.0.1:3001',
-    discovered: disc('ws://127.0.0.1:3001', 'disc-token'),
-    followEndpoint: true,
-  });
-  assert.equal(r.token, 'disc-token');
+  assert.equal(r.token, 'Token-B');
   assert.equal(r.source, 'discovery-pair');
 });
 
-test('follow disabled + same endpoint: explicit token wins, no warning', () => {
+test('follow off + same endpoint + no explicit token: discovered token, configured URL', () => {
   const r = resolveWsTarget({
     configuredWsUrl: 'ws://127.0.0.1:3001',
-    configuredWsToken: 'cfg-token',
-    discovered: disc('ws://127.0.0.1:3001/', 'disc-token'),
+    discovered: disc('ws://127.0.0.1:3001', 'Token-B'),
     followEndpoint: false,
   });
   assert.equal(r.url, 'ws://127.0.0.1:3001');
-  assert.equal(r.token, 'cfg-token');
-  assert.equal(r.source, 'config');
-  assert.equal(r.warning, null);
-});
-
-test('follow disabled + same endpoint without explicit token: discovered token used', () => {
-  const r = resolveWsTarget({
-    configuredWsUrl: 'ws://127.0.0.1:3001',
-    discovered: disc('ws://127.0.0.1:3001', 'disc-token'),
-    followEndpoint: false,
-  });
-  assert.equal(r.token, 'disc-token');
+  assert.equal(r.token, 'Token-B');
   assert.equal(r.source, 'discovery-same-endpoint');
 });
 
-test('follow disabled + different endpoint: configured token kept, warning', () => {
+test('follow off + same endpoint + explicit token: explicit wins', () => {
   const r = resolveWsTarget({
     configuredWsUrl: 'ws://127.0.0.1:3001',
-    configuredWsToken: 'cfg-token',
-    discovered: disc('ws://127.0.0.1:3999', 'disc-token'),
+    configuredWsToken: 'Token-A',
+    discovered: disc('ws://127.0.0.1:3001', 'Token-B'),
+    followEndpoint: false,
+  });
+  assert.equal(r.token, 'Token-A');
+  assert.equal(r.warning, null);
+});
+
+test('follow off + different endpoint + explicit token: configured pair with warning', () => {
+  const r = resolveWsTarget({
+    configuredWsUrl: 'ws://127.0.0.1:3001',
+    configuredWsToken: 'Token-A',
+    discovered: disc('ws://127.0.0.1:3999', 'Token-B'),
     followEndpoint: false,
   });
   assert.equal(r.url, 'ws://127.0.0.1:3001');
-  assert.equal(r.token, 'cfg-token');
-  assert.equal(r.source, 'config');
-  assert.match(r.warning, /endpoint following is disabled/);
+  assert.equal(r.token, 'Token-A');
+  assert.match(r.warning, /pins the configured endpoint/);
 });
 
-test('follow disabled + different endpoint without explicit token: flagged HTTP fallback', () => {
+test('follow off + different endpoint + no explicit token: flagged HTTP fallback', () => {
   const r = resolveWsTarget({
     configuredWsUrl: 'ws://127.0.0.1:3001',
     httpToken: 'http-token',
-    discovered: disc('ws://127.0.0.1:3999', 'disc-token'),
+    discovered: disc('ws://127.0.0.1:3999', 'Token-B'),
     followEndpoint: false,
   });
   assert.equal(r.token, 'http-token');
@@ -89,15 +86,12 @@ test('follow disabled + different endpoint without explicit token: flagged HTTP 
 });
 
 test('no discovery + explicit token: config used', () => {
-  const r = resolveWsTarget({
-    configuredWsUrl: 'ws://127.0.0.1:3001',
-    configuredWsToken: 'cfg-token',
-  });
-  assert.equal(r.token, 'cfg-token');
+  const r = resolveWsTarget({ configuredWsUrl: 'ws://127.0.0.1:3001', configuredWsToken: 'Token-A' });
+  assert.equal(r.token, 'Token-A');
   assert.equal(r.source, 'config');
 });
 
-test('no tokens at all: undefined plus warning, never a fake token', () => {
+test('no tokens at all: undefined plus warning', () => {
   const r = resolveWsTarget({ configuredWsUrl: 'ws://127.0.0.1:3001' });
   assert.equal(r.token, undefined);
   assert.equal(r.source, 'none');
@@ -110,48 +104,73 @@ test('whitespace-only values are treated as absent', () => {
   assert.equal(r.source, 'none');
 });
 
-// Self-heal / startup consistency: the same plan function drives both, so a close event cannot pair the
-// explicit A token with the discovered B endpoint.
-test('follow on: plan selects the discovered pair and stays there after a close event', () => {
-  const base = {
-    configuredWsUrl: 'ws://127.0.0.1:3001',
-    configuredWsToken: 'Token-A',
-    discovered: { ok: true, wsUrl: 'ws://127.0.0.1:3999', wsToken: 'Token-B' },
+// The heal/restart sequence: an explicit token must keep the configured pair across multiple heals and a
+// process restart; discovery B/Token-B must never be persisted under the old Token-A.
+test('explicit pair survives two heals and a restart', () => {
+  const config = { wsUrl: 'ws://127.0.0.1:3001', wsToken: 'Token-A', followEndpoint: true };
+  const discovery = disc('ws://127.0.0.1:3999', 'Token-B');
+  for (let i = 0; i < 2; i += 1) {
+    const plan = planWsPairUpdate({
+      configuredWsUrl: config.wsUrl,
+      configuredWsToken: config.wsToken,
+      discovered: discovery,
+      followEndpoint: config.followEndpoint,
+      currentUrl: config.wsUrl,
+      currentToken: config.wsToken,
+    });
+    assert.equal(plan.url, 'ws://127.0.0.1:3001');
+    assert.equal(plan.token, 'Token-A');
+    const update = planConfigUpdate({
+      plan,
+      followEndpoint: config.followEndpoint,
+      configuredWsToken: config.wsToken,
+      configuredWsUrl: config.wsUrl,
+      configuredHttpUrl: 'http://127.0.0.1:3000',
+      discoveredBaseUrl: discovery.wsUrl,
+    });
+    assert.equal(update.wsUrl, config.wsUrl, 'config URL must not be repointed while Token-A is explicit');
+    assert.deepEqual(update.persist, {});
+    config.wsUrl = update.wsUrl;
+  }
+  const restart = resolveWsTarget({
+    configuredWsUrl: config.wsUrl,
+    configuredWsToken: config.wsToken,
+    discovered: discovery,
     followEndpoint: true,
-  };
-  const first = planWsPairUpdate({ ...base, currentUrl: 'ws://127.0.0.1:3001', currentToken: 'Token-A' });
+  });
+  assert.equal(restart.url, 'ws://127.0.0.1:3001');
+  assert.equal(restart.token, 'Token-A');
+});
+
+test('no explicit token: discovered pair persists and survives a restart', () => {
+  const discovery = disc('ws://127.0.0.1:3999', 'Token-B');
+  const first = planWsPairUpdate({
+    configuredWsUrl: 'ws://127.0.0.1:3001',
+    discovered: discovery,
+    followEndpoint: true,
+    currentUrl: 'ws://127.0.0.1:3001',
+    currentToken: undefined,
+  });
   assert.equal(first.url, 'ws://127.0.0.1:3999');
   assert.equal(first.token, 'Token-B');
-  assert.equal(first.changed, true);
-  const again = planWsPairUpdate({ ...base, currentUrl: first.url, currentToken: first.token });
-  assert.equal(again.url, 'ws://127.0.0.1:3999');
-  assert.equal(again.token, 'Token-B');
-  assert.equal(again.changed, false);
-});
-
-test('follow off + different endpoint: plan keeps the configured pair', () => {
-  const plan = planWsPairUpdate({
+  const update = planConfigUpdate({
+    plan: first,
+    followEndpoint: true,
+    configuredWsToken: '',
     configuredWsUrl: 'ws://127.0.0.1:3001',
-    configuredWsToken: 'Token-A',
-    discovered: { ok: true, wsUrl: 'ws://127.0.0.1:3999', wsToken: 'Token-B' },
-    followEndpoint: false,
-    currentUrl: 'ws://127.0.0.1:3001',
-    currentToken: 'Token-A',
+    configuredHttpUrl: 'http://127.0.0.1:3000',
+    discoveredBaseUrl: 'http://127.0.0.1:3000',
   });
-  assert.equal(plan.url, 'ws://127.0.0.1:3001');
-  assert.equal(plan.token, 'Token-A');
-  assert.match(plan.warning, /endpoint following is disabled/);
-});
-
-test('follow off + same endpoint: plan keeps the explicit token', () => {
-  const plan = planWsPairUpdate({
-    configuredWsUrl: 'ws://127.0.0.1:3001',
-    configuredWsToken: 'Token-A',
-    discovered: { ok: true, wsUrl: 'ws://127.0.0.1:3001/', wsToken: 'Token-B' },
-    followEndpoint: false,
-    currentUrl: 'ws://127.0.0.1:3001',
-    currentToken: 'Token-A',
+  assert.equal(update.wsUrl, 'ws://127.0.0.1:3999');
+  assert.equal(update.persist.wsUrl, 'ws://127.0.0.1:3999');
+  const second = planWsPairUpdate({
+    configuredWsUrl: update.wsUrl,
+    discovered: discovery,
+    followEndpoint: true,
+    currentUrl: first.url,
+    currentToken: first.token,
   });
-  assert.equal(plan.token, 'Token-A');
-  assert.equal(plan.changed, false);
+  assert.equal(second.url, 'ws://127.0.0.1:3999');
+  assert.equal(second.token, 'Token-B');
+  assert.equal(second.changed, false);
 });
