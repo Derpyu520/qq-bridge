@@ -25,7 +25,7 @@ dns.promises.lookup = async (host) => {
 let fetchModule;
 try { fetchModule = await import('../src/safe-fetch.js'); }
 finally { dns.promises.lookup = originalLookup; }
-const { isPrivateIp, safeFetch, safeFetchBuffer, validateFetchUrl } = fetchModule;
+const { isPrivateIp, safeFetch, safeFetchBuffer, safeFetchBytes, validateFetchUrl } = fetchModule;
 
 function mockTransport(t, scripts) {
   const requests = [];
@@ -228,6 +228,18 @@ test('image byte limits and signatures are checked', async (t) => {
   await assert.rejects(safeFetchBuffer('http://93.184.216.34/', 11), /大小限制/);
   assert.equal(responses[1].destroyed, true);
   await assert.rejects(safeFetchBuffer('http://93.184.216.34/'), /不是有效图片/);
+});
+
+test('generic byte fetch accepts non-image payloads but keeps every network guard', async (t) => {
+  const html = Buffer.from('<html><body>group file</body></html>');
+  const { responses } = mockTransport(t, [{ body: html }, { body: Buffer.alloc(20) }]);
+  const result = await safeFetchBytes('http://93.184.216.34/file.html', 1024);
+  assert.deepEqual(result.buffer, html);
+  await assert.rejects(safeFetchBytes('http://93.184.216.34/file.html', 10), /大小限制/);
+  assert.equal(responses[1].destroyed, true);
+  // 图片通道的签名校验不能被放松：同一个 HTML 走 safeFetchBuffer 仍要拒绝。
+  mockTransport(t, [{ body: html }]);
+  await assert.rejects(safeFetchBuffer('http://93.184.216.34/file.html'), /不是有效图片/);
 });
 
 test('text and image requests have a total deadline despite continuous incoming data', async (t) => {

@@ -12,7 +12,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import yaml from 'js-yaml';
 import {
-  BUNDLE_DIR, GUARD_SPECIFIER, PRESETS, REPO_ROOT,
+  BUNDLE_DIR, GUARD_SPECIFIER, PATCH_SCHEMA, PRESETS, REPO_ROOT, plainForCompare,
   buildPatches, patchFileFor, presetRowId,
 } from './build-agent-preset-patches.mjs';
 
@@ -23,7 +23,9 @@ function ok(cond, label) {
 }
 
 const read = (p) => fs.readFileSync(p, 'utf8');
-const load = (p) => yaml.load(read(p));
+// patch 里允许 DSH 的 `!!js` 条件标签（qq-chat-tools 的 bash/pwsh 平台开关），
+// 必须用与生成器相同的 schema 解析，否则 default schema 会报 unknown tag。
+const load = (p) => yaml.load(read(p), { schema: PATCH_SCHEMA });
 
 console.log('## 1. 产物与源不漂移（--check 语义）');
 {
@@ -50,9 +52,16 @@ for (const name of PRESETS) {
 
   // 与源行列表逐字对比：只允许守卫行的 name 被改写。
   const source = load(path.join(REPO_ROOT, 'dsh', 'agent-presets', name, 'agent.cordis.yml'));
-  const expected = structuredClone(source);
-  for (const r of expected) if (r.name === './qq-tool-restrict.mjs') r.name = GUARD_SPECIFIER;
-  assert.deepEqual(row.config.plugins, expected, `${name}: config.plugins 必须与 agent.cordis.yml 完全一致（守卫名除外）`);
+  // 用 plainForCompare 而不是 structuredClone：后者会丢掉 `!!js` 的 JsExpression 原型，
+  // 与 patch 解析出来的 JsExpression 在 deepEqual 里对不上。
+  const expected = plainForCompare(source);
+  // 相对行名在 patch 生成时会被改写成「bundle 包名/子路径」，比较前做同样的改写。
+  const ROW_NAME_REWRITES = {
+    './qq-tool-restrict.mjs': GUARD_SPECIFIER,
+    './qq-agent-guard.mjs': 'qq-agent-presets/qq-agent-guard.mjs',
+  };
+  for (const r of expected) if (ROW_NAME_REWRITES[r.name]) r.name = ROW_NAME_REWRITES[r.name];
+  assert.deepEqual(plainForCompare(row.config.plugins), expected, `${name}: config.plugins 必须与 agent.cordis.yml 完全一致（守卫名除外）`);
   ok(true, `${name}: config.plugins 与 agent.cordis.yml 逐字一致（${expected.length} 行）`);
 
   // 人格正文是产品本体：单独再钉一次，防止「顺手改写/截断」。

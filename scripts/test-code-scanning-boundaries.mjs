@@ -44,6 +44,7 @@ function timerFixture(random = 0) {
     section('function boundedTimerDelay(', 'const convKey ='),
     section('  function scheduleSocialReply(', '  // 全局扫描'),
     section('  function scheduleReplyCheckV2(', '  /** 会话此刻算忙'),
+    section('  function isDirectedWakeReason(', '  function isTimerWakeReason('),
     section('  function scheduleWakeV2(', '  /**\n   * 回合结束后补发'),
     section('  function scheduleProactiveCheckV2(', '  function clearSocialV2Timers('),
     'globalThis.fns = { sleep, scheduleSocialReply, scheduleReplyCheckV2, scheduleWakeV2, scheduleProactiveCheckV2 };',
@@ -62,7 +63,10 @@ const runTimerCases = () => {
   assert.equal(latestDelay(defaults), 30000);
   defaults.st.replyCheckTimer = null;
   defaults.scheduleWakeV2('group:456', 'atMention');
-  assert.equal(latestDelay(defaults), 8000);
+  assert.equal(latestDelay(defaults), 2000, '被点名的唤醒走 2s 快速窗口');
+  defaults.st.pendingWakeTimer = null;
+  defaults.scheduleWakeV2('group:456', 'keyword:大肥鱼');
+  assert.equal(latestDelay(defaults), 8000, '关键词唤醒仍按 batchWindowMs 合并');
   defaults.scheduleProactiveCheckV2('group:456');
   assert.equal(latestDelay(defaults), 1800000);
   console.log('PASS normal timer defaults remain unchanged');
@@ -75,7 +79,7 @@ const runTimerCases = () => {
     h.st.replyCheckTimer = null;
     h.st.wakeConfig.batchWindowMs = zero;
     h.scheduleWakeV2('group:456', 'atMention');
-    assert.equal(latestDelay(h), 8000, 'zero batching delay must retain its default meaning');
+    assert.equal(latestDelay(h), 2000, 'zero batching delay: directed wakes stay on the quick window');
     h.cfg.socialV2.proactive = { checkIntervalMinMs: zero, checkIntervalMaxMs: zero };
     h.scheduleProactiveCheckV2('group:456');
     assert.equal(latestDelay(h), 3600000, 'zero proactive min/max must retain the default 30–90 minute range');

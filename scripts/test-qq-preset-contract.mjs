@@ -79,6 +79,7 @@ test('social autonomy and visual, forwarding, sticker and web capabilities remai
     'qq_set_sticker_remark', '只有管理端明确开启后才能用',
     'qq_list_voices', 'qq_send_voice', 'verified=true 才代表这条语音确实落地',
     '语音**默认是关闭的**', '不要假装发了语音',
+    'qq_download_file', 'state/downloads',
     'mcp__web-search-safe__web_search', 'mcp__web-search-safe__web_fetch',
   ]) assert.ok(prefix.includes(text), `missing capability or voice rule: ${text}`);
 });

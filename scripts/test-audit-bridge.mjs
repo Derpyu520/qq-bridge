@@ -129,6 +129,36 @@ await test('malformed HTTP request targets return 400 without hanging', async (h
   } catch (error) { failures++; console.error('FAIL console reset cleanup:', error.message); }
   finally { await new Promise((resolve) => server.close(resolve)); await h.close(); }
 }
+{ // 「清空工作区」要认 sessionCwd：owner 工作区被指到仓库外时，按钮不能静默失效；
+  // 同时只做**精确匹配**，不能把用户无关的 DSH 会话一起归档掉。
+  const workspace = '/tmp/qq-agent-workspace-fixture';
+  const h = await bridgeHarness({ config: { sessionCwd: workspace } });
+  const server = h.startConsoleServer();
+  try {
+    if (!server.listening) await new Promise((resolve) => server.once('listening', resolve));
+    h.calls.sessionList.push({ sessionId: 'own-root', cwd: workspace, origin: 'user' });
+    h.calls.sessionList.push({ sessionId: 'own-child', cwd: workspace + '/sub', origin: 'user' });
+    h.calls.sessionList.push({ sessionId: 'unrelated', cwd: '/tmp/some-other-workspace', origin: 'user' });
+    h.calls.sessionList.push({ sessionId: 'subagent', cwd: workspace, origin: 'subagent' });
+    const status = await new Promise((resolve, reject) => {
+      const request = http.request({ host: '127.0.0.1', port: server.address().port, path: '/api/workspace/reset?token=fixture-console-token', method: 'POST',
+        headers: { 'content-type': 'application/json' } }, (response) => {
+        response.resume();
+        response.on('end', () => resolve(response.statusCode));
+      });
+      request.on('error', reject);
+      request.setTimeout(3000, () => request.destroy(new Error('workspace reset hung')));
+      request.end('{}');
+    });
+    assert.equal(status, 200);
+    assert.ok(h.calls.archived.includes('own-root'), 'cwd 恰好等于 sessionCwd 的根会话必须归档');
+    assert.ok(!h.calls.archived.includes('own-child'), '只做精确匹配，不按前缀吞掉子目录会话');
+    assert.ok(!h.calls.archived.includes('unrelated'), '不得归档 sessionCwd 之外的会话');
+    assert.ok(!h.calls.archived.includes('subagent'), '子代理会话由父会话管理，不能误归档');
+    console.log('PASS workspace reset archives exactly the configured session cwd');
+  } catch (error) { failures++; console.error('FAIL workspace reset cwd matching:', error.message); }
+  finally { await new Promise((resolve) => server.close(resolve)); await h.close(); }
+}
 {
   const image = Buffer.from('89504e470d0a1a0a00000000', 'hex');
   let body;

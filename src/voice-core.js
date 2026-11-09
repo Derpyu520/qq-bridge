@@ -173,31 +173,47 @@ export async function probeAudio(file, { ffprobePath = 'ffprobe', timeoutMs = 10
   if (!dir) return { ok: false, reason: '没有可写的临时目录用于 ffprobe 输出' };
 
   const outFile = path.join(dir, `p-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`);
-  const run = () => new Promise((resolve) => {
+  const baseArgs = [
+    '-v', 'error',
+    '-show_entries', 'format=duration,format_name',
+    '-show_entries', 'stream=codec_name,codec_type,sample_rate,channels',
+    '-of', 'json'
+  ];
+  // 优先用 `-o` 写临时文件（stdout/stderr 全 ignore，受限沙箱里也不碰 pipe）。
+  // 但老版本 ffprobe（Ubuntu 22.04 自带 4.4.x）没有 `-o` 选项，会直接报
+  // "Option not found"；这时退回 stdout 捕获。两条路都失败才算不可用。
+  const run = ({ capture = false, args }) => new Promise((resolve) => {
     let child;
+    const chunks = [];
     try {
-      child = spawn(ffprobePath, [
-        '-v', 'error',
-        '-show_entries', 'format=duration,format_name',
-        '-show_entries', 'stream=codec_name,codec_type,sample_rate,channels',
-        '-of', 'json', '-o', outFile, file
-      ], { windowsHide: true, stdio: 'ignore' });
+      child = spawn(ffprobePath, args, {
+        windowsHide: true,
+        stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'ignore'
+      });
     } catch (error) {
       resolve({ code: -1, error: `ffprobe 启动失败：${error?.message ?? error}` });
       return;
     }
+    if (capture && child.stdout) child.stdout.on('data', (chunk) => chunks.push(chunk));
     const timer = setTimeout(() => { try { child.kill(); } catch {} resolve({ code: -2, error: 'ffprobe 超时' }); }, timeoutMs);
     child.on('error', (e) => { clearTimeout(timer); resolve({ code: -1, error: `ffprobe 不可用：${e.message}` }); });
-    child.on('close', (code) => { clearTimeout(timer); resolve({ code }); });
+    child.on('close', (code) => { clearTimeout(timer); resolve({ code, stdout: Buffer.concat(chunks).toString('utf8') }); });
   });
 
   try {
-    const res = await run();
-    if (res.error) return { ok: false, reason: res.error };
+    const fileRun = await run({ args: [...baseArgs, '-o', outFile, file] });
+    if (fileRun.error) return { ok: false, reason: fileRun.error };
     let raw = '';
-    try { raw = fs.readFileSync(outFile, 'utf8'); }
-    catch (error) { return { ok: false, reason: `ffprobe 未产出结果（退出码 ${res.code}，${error?.message ?? error}）` }; }
-    if (!raw.trim()) return { ok: false, reason: `ffprobe 结果为空（退出码 ${res.code}）` };
+    try { raw = fs.readFileSync(outFile, 'utf8'); } catch {}
+    if (!raw.trim()) {
+      const pipeRun = await run({ capture: true, args: [...baseArgs, file] });
+      if (pipeRun.error) return { ok: false, reason: pipeRun.error };
+      raw = pipeRun.stdout || '';
+      if (!raw.trim() && pipeRun.code !== 0) {
+        return { ok: false, reason: `ffprobe 未产出结果（退出码 ${pipeRun.code}）` };
+      }
+    }
+    if (!raw.trim()) return { ok: false, reason: `ffprobe 结果为空（退出码 ${fileRun.code}）` };
     const j = JSON.parse(raw);
     const streams = Array.isArray(j.streams) ? j.streams : [];
     const audio = streams.find((s) => s.codec_type === 'audio');

@@ -10,7 +10,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   LOUDNESS_TARGETS, VOLUME_MAX, VOLUME_MIN,
-  cleanupTemp, processAudioVolume, resolveAudioProcessing
+  cleanupTemp, processAudioVolume, probeAudio, resolveAudioProcessing
 } from '../src/voice-core.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -122,10 +122,11 @@ console.log('## 原样不加处理');
     const louder = await processAudioVolume(src, { volume: 3, tmpDir: tmp });
     ok(louder.converted === true && fs.existsSync(louder.path), 'volume=3 产出新文件', path.basename(louder.path));
     ok(louder.detail.includes('300%'), 'detail 标明 300%', louder.detail);
-    const probeJson = path.join(tmp, 'p.json');
-    const probe = await ffprobe(['-hide_banner', '-v', 'error', '-show_entries', 'format=duration', '-of', 'json', '-o', probeJson, '-i', louder.path]);
-    ok(probe.code === 0 && fs.existsSync(probeJson), '处理后的文件能被 ffprobe 正常解析（没写坏）');
-    const dur = probe.code === 0 ? JSON.parse(fs.readFileSync(probeJson, 'utf8')).format?.duration : null;
+    // 直接走生产用的 probeAudio：它会优先 `-o` 写文件，老版 ffprobe（4.4.x，
+    // Ubuntu 22.04 自带）没有 `-o` 时自动退回 stdout，正好一起回归这条兼容路径。
+    const probe = await probeAudio(louder.path, { tmpDir: tmp });
+    ok(probe.ok, '处理后的文件能被 ffprobe 正常解析（没写坏）', probe.reason || '');
+    const dur = probe.ok ? probe.duration : null;
     ok(dur !== null && Math.abs(Number(dur) - 1) < 0.15, '时长保持不变', `${dur}s`);
 
     const quieter = await processAudioVolume(src, { volume: 0.3, tmpDir: tmp });

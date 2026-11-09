@@ -23,8 +23,8 @@ import yaml from 'js-yaml';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(__dirname, '..');
 
-/** 由桥接托管的两个 preset（顺序即 patch 层顺序）。 */
-export const PRESETS = ['qq-chat', 'qq-chat-v2'];
+/** 由桥接托管的 preset（顺序即 patch 层顺序）。 */
+export const PRESETS = ['qq-chat', 'qq-chat-v2', 'qq-chat-tools'];
 
 /** preset 行 id：与 config.id（桥接解析的 preset 名）区分开，方便在 profile patch 里按行定位。 */
 export function presetRowId(name) {
@@ -45,6 +45,7 @@ export const GUARD_SPECIFIER = 'qq-agent-presets/qq-tool-restrict.mjs';
 /** 源里允许出现的相对行名 → 新机制下的等价引用。其它相对名一律报错（避免静默装不上）。 */
 const RELATIVE_ROW_REWRITES = new Map([
   ['./qq-tool-restrict.mjs', GUARD_SPECIFIER],
+  ['./qq-agent-guard.mjs', 'qq-agent-presets/qq-agent-guard.mjs'],
 ]);
 
 export const BUNDLE_DIR = path.join(REPO_ROOT, 'plugins', 'qq-agent-presets');
@@ -55,6 +56,36 @@ function sourceDirFor(name) {
   return path.join(REPO_ROOT, 'dsh', 'agent-presets', name);
 }
 
+// `!!js <表达式>` 是 DSH loader 的自定义标签（bundle patch 里用来做平台条件，
+// 例如 standard preset 的 `disabled: !!js process.platform === 'win32'`）。
+// js-yaml 默认 schema 不认识它，读源文件会直接报 unknown tag；这里用一个
+// 「只装值、不求值」的标量类型把它原样带过 load→dump，产物仍是 `!!js …`。
+// 安全含义：本脚本只搬运字符串，**不求值**；求值发生在 DSH 装载 patch 时。
+class JsExpression {
+  constructor(source) { this.source = String(source); }
+}
+const JS_EXPRESSION_TYPE = new yaml.Type('tag:yaml.org,2002:js', {
+  kind: 'scalar',
+  construct: (data) => new JsExpression(data),
+  instanceOf: JsExpression,
+  represent: (value) => value.source,
+});
+export const PATCH_SCHEMA = yaml.DEFAULT_SCHEMA.extend([JS_EXPRESSION_TYPE]);
+
+/**
+ * 比较用投影：把 `!!js` 的 JsExpression 变成普通对象 `{ __js: 源码 }`。
+ * structuredClone/JSON 会丢原型，导致「源里的 JsExpression」和「patch 解析出的
+ * JsExpression」在 deepEqual 里看起来不相等；两边都先过这个投影再比。
+ */
+export function plainForCompare(value) {
+  if (value instanceof JsExpression) return { __js: value.source };
+  if (Array.isArray(value)) return value.map(plainForCompare);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, plainForCompare(entry)]));
+  }
+  return value;
+}
+
 function readYaml(file) {
   let text;
   try {
@@ -63,7 +94,7 @@ function readYaml(file) {
     throw new Error(`读取失败 ${file}：${error?.message ?? error}`);
   }
   try {
-    return yaml.load(text);
+    return yaml.load(text, { schema: PATCH_SCHEMA });
   } catch (error) {
     throw new Error(`${file} 不是合法 YAML：${error?.message ?? error}`);
   }
@@ -138,7 +169,8 @@ export function renderPatch(name) {
     '',
   ].join('\n');
   // lineWidth: -1 —— 长行不折行，产物与源逐字对应，diff 只反映真实改动。
-  return `${header}${yaml.dump([{ insert: [row] }], { lineWidth: -1, noRefs: true })}`;
+  // schema 必须带上 !!js 自定义类型，否则 JsExpression 会被 dump 成普通对象。
+  return `${header}${yaml.dump([{ insert: [row] }], { lineWidth: -1, noRefs: true, schema: PATCH_SCHEMA })}`;
 }
 
 /** 生成（或校验）全部 patch 文件。@returns {{file:string,changed:boolean}[]} */

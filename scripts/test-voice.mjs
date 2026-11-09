@@ -213,7 +213,10 @@ console.log('## 控制台契约');
   const html = fs.readFileSync(path.join(ROOT, 'public', 'console.html'), 'utf8');
   const bridgeSrc = fs.readFileSync(path.join(ROOT, 'src', 'bridge.js'), 'utf8');
   ok(html.includes('data-v2-tool="sendVoice"'), '控制台有 sendVoice 工具开关');
-  ok(bridgeSrc.includes("'sendVoice']"), 'config API 的 toolFlags 含 sendVoice');
+  // 断言改成「toolFlags 数组里包含该开关」而不是「数组以 'sendVoice'] 结尾」：
+  // 后者会在任何人往数组尾部追加开关时误报（下载工具 downloadFile 就撞过一次）。
+  ok(/const toolFlags = \[[^\]]*'sendVoice'/.test(bridgeSrc), 'config API 的 toolFlags 含 sendVoice');
+  ok(/const toolFlags = \[[^\]]*'downloadFile'/.test(bridgeSrc), 'config API 的 toolFlags 含 downloadFile');
   const uniq = (a) => [...new Set(a)].sort();
   const views = uniq([...html.matchAll(/data-view="([a-z0-9-]+)"/g)].map((m) => m[1]));
   const pages = uniq([...html.matchAll(/data-page="([a-z0-9-]+)"/g)].map((m) => m[1]));

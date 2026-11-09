@@ -28,6 +28,49 @@
   "sessionCwd": "",
   "agentPreset": "qq-chat",
   "workspaceTitle": "QQ 聊天",
+  "files": {
+    "enabled": true,
+    "download": true,
+    "intoContext": true,
+    "inlineText": true,
+    "inlineMode": "always",
+    "dir": "state/downloads",
+    "maxBytes": 20971520,
+    "maxInlineChars": 20000,
+    "maxInlineTotalChars": 40000,
+    "upload": true,
+    "uploadRoots": [],
+    "uploadPresets": ["qq-chat-tools"]
+  },
+  "agentGuard": {
+    "enabled": true,
+    "denyRead": [
+      "~/.ssh",
+      "~/.git-credentials",
+      "~/.netrc",
+      "~/.aws",
+      "~/.config/gh",
+      "~/.dsh/.credentials.yaml",
+      "~/.dsh/sessions",
+      "~/.config/QQ",
+      "config.json",
+      "state"
+    ],
+    "denyExec": [
+      "\\brm\\s+(-[^\\s]*[rR][^\\s]*|--recursive)",
+      "\\bfind\\b[^\\n]*\\s-delete\\b",
+      "\\b(shred|mkfs|fdisk|parted|wipefs)\\b",
+      "\\bdd\\b[^\\n]*\\bof=",
+      "\\b(sudo|doas|su)\\b",
+      "\\bchmod\\s+(-R|--recursive)\\b",
+      "\\bchown\\s+(-R|--recursive)\\b",
+      "\\b(mount|umount)\\b",
+      "\\b(shutdown|reboot|poweroff|halt|init\\s+0)\\b",
+      ":\\s*\\(\\s*\\)\\s*\\{",
+      "\\btruncate\\s+-s\\s*0\\b",
+      ">\\s*/dev/(sd|nvme|mmcblk)"
+    ]
+  },
   "allow": {
     "private": [],
     "groups": []
@@ -149,7 +192,10 @@
       "stickerNote": true,
       "collectSticker": true,
       "getSelfImage": true,
-      "sendVoice": false
+      "sendVoice": false,
+      "downloadFile": true,
+      "listGroupFiles": true,
+      "uploadFile": true
     },
     "wake": {
       "defaultMode": "diving",

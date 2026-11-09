@@ -24,12 +24,29 @@ import { mdToPlain, splitForQQ, truncateText, truncateTextTail } from './md-to-p
 import { SENSITIVE_RE } from './sensitive.js';
 import { looksLikeUnfinished } from './v2-wait.js';
 import { compactModelMessage, describeAge, sanitizeUntrustedText } from './qq-model-view.js';
-import { safeFetchBuffer, looksLikeImageBuffer } from './safe-fetch.js';
+import { safeFetchBuffer, safeFetchBytes, looksLikeImageBuffer } from './safe-fetch.js';
 import { normalizeImageForModel } from './media-normalize.js';
 import { AUDIO_EXTS, cleanupTemp, describeAudio, formatBytes, formatDuration, inspectAudio, listAudioFiles, parseTargetKey, processAudioVolume, resolveAudioProcessing, resolveAudioSource, safeJoinLibrary } from './send-voice-lib.js';
 import { discoverSnowLumaConnection, persistSnowLumaEndpoint, persistToken } from './snowluma-conn.js';
 import { hardenDir, manualDirCommand } from './state-acl.mjs';
 import { extractForwardIds, forwardIdFromData, sanitizeForwardId, formatForwardResponse } from './forward.js';
+import {
+  DEFAULT_DOWNLOAD_DIR,
+  DEFAULT_MAX_FILE_BYTES,
+  DEFAULT_MAX_INLINE_CHARS,
+  DEFAULT_MAX_INLINE_TOTAL_CHARS,
+  decodeTextFile,
+  describeFileMedia,
+  fileNameFromUrl,
+  fileMediaFromSegment,
+  findSavedDownload,
+  isTextLikeFileName,
+  pickGroupFileFromList,
+  resolveDownloadDir,
+  resolveUploadPath,
+  sanitizeQQFileName,
+  uniqueDownloadPath
+} from './qq-file-lib.js';
 import { resolvePriceTable } from './model-prices.js';
 import { createTokenLedger } from './token-ledger.js';
 import {
@@ -957,6 +974,9 @@ function loadConfig() {
     collectSticker: true,
     getSelfImage: true,
     sendVoice: false,
+    downloadFile: true,
+    listGroupFiles: true,
+    uploadFile: true,
     ...(cfg.socialV2.tools ?? {})
   };
 
@@ -1006,6 +1026,45 @@ function loadConfig() {
       maxRemarkChars: 20,
       ...((cfg.socialV2?.sticker?.collect) ?? {})
     }
+  };
+
+  // files：QQ 发来的「文件」（OneBot file 段）怎么处理。
+  //
+  // 这几件事是彼此独立的开关，默认都开（文件消息本身就少见，开箱即用更重要）：
+  //   · download    —— 收到文件就另存一份到下载目录（用户可直接取用）；
+  //   · intoContext —— 把文件上传进 DSH 附件仓库，prompt 里带 `{type:'file'}`；
+  //   · inlineText / inlineMode —— 文本文件内容怎么进上下文（见下面的重要说明）。
+  //
+  // ⚠️ 为什么文本内容**必须**内联，而不是靠附件（实测 DSH 0.2.0-rc.2 源码结论）：
+  //   dsh-llm 在派发前会把每个 `{type:'file'}` 统一投影成一段**文本 handle**
+  //   （`fileHandleText`；源码注释原文：This is the only representation a provider ever receives for a file）
+  //   ——模型拿到的是文件名/大小/sha256 + 一句「用你的文件工具读这个路径」，
+  //   **文件字节永远不会发给模型**。而 QQ 的 qq-chat / qq-chat-v2 preset
+  //   故意不挂 read/glob/grep（铁律 L7），所以附件在 QQ 会话里只等于「告诉模型有这么
+  //   个文件、路径在哪」，内容读不到。因此文本文件的正文只能由桥接内联进 prompt。
+  //   inlineMode: 'always'（默认）= 上传附件的同时总是内联文本内容；
+  //               'fallback'      = 只在附件上传失败/关闭时内联（旧行为）；
+  //               inlineText:false 或 inlineMode:'off' = 从不内联。
+  //   二进制文件（zip/pdf/docx…）没有任何一路能进上下文，只给元数据与只读副本路径。
+  cfg.files = {
+    enabled: true,
+    download: true,
+    intoContext: true,
+    inlineText: true,
+    inlineMode: 'always',
+    dir: DEFAULT_DOWNLOAD_DIR,
+    maxBytes: DEFAULT_MAX_FILE_BYTES,
+    maxInlineChars: DEFAULT_MAX_INLINE_CHARS,
+    maxInlineTotalChars: DEFAULT_MAX_INLINE_TOTAL_CHARS,
+    // 上传（出站）：把工作区/下载目录里的文件发到 QQ。uploadRoots 为空时默认只允许
+    // 会话工作区（sessionCwd）与 files.dir；写进配置的额外根目录会追加到白名单。
+    upload: true,
+    uploadRoots: [],
+    // 允许上传文件的 preset（按会话实际挂载的 preset 判定，而不是按模式一刀切）：
+    // 带工具的 qq-chat-tools 可以传；qq-chat / qq-chat-v2 这类纯聊天预设只发图片/表情。
+    // closed-agent 不受此列表限制（owner 私聊本来就用完整工具面）。
+    uploadPresets: ['qq-chat-tools'],
+    ...(file.files ?? {})
   };
 
   // socialV2.media：图片/表情的数量与体积上限。旧配置没有这一段，必须深度合并出默认值，
@@ -1320,7 +1379,13 @@ async function segmentsToText(segments, options = {}) {
       case 'image': out.push('[图片]'); break;
       case 'record': out.push('[语音]'); break;
       case 'video': out.push('[视频]'); break;
-      case 'file': out.push(`[文件${d.name ?? ''}]`); break;
+      case 'file': {
+        // 群文件/离线文件：带上文件名与大小，模型才知道有东西可看（字节走文件链路，不在这里）。
+        const fname = String(d.name ?? d.file_name ?? d.file ?? '').trim();
+        const fsize = Number(d.size ?? d.file_size ?? 0);
+        out.push(`[文件${fname ? ` ${fname}` : ''}${Number.isFinite(fsize) && fsize > 0 ? ` ${formatBytes(fsize)}` : ''}]`);
+        break;
+      }
       case 'reply': {
         // 引用/回复段：默认解析成「被引用人 + 原文」，让 AI 能判断这句话是对谁说的；
         // includeReply=false 时跳过该段，得到“当前消息自己的文字”（用于指令/指向性判断）。
@@ -1413,6 +1478,9 @@ function extractMediaFromSegments(segments) {
         url: String(d.url ?? ''),
         summary: sanitizeMediaSummary(d.summary)
       });
+    } else if (seg.type === 'file') {
+      // 文件段只记录定位信息（file_id/busid/url/name/size），字节由桥接按需去网关换取。
+      media.push(fileMediaFromSegment(d));
     }
   }
   return media;
@@ -4959,7 +5027,7 @@ async function main() {
             merged.autoReplyCheckMs = Number.isFinite(n) ? Math.max(1000, Math.round(n)) : (current.autoReplyCheckMs ?? 30000);
           }
           // tools：只接受布尔开关
-          const toolFlags = ['getPrompt', 'getUnread', 'getRecent', 'socialState', 'sendGroup', 'sendPrivate', 'reply', 'sendBurst', 'sendMessage', 'waitMessages', 'feedback', 'getMyRecent', 'getMessageDetail', 'getActiveMembers', 'setWakeConfig', 'markRead', 'memory', 'slangQuery', 'slangSubmit', 'getImages', 'getForwardMsg', 'sendPoke', 'listStickers', 'getStickerImage', 'sendSticker', 'setStickerRemark', 'stickerNote', 'collectSticker', 'getSelfImage', 'sendVoice'];
+          const toolFlags = ['getPrompt', 'getUnread', 'getRecent', 'socialState', 'sendGroup', 'sendPrivate', 'reply', 'sendBurst', 'sendMessage', 'waitMessages', 'feedback', 'getMyRecent', 'getMessageDetail', 'getActiveMembers', 'setWakeConfig', 'markRead', 'memory', 'slangQuery', 'slangSubmit', 'getImages', 'getForwardMsg', 'sendPoke', 'listStickers', 'getStickerImage', 'sendSticker', 'setStickerRemark', 'stickerNote', 'collectSticker', 'getSelfImage', 'sendVoice', 'downloadFile', 'listGroupFiles', 'uploadFile'];
           if (body.tools && typeof body.tools === 'object') {
             merged.tools = { ...(current.tools ?? {}), ...body.tools };
             for (const k of toolFlags) {
@@ -5222,8 +5290,18 @@ async function main() {
             stickerNote: 'qq_sticker_note',
             collectSticker: 'qq_collect_sticker',
             getSelfImage: 'qq_get_self_image',
-            sendVoice: 'qq_send_voice / qq_list_voices'
+            sendVoice: 'qq_send_voice / qq_list_voices',
+            downloadFile: 'qq_download_file / qq_download_group_file',
+            listGroupFiles: 'qq_list_group_files',
+            uploadFile: 'qq_upload_file'
           };
+          // 上传工具只在「带工具的工作区预设」或 closed-agent 存在；纯聊天预设下面已按
+          // preset 隐藏，这里的清单也不要列出来（否则模型会照着清单去调一个不存在的工具）。
+          {
+            const sessionPreset = modePreset(key, currentMode, cfg);
+            const uploadPresets = Array.isArray(cfg.files?.uploadPresets) ? cfg.files.uploadPresets : ['qq-chat-tools'];
+            if (currentMode !== 'closed-agent' && !uploadPresets.includes(sessionPreset)) delete toolMap.uploadFile;
+          }
           const tools = cfg.socialV2?.tools ?? {};
           const stickerToolFlags = new Set(['listStickers', 'getStickerImage', 'sendSticker', 'setStickerRemark', 'stickerNote', 'collectSticker']);
           const enabledTools = [];
@@ -7147,6 +7225,224 @@ async function main() {
           }
           return;
         }
+        // ── 文件下载端点（MCP qq_download_file 走这里） ─────────────────────
+        // 安全边界：只允许下载**本会话确实收到过**的文件（findMessageMedia 只查本会话
+        // 的消息媒体表），不接受调用方给任意 URL；落盘目录由 config.files.dir 固定，
+        // 文件名经净化，抓取走 safeFetchBuffer（DNS 固定 + 逐跳校验 + 大小上限）。
+        if (req.method === 'GET' && url.pathname === '/api/socialV2/download-file') {
+          const key = String(url.searchParams.get('key') ?? '').trim();
+          const messageId = String(url.searchParams.get('messageId') ?? '').trim();
+          const nameOverride = String(url.searchParams.get('name') ?? '').trim();
+          const agentToken = String(req.headers['x-agent-token'] ?? '').trim();
+          const keyMatch = /^(group|private):(\d+)$/.exec(key);
+          if (!keyMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
+          if (!messageId) { sendJson({ ok: false, error: 'messageId 不能为空' }, 400); return; }
+          if (currentMode === 'reserved2' && !agentToken) {
+            sendJson({ ok: false, error: 'reserved2 模式下载文件必须携带 agent token' }, 403);
+            return;
+          }
+          if (currentMode === 'chat' || currentMode === 'reserved') {
+            sendJson({ ok: false, error: '文件下载仅 closed-agent / reserved2 模式可用' }, 403);
+            return;
+          }
+          if (agentToken && !agentTokenOk(key, agentToken)) {
+            sendJson({ ok: false, error: 'agent token 无效' }, 403);
+            return;
+          }
+          const kind = keyMatch[1];
+          const num = Number(keyMatch[2]);
+          if (!Number.isFinite(num) || num <= 0 || !modeAllowed(key, kind, num, cfg, currentMode)) {
+            sendJson({ ok: false, error: '当前模式不允许访问该会话' }, 403);
+            return;
+          }
+          if (!v2ToolEnabled('downloadFile')) {
+            sendJson({ ok: false, error: '工具未启用：qq_download_file' }, 403);
+            return;
+          }
+          if (cfg.files?.enabled === false) {
+            sendJson({ ok: false, error: '文件处理已关闭（config.files.enabled=false）' }, 403);
+            return;
+          }
+          const files = findMessageMedia(key, messageId).filter((m) => m?.kind === 'file');
+          if (!files.length) {
+            sendJson({ ok: false, error: '该消息没有可下载的文件，或文件元数据已过期（只能下载本会话确实收到过的文件）' }, 404);
+            return;
+          }
+          const results = [];
+          for (const media of files) {
+            // eslint-disable-next-line no-await-in-loop -- 逐个下载，避免同时抓多个大文件
+            const info = await ensureQQFile(media, key, {
+              needBytes: true,
+              save: true,
+              ...(files.length === 1 && nameOverride ? { name: nameOverride } : {})
+            });
+            results.push({
+              name: info.name,
+              bytes: info.bytes,
+              mime: info.mime || null,
+              path: info.saved?.path ?? null,
+              error: info.error ?? null
+            });
+          }
+          const ok = results.some((r) => r.path);
+          if (!ok) {
+            // 失败原因必须同时**回给模型**并**写进日志**：
+            // MCP 的 agentApi 只看顶层 error，只看 files[].error 会把真实原因吞成
+            // 「桥接 API 返回 ok:false（未说明原因）」，模型只能瞎猜（线上已踩过）。
+            const detail = results
+              .map((r) => `${r.name || '文件'}: ${r.error || '未保存（没有可用字节）'}`)
+              .join('；');
+            log(`文件下载失败 ${key} ${messageId}: ${detail}`);
+            sendJson({ ok: false, error: `文件下载失败：${detail}`, key, messageId, dir: downloadDirAbs(), files: results }, 502);
+            return;
+          }
+          sendJson({ ok: true, key, messageId, dir: downloadDirAbs(), files: results });
+          return;
+        }
+        // ── 群文件列表 / 按群文件 id 下载（MCP qq_list_group_files / qq_download_group_file）──
+        // 聊天消息里的 file_id 与群文件里的 file_id 是两套；这两个端点让模型直接看群文件里
+        // 有什么、并按列表里的 id 下载，不必等有人在群里发一遍。
+        if (req.method === 'GET' && url.pathname === '/api/socialV2/group-files') {
+          const key = String(url.searchParams.get('key') ?? '').trim();
+          const agentToken = String(req.headers['x-agent-token'] ?? '').trim();
+          const keyMatch = /^(group|private):(\d+)$/.exec(key);
+          if (!keyMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
+          if (keyMatch[1] !== 'group') { sendJson({ ok: false, error: '群文件列表只支持群聊（group:群号）' }, 400); return; }
+          if (currentMode === 'reserved2' && !agentToken) {
+            sendJson({ ok: false, error: 'reserved2 模式读取群文件必须携带 agent token' }, 403);
+            return;
+          }
+          if (currentMode === 'chat' || currentMode === 'reserved') {
+            sendJson({ ok: false, error: '群文件列表仅 closed-agent / reserved2 模式可用' }, 403);
+            return;
+          }
+          if (agentToken && !agentTokenOk(key, agentToken)) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          const num = Number(keyMatch[2]);
+          if (!Number.isFinite(num) || num <= 0 || !modeAllowed(key, 'group', num, cfg, currentMode)) {
+            sendJson({ ok: false, error: '当前模式不允许访问该群' }, 403);
+            return;
+          }
+          if (!v2ToolEnabled('listGroupFiles')) { sendJson({ ok: false, error: '工具未启用：qq_list_group_files' }, 403); return; }
+          try {
+            const recursive = url.searchParams.get('recursive') !== '0';
+            const data = await listGroupFiles(num, { recursive, maxFolders: 50 });
+            const files = data.files
+              .map((f) => ({
+                fileId: f.file_id,
+                name: f.file_name,
+                size: f.file_size,
+                busid: f.busid,
+                uploadTime: f.upload_time || null,
+                uploader: f.uploader_name || null,
+                downloads: f.download_times ?? null,
+                folder: f.folder_name || '/'
+              }))
+              .sort((a, b) => (b.uploadTime ?? 0) - (a.uploadTime ?? 0));
+            const folders = data.folders.map((f) => ({ folderId: f.folder_id, name: f.folder_name, fileCount: f.file_count }));
+            sendJson({ ok: true, key, groupId: num, folders, files, count: files.length });
+          } catch (error) {
+            log(`群文件列表失败 ${key}: ${error?.message ?? error}`);
+            sendJson({ ok: false, error: `群文件列表失败：${error?.message ?? error}` }, 502);
+          }
+          return;
+        }
+        if (req.method === 'GET' && url.pathname === '/api/socialV2/download-group-file') {
+          const key = String(url.searchParams.get('key') ?? '').trim();
+          const fileId = String(url.searchParams.get('fileId') ?? '').trim();
+          const name = String(url.searchParams.get('name') ?? '').trim();
+          const agentToken = String(req.headers['x-agent-token'] ?? '').trim();
+          const keyMatch = /^(group|private):(\d+)$/.exec(key);
+          if (!keyMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
+          if (keyMatch[1] !== 'group') { sendJson({ ok: false, error: '群文件下载只支持群聊（group:群号）' }, 400); return; }
+          if (!fileId && !name) { sendJson({ ok: false, error: 'fileId 和 name 至少给一个（fileId 来自 qq_list_group_files）' }, 400); return; }
+          if (fileId && !/^\/[A-Za-z0-9-]{8,128}$/.test(fileId)) { sendJson({ ok: false, error: 'fileId 格式不对（应形如 /0a5b…，来自 qq_list_group_files）' }, 400); return; }
+          if (currentMode === 'reserved2' && !agentToken) {
+            sendJson({ ok: false, error: 'reserved2 模式下载群文件必须携带 agent token' }, 403);
+            return;
+          }
+          if (currentMode === 'chat' || currentMode === 'reserved') {
+            sendJson({ ok: false, error: '群文件下载仅 closed-agent / reserved2 模式可用' }, 403);
+            return;
+          }
+          if (agentToken && !agentTokenOk(key, agentToken)) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          const num = Number(keyMatch[2]);
+          if (!Number.isFinite(num) || num <= 0 || !modeAllowed(key, 'group', num, cfg, currentMode)) {
+            sendJson({ ok: false, error: '当前模式不允许访问该群' }, 403);
+            return;
+          }
+          if (!v2ToolEnabled('downloadFile')) { sendJson({ ok: false, error: '工具未启用：qq_download_group_file' }, 403); return; }
+          if (cfg.files?.enabled === false) { sendJson({ ok: false, error: '文件处理已关闭（config.files.enabled=false）' }, 403); return; }
+          try {
+            const data = await listGroupFiles(num, { recursive: true, maxFolders: 50 });
+            let hit = fileId ? data.files.find((f) => String(f.file_id) === fileId) : null;
+            if (!hit && name) hit = pickGroupFileFromList(data.files, { name });
+            if (!hit) {
+              sendJson({ ok: false, error: `群文件里没有${fileId ? ` id=${fileId}` : `名为「${name}」`}的文件；可先用 qq_list_group_files 查看列表` }, 404);
+              return;
+            }
+            const info = await ensureQQFile(
+              { kind: 'file', fileId: String(hit.file_id), busid: hit.busid, name: String(hit.file_name ?? ''), size: Number(hit.file_size) || 0 },
+              key,
+              { needBytes: true, save: true, ...(name ? { name } : {}) }
+            );
+            if (info.error) {
+              log(`群文件下载失败 ${key} ${hit.file_name}: ${info.error}`);
+              sendJson({ ok: false, error: `群文件下载失败：${info.error}`, key, file: { name: info.name, bytes: info.bytes } }, 502);
+              return;
+            }
+            sendJson({
+              ok: true,
+              key,
+              file: { name: info.name, bytes: info.bytes, mime: info.mime || null, path: info.saved?.path ?? null },
+              dir: downloadDirAbs()
+            });
+          } catch (error) {
+            log(`群文件下载异常 ${key}: ${error?.message ?? error}`);
+            sendJson({ ok: false, error: `群文件下载异常：${error?.message ?? error}` }, 502);
+          }
+          return;
+        }
+        // ── 本地文件 → QQ（MCP qq_upload_file 走这里） ──────────────────────
+        // 出站能力：只允许 uploadRootsAbs() 内的真实文件，路径 realpath 校验，
+        // 大小受 files.maxBytes 约束；群聊进群文件，私聊发文件消息。
+        if (req.method === 'POST' && url.pathname === '/api/socialV2/upload-file') {
+          const body = await readBody();
+          const key = String(body.key ?? '').trim();
+          const rawPath = String(body.path ?? '').trim();
+          const name = String(body.name ?? '').trim();
+          const agentToken = String(req.headers['x-agent-token'] ?? '').trim();
+          const keyMatch = /^(group|private):(\d+)$/.exec(key);
+          if (!keyMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
+          if (!rawPath) { sendJson({ ok: false, error: 'path 不能为空' }, 400); return; }
+          // 上传按**会话实际 preset** 开放：带本地工具的 qq-chat-tools（群聊工作区）
+          // 与 closed-agent（owner 私聊）可以传；qq-chat / qq-chat-v2 这类纯聊天预设
+          // 只能发图片/表情（发表情包、截图不需要文件通道）。
+          const sessionPreset = modePreset(key, currentMode, cfg);
+          const uploadPresets = Array.isArray(cfg.files?.uploadPresets) ? cfg.files.uploadPresets : ['qq-chat-tools'];
+          const uploadAllowed = currentMode === 'closed-agent' || uploadPresets.includes(sessionPreset);
+          if (!uploadAllowed) {
+            sendJson({ ok: false, error: `当前预设（${sessionPreset}）不能上传文件：纯聊天预设只能发图片和表情；带工具的工作区预设或 closed-agent 才能上传` }, 403);
+            return;
+          }
+          if (agentToken && !agentTokenOk(key, agentToken)) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          const kind = keyMatch[1];
+          const num = Number(keyMatch[2]);
+          if (!Number.isFinite(num) || num <= 0 || !modeAllowed(key, kind, num, cfg, currentMode)) {
+            sendJson({ ok: false, error: '当前模式不允许访问该会话' }, 403);
+            return;
+          }
+          if (!v2ToolEnabled('uploadFile')) { sendJson({ ok: false, error: '工具未启用：qq_upload_file' }, 403); return; }
+          if (cfg.files?.upload === false) { sendJson({ ok: false, error: '上传功能已关闭（config.files.upload=false）' }, 403); return; }
+          try {
+            const result = await uploadLocalFileToQQ(key, rawPath, { name });
+            log(`上传文件 ${key}: ${result.name}（${formatBytes(result.size)}）fileId=${result.fileId ?? '未知'} verified=${result.verified}`);
+            sendJson({ ok: true, ...result });
+          } catch (error) {
+            log(`上传文件失败 ${key} ${rawPath}: ${error?.message ?? error}`);
+            sendJson({ ok: false, error: `上传文件失败：${error?.message ?? error}` }, error?.client === true ? 400 : 502);
+          }
+          return;
+        }
         if (req.method === 'GET' && url.pathname === '/api/socialV2/active-members') {
           const key = String(url.searchParams.get('key') ?? '').trim();
           const limit = Math.min(20, Math.max(1, Number(url.searchParams.get('limit')) || 10));
@@ -7715,18 +8011,26 @@ async function main() {
           let stoppedCount = 0;
           try {
             // 新版 DSH 不再提供 workspace.list；改为扫描本桥接创建的会话目录并归档。
-            // 只处理 cwd 位于 qq-bridge state/ 下的根会话；子代理会话由父会话管理，不能误归档。
+            // 只处理 cwd 位于 qq-bridge state/ 下（或恰好等于配置的 sessionCwd）的根会话；
+            // 子代理会话由父会话管理，不能误归档。
+            //
+            // 为什么要把 sessionCwd 也算进来：用户可以给 owner 的闭源 agent 单独指一个
+            // 工作区（例如 ~/qq-agent-workspace），此时 cwd 不再落在 state/ 下；只看 state/
+            // 会让「清空工作区」按钮对这些会话**静默失效**（内存状态清了、DSH 会话没归档）。
+            // 只做**精确匹配**而不是包含判断：sessionCwd 一旦被设成 home 之类的大目录，
+            // 包含判断会把用户无关的 DSH 会话一起归档掉。
             const list = unwrap(await withTimeout(api.sessions.list({}), DSH_CONTROL_TIMEOUT_MS, 'sessions.list'), 'session.list');
             const stateDir = path.resolve(STATE_DIR);
             const statePrefix = path.normalize(stateDir + path.sep);
+            const configuredCwd = cfg.sessionCwd ? path.normalize(path.resolve(String(cfg.sessionCwd))) : '';
             const normPath = (p) => path.normalize(String(p ?? '').replace(/\//g, path.sep));
-            const isUnderState = (cwd) => process.platform === 'win32'
-              ? cwd.toLowerCase().startsWith(statePrefix.toLowerCase())
-              : cwd.startsWith(statePrefix);
+            const norm = (p) => (process.platform === 'win32' ? p.toLowerCase() : p);
+            const isUnderState = (cwd) => norm(cwd).startsWith(norm(statePrefix));
+            const isConfiguredRoot = (cwd) => configuredCwd !== '' && norm(cwd) === norm(configuredCwd);
             for (const item of list.items ?? []) {
               if (item.origin === 'subagent' || item.parentSessionId) continue;
               const cwd = normPath(item.cwd);
-              if (isUnderState(cwd)) {
+              if (isUnderState(cwd) || isConfiguredRoot(cwd)) {
                 // 归档只隐藏会话；必须先把 DSH 侧排队的工作清掉并取消当前回合。
                 try { await withTimeout(api.stopSessionWork(item.sessionId), DSH_CONTROL_TIMEOUT_MS, 'stopSessionWork'); stoppedCount += 1; }
                 catch (error) { log(`⚠️ 停止旧会话失败 ${item.sessionId}：${error?.message ?? error}；请在 DSH 检查旧任务`); }
@@ -8439,10 +8743,349 @@ async function main() {
     return { text: fallbackText };
   }
 
-  async function resolveMediaList(mediaList) {
+  // ── QQ 文件（OneBot file 段）字节获取、落盘与缓存 ──────────────────────────
+  //
+  // 与图片完全不同的地方：文件段没有可直接内联的字节，必须由桥接去网关换取下载链接。
+  // 安全口径与图片一致：**绝不把消息里的原始 URL 交给网关重新抓取**，链接要么来自
+  // 消息段、要么来自 bot.request('get_group_file_url'/'get_file')，抓取一律走
+  // safeFetchBuffer（DNS 固定 + 逐跳校验 + 大小上限），落盘只进配置的下载目录。
+  const fileByteCache = new Map(); // cacheKey -> { buffer,name,mime,via,bytes,saved,error,at }
+  const FILE_CACHE_TTL_MS = 10 * 60 * 1000; // 收到与投递之间通常只隔几秒；10 分钟足够复用
+  const FILE_CACHE_MAX = 24;
+  const FILE_CACHE_MAX_BYTES = 64 * 1024 * 1024;
+
+  function fileConfig() {
+    return cfg.files ?? {};
+  }
+
+  function fileCacheKey(media) {
+    return [media?.fileId, media?.file, media?.url, media?.name].map((v) => String(v ?? '')).join('|');
+  }
+
+  function trimFileByteCache() {
+    let total = 0;
+    for (const entry of fileByteCache.values()) total += entry?.buffer?.length ?? 0;
+    while (fileByteCache.size > FILE_CACHE_MAX || total > FILE_CACHE_MAX_BYTES) {
+      const oldest = fileByteCache.keys().next().value;
+      if (oldest === undefined) break;
+      total -= fileByteCache.get(oldest)?.buffer?.length ?? 0;
+      fileByteCache.delete(oldest);
+    }
+  }
+
+  function downloadDirAbs() {
+    return resolveDownloadDir(fileConfig().dir, ROOT);
+  }
+
+  /** 把字节落盘到下载目录（净化文件名 + 防重名；已存在同名则加 -2 后缀）。 */
+  function saveFileToDownloadDir(buffer, name) {
+    const dir = downloadDirAbs();
+    fs.mkdirSync(dir, { recursive: true });
+    const target = uniqueDownloadPath(dir, sanitizeQQFileName(name));
+    fs.writeFileSync(target, buffer, { mode: 0o600 });
+    return { path: target, name: path.basename(target), dir, bytes: buffer.length };
+  }
+
+  /**
+   * 列出群文件（root + 子目录，广度优先）。
+   *
+   * 用途有两个：① 「聊天里的 file_id 找不到群文件」时按名字+大小回退；
+   * ② `qq_list_group_files` 工具让模型直接看到群文件里有什么（而不是只能等别人在群里发）。
+   * 返回的条目保留 SnowLuma 原始字段（file_id/file_name/file_size/busid/upload_time/uploader_name…），
+   * 另加 folder_id/folder_name 便于展示。
+   *
+   * 遍历有上限（默认 50 个目录）：大群目录树可能很深，列表/下载路径都不能无限翻。
+   * @param {number} groupId
+   * @param {{recursive?:boolean, maxFolders?:number}} [options]
+   * @returns {Promise<{folders:object[], files:object[]}>}
+   */
+  async function listGroupFiles(groupId, { recursive = true, maxFolders = 50 } = {}) {
+    const folders = [];
+    const files = [];
+    const queue = [{ folderId: '/', folderName: '' }];
+    const seen = new Set(['/']);
+    let budget = Math.max(1, Math.min(200, Number(maxFolders) || 50));
+    while (queue.length > 0 && budget > 0) {
+      budget -= 1;
+      const { folderId, folderName } = queue.shift();
+      let payload;
+      try {
+        const raw = await bot.request('get_group_files_by_folder', { group_id: groupId, folder_id: folderId });
+        payload = raw?.data ?? raw;
+      } catch (error) {
+        if (folderId === '/') throw error;
+        continue;
+      }
+      for (const f of Array.isArray(payload?.files) ? payload.files : []) {
+        files.push({ ...f, folder_id: folderId, folder_name: folderName });
+      }
+      for (const folder of Array.isArray(payload?.folders) ? payload.folders : []) {
+        const id = String(folder?.folder_id ?? '').trim();
+        if (!id) continue;
+        const name = String(folder?.folder_name ?? '').trim();
+        folders.push({ folder_id: id, folder_name: name, file_count: Number(folder?.total_file_count) || 0, parent_id: folderId });
+        if (!recursive || seen.has(id)) continue;
+        seen.add(id);
+        queue.push({ folderId: id, folderName: name });
+      }
+    }
+    return { folders, files };
+  }
+
+  /**
+   * 在群文件列表里按「文件名 + 大小」找同名文件。
+   *
+   * 为什么需要：**聊天消息里的 file_id 与群文件里的 file_id 是两套 id**（实测同一个文件：
+   * 段里是 `/14fe…`，群文件列表里是 `/0a5b…`）。用段里的 id 调 get_group_file_url 会报
+   * 「文件不存在」；而群文件里确实存在同名同大小的文件。此时用列表里的 file_id 才能取到
+   * 下载链接。只按 name + size 匹配，不做模糊匹配（避免把同名但不同内容的文件当成本文件）。
+   * @param {number} groupId
+   * @param {{name?:string,size?:number}} media
+   * @returns {Promise<object|null>} 命中的群文件条目（含 file_id/busid）。
+   */
+  async function findGroupFileByMeta(groupId, media) {
+    const wantedName = String(media?.name ?? '').trim();
+    if (!wantedName) return null;
+    const { files } = await listGroupFiles(groupId, { recursive: true, maxFolders: 20 });
+    return pickGroupFileFromList(files, { name: wantedName, size: media?.size });
+  }
+
+  /**
+   * 换取文件字节：段内 URL → 群文件下载链接 → 群文件列表按名字回退 → get_file。
+   * 任何一路成功即返回；全部失败抛错（错误信息里带上试过哪些渠道，便于群友/管理员排查）。
+   * @param {object} media - extractMediaFromSegments 产出的 file 元数据。
+   * @param {string} key - 会话 key（群文件链接需要群号）。
+   * @param {{maxBytes?:number}} [options]
+   * @returns {Promise<{buffer:Buffer,mime:string,via:string}>}
+   */
+  async function fetchQQFileBytes(media, key, { maxBytes = DEFAULT_MAX_FILE_BYTES } = {}) {
+    const limit = Number(maxBytes) > 0 ? Number(maxBytes) : DEFAULT_MAX_FILE_BYTES;
+    const attempts = [];
+    const fromUrl = async (url, via) => {
+      // 群文件不是图片：必须用 safeFetchBytes（同一套 SSRF/重定向/大小防护，但不校验图片签名）。
+      // 曾用 safeFetchBuffer 抓群文件，HTML/zip/pdf 全部被判「不是有效图片」而失败。
+      const fetched = await safeFetchBytes(String(url), limit);
+      return { buffer: fetched.buffer, mime: fetched.mimeType || 'application/octet-stream', via };
+    };
+    if (media.url) {
+      try { return await fromUrl(media.url, 'segment-url'); }
+      catch (error) { attempts.push(`segment-url: ${error?.message ?? error}`); }
+    }
+    const target = parseTargetKey(key);
+    if (target?.kind === 'group' && (media.fileId || media.name)) {
+      try {
+        const info = await bot.request('get_group_file_url', {
+          group_id: Number(target.id),
+          file_id: media.fileId,
+          busid: Number(media.busid) || 102
+        });
+        const url = info?.url ?? info?.data?.url;
+        if (url) return await fromUrl(url, 'group-file-url');
+        attempts.push(`group-file-url: ${info?.wording ?? '未返回 url'}`);
+      } catch (error) { attempts.push(`group-file-url: ${error?.message ?? error}`); }
+      // 聊天里收到的文件 id 与「群文件」里的 id 是两套：群临时文件/聊天文件用段里的
+      // file_id 调 get_group_file_url 会报「文件不存在」。如果群文件里存在同名（同大小）
+      // 的文件，就用群文件列表里的 file_id 再取一次下载链接。
+      try {
+        const hit = await findGroupFileByMeta(Number(target.id), media);
+        if (hit) {
+          const info = await bot.request('get_group_file_url', {
+            group_id: Number(target.id),
+            file_id: String(hit.file_id ?? hit.id ?? ''),
+            busid: Number(hit.busid) || 102
+          });
+          const url = info?.url ?? info?.data?.url;
+          if (url) return await fromUrl(url, 'group-file-list-url');
+          attempts.push(`group-file-list-url: ${info?.wording ?? '未返回 url'}`);
+        } else {
+          attempts.push('group-file-list: 群文件里没有同名同大小的文件');
+        }
+      } catch (error) { attempts.push(`group-file-list: ${error?.message ?? error}`); }
+    }
+    if (media.fileId || media.file) {
+      try {
+        const raw = await bot.request('get_file', {
+          ...(media.fileId ? { file_id: media.fileId } : {}),
+          ...(media.file ? { file: media.file } : {})
+        });
+        const obj = raw && typeof raw === 'object' ? (raw.data ?? raw) : {};
+        const base64 = base64FromMaybe(obj.base64) || base64FromMaybe(obj.data) || base64FromMaybe(obj.file);
+        if (base64) {
+          const buf = Buffer.from(base64, 'base64');
+          if (buf.length > 0 && buf.length <= limit) return { buffer: buf, mime: 'application/octet-stream', via: 'get_file-base64' };
+          if (buf.length > limit) throw new Error(`超过上限 ${formatBytes(limit)}`);
+        }
+        if (obj.url) return await fromUrl(obj.url, 'get_file-url');
+        if (typeof obj.file === 'string' && fs.existsSync(obj.file) && isSafeLocalMediaPath(obj.file)) {
+          const stat = fs.statSync(obj.file);
+          if (stat.size <= limit) return { buffer: fs.readFileSync(obj.file), mime: 'application/octet-stream', via: 'get_file-local' };
+        }
+        attempts.push('get_file: 没有可下载内容');
+      } catch (error) { attempts.push(`get_file: ${error?.message ?? error}`); }
+    }
+    if (media.file && fs.existsSync(media.file) && isSafeLocalMediaPath(media.file)) {
+      try {
+        const stat = fs.statSync(media.file);
+        if (stat.size <= limit) return { buffer: fs.readFileSync(media.file), mime: 'application/octet-stream', via: 'segment-local' };
+      } catch (error) { attempts.push(`segment-local: ${error?.message ?? error}`); }
+    }
+    throw new Error(`无法获取文件字节（${attempts.join('；') || '消息段里没有 file_id/url'}）`);
+  }
+
+  /**
+   * 幂等获取一个 QQ 文件：命中缓存直接复用；否则抓字节、写入下载目录（按配置）、记缓存。
+   * 失败不抛异常——返回 `{ error }` 交给调用方决定降级方式（内联/只报元数据）。
+   * @param {object} media - file 元数据。
+   * @param {string} key - 会话 key。
+   * @param {{needBytes?:boolean, save?:boolean|null, name?:string}} [options]
+   * @returns {Promise<{name:string,bytes:number,mime:string,buffer:Buffer|null,saved:object|null,error:string|null,via:string,cached:boolean}>}
+   */
+  async function ensureQQFile(media, key, { needBytes = true, save = null, name = null } = {}) {
+    const limit = Number(fileConfig().maxBytes) > 0 ? Number(fileConfig().maxBytes) : DEFAULT_MAX_FILE_BYTES;
+    const cacheKey = fileCacheKey(media);
+    const wantSave = save === null ? fileConfig().download !== false : save === true;
+    const cached = fileByteCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < FILE_CACHE_TTL_MS && (!needBytes || cached.buffer)) {
+      const hit = { ...cached, cached: true };
+      if (wantSave && !hit.saved && hit.buffer) {
+        try {
+          hit.saved = saveFileToDownloadDir(hit.buffer, hit.name);
+          hit.name = hit.saved.name;
+          fileByteCache.set(cacheKey, { ...hit, at: Date.now() });
+        } catch (error) {
+          hit.error = hit.error ?? `另存失败：${error?.message ?? error}`;
+        }
+      }
+      return hit;
+    }
+    const displayName = name || media.name || fileNameFromUrl(media.url) || (media.fileId ? `qq-file-${media.fileId}` : 'qq-file');
+    const entry = {
+      name: displayName,
+      bytes: Number(media.size) > 0 ? Number(media.size) : 0,
+      mime: '',
+      buffer: null,
+      saved: null,
+      error: null,
+      via: '',
+      cached: false
+    };
+    // 已经有同名同大小的落盘文件时直接复用（读盘比重新下载便宜，也不会产生 -2/-3 副本）。
+    // 大文件尤其重要：files.maxBytes 调到 1G 后，重复下载 90MB 群文件会又慢又费内存。
+    const existing = wantSave ? findSavedDownload(downloadDirAbs(), displayName, entry.bytes) : null;
+    if (existing) {
+      entry.saved = existing;
+      entry.name = existing.name;
+      entry.bytes = existing.bytes;
+      entry.via = 'existing-download';
+      if (needBytes) {
+        try { entry.buffer = fs.readFileSync(existing.path); } catch { entry.buffer = null; }
+      }
+      fileByteCache.set(cacheKey, { ...entry, at: Date.now() });
+      trimFileByteCache();
+      return entry;
+    }
+    if (Number(media.size) > limit) {
+      entry.error = `文件超过上限（${formatBytes(Number(media.size))} > ${formatBytes(limit)}）`;
+      fileByteCache.set(cacheKey, { ...entry, at: Date.now() });
+      trimFileByteCache();
+      return entry;
+    }
+    if (needBytes) {
+      try {
+        const got = await fetchQQFileBytes(media, key, { maxBytes: limit });
+        entry.buffer = got.buffer;
+        entry.mime = got.mime;
+        entry.via = got.via;
+        entry.bytes = got.buffer.length;
+      } catch (error) {
+        entry.error = String(error?.message ?? error);
+        fileByteCache.set(cacheKey, { ...entry, at: Date.now() });
+        trimFileByteCache();
+        return entry;
+      }
+    }
+    if (wantSave && entry.buffer) {
+      try {
+        entry.saved = saveFileToDownloadDir(entry.buffer, entry.name);
+        entry.name = entry.saved.name;
+      } catch (error) {
+        entry.error = `另存失败：${error?.message ?? error}`;
+      }
+    }
+    fileByteCache.set(cacheKey, { ...entry, at: Date.now() });
+    trimFileByteCache();
+    return entry;
+  }
+
+  /**
+   * 上传白名单根目录：默认「会话工作区 + files.dir」，配置 files.uploadRoots 可追加。
+   * 上传是出站能力，白名单比下载更严格——只有这些目录里的真实文件可以发给 QQ。
+   */
+  function uploadRootsAbs() {
+    const roots = [
+      cfg.sessionCwd ? path.resolve(String(cfg.sessionCwd)) : path.join(STATE_DIR, 'agents'),
+      resolveDownloadDir(cfg.files?.dir, ROOT)
+    ];
+    const extra = Array.isArray(cfg.files?.uploadRoots) ? cfg.files.uploadRoots : [];
+    for (const entry of extra) {
+      const resolved = resolveDownloadDir(entry, ROOT);
+      if (resolved) roots.push(resolved);
+    }
+    return [...new Set(roots)];
+  }
+
+  /**
+   * 把本地文件上传到 QQ：群聊走 upload_group_file（进群文件），私聊走 upload_private_file。
+   * 路径必须落在 uploadRootsAbs() 内（realpath 校验，防穿越/软链逃逸），大小受 files.maxBytes 约束。
+   * 群文件上传后会尝试用群文件列表按「名字+大小」确认落地；私聊只能以网关返回的 file_id 为准。
+   */
+  async function uploadLocalFileToQQ(key, rawPath, { name = '' } = {}) {
+    const target = parseTargetKey(key);
+    if (!target) { const error = new Error('key 格式应为 group:群号 或 private:QQ号'); error.client = true; throw error; }
+    const limit = Number(cfg.files?.maxBytes) > 0 ? Number(cfg.files.maxBytes) : DEFAULT_MAX_FILE_BYTES;
+    let picked;
+    try {
+      picked = resolveUploadPath(rawPath, {
+        roots: uploadRootsAbs(),
+        cwd: cfg.sessionCwd ? String(cfg.sessionCwd) : process.cwd()
+      });
+    } catch (error) {
+      error.client = true; // 路径/白名单问题 → 400，不是网关故障
+      throw error;
+    }
+    if (picked.size > limit) {
+      const error = new Error(`文件超过上限（${formatBytes(picked.size)} > ${formatBytes(limit)}）`);
+      error.client = true;
+      throw error;
+    }
+    const displayName = sanitizeQQFileName(name || picked.name);
+    const action = target.kind === 'group' ? 'upload_group_file' : 'upload_private_file';
+    const params = target.kind === 'group'
+      ? { group_id: Number(target.id), file: picked.path, name: displayName }
+      : { user_id: Number(target.id), file: picked.path, name: displayName };
+    // 上传可能传很久：单次请求预算给到 5 分钟（SDK 默认 30s 不够）。
+    const raw = await bot.request(action, params, { timeoutMs: 300000 });
+    if (raw?.status && raw.status !== 'ok') throw new Error(`网关拒绝 ${action}：${raw.wording || raw.retcode}`);
+    if (Number(raw?.retcode ?? 0) !== 0) throw new Error(`网关拒绝 ${action}：${raw.wording || raw.retcode}`);
+    const data = raw?.data ?? raw ?? {};
+    const fileId = data?.file_id ? String(data.file_id) : null;
+    let verified = null;
+    if (target.kind === 'group') {
+      try {
+        const { files } = await listGroupFiles(Number(target.id), { recursive: true, maxFolders: 20 });
+        verified = !!pickGroupFileFromList(files, { name: displayName, size: picked.size });
+      } catch {
+        verified = null; // 列表查不到不影响「已上传」这个事实，只表示未能验证
+      }
+    }
+    return { key: `${target.kind}:${target.id}`, name: displayName, size: picked.size, fileId, verified };
+  }
+
+  async function resolveMediaList(mediaList, { sessionId = null, key = null, fileParts = true } = {}) {
     const parts = [];
     let index = 0;
     let totalBytes = 0;
+    let inlineCharsUsed = 0; // 本条消息已内联的文本字符数（受 files.maxInlineTotalChars 约束）
     for (const media of Array.isArray(mediaList) ? mediaList : []) {
       index += 1;
       if (index > MAX_MEDIA_COUNT) {
@@ -8450,6 +9093,63 @@ async function main() {
         continue;
       }
       if (!media || typeof media !== 'object') continue;
+      if (media.kind === 'file') {
+        if (fileConfig().enabled === false) {
+          parts.push({ type: 'text', text: `${describeFileMedia(media, formatBytes)}（文件处理已关闭：config.files.enabled=false）` });
+          continue;
+        }
+        // 文件：上传附件（模型只会拿到一段带路径的 handle 文本，见 files 配置处的长注释），
+        // 文本文件的正文则由下面这段内联进 prompt —— 那才是模型真正能读到的内容。
+        const info = await ensureQQFile(media, key, { needBytes: true });
+        const label = describeFileMedia({ name: info.name, size: info.bytes }, formatBytes);
+        const savedNote = info.saved ? `（已保存到下载目录：${info.saved.name}）` : '';
+        parts.push({ type: 'text', text: `${label}${savedNote}` });
+        if (info.error) {
+          parts.push({ type: 'text', text: `（文件获取失败：${info.error}）` });
+          continue;
+        }
+        let attached = false;
+        if (fileParts && fileConfig().intoContext !== false && sessionId && info.buffer) {
+          try {
+            const uploaded = await api.uploadFile(sessionId, info.buffer, info.name);
+            parts.push({ type: 'file', receiptId: uploaded.receiptId });
+            attached = true;
+          } catch (error) {
+            log(`文件附件上传失败 ${sessionId} ${info.name}: ${error?.message ?? error}`);
+          }
+        }
+        const inlineMode = fileConfig().inlineText === false ? 'off' : String(fileConfig().inlineMode ?? 'always');
+        const wantInline = inlineMode === 'always' || (inlineMode === 'fallback' && !attached);
+        if (wantInline && info.buffer && isTextLikeFileName(info.name)) {
+          const perFile = Number(fileConfig().maxInlineChars) || DEFAULT_MAX_INLINE_CHARS;
+          const totalBudget = Number(fileConfig().maxInlineTotalChars) > 0
+            ? Number(fileConfig().maxInlineTotalChars)
+            : DEFAULT_MAX_INLINE_TOTAL_CHARS;
+          const budget = Math.max(0, Math.min(perFile, totalBudget - inlineCharsUsed));
+          if (budget <= 0) {
+            parts.push({ type: 'text', text: `（${info.name} 未内联：本条消息的文本内联额度 ${totalBudget} 字已用完）` });
+            continue;
+          }
+          const decoded = decodeTextFile(info.buffer, { maxChars: budget });
+          if (decoded.text) {
+            inlineCharsUsed += decoded.chars;
+            parts.push({
+              type: 'text',
+              text: `【文件内容：${info.name}${decoded.truncated ? `，已截断到 ${decoded.chars} 字` : ''}】\n${decoded.text}`
+            });
+          } else {
+            parts.push({ type: 'text', text: `（${info.name} 看似文本文件但内容不是可解码文本，未内联）` });
+          }
+        } else if (!isTextLikeFileName(info.name)) {
+          // 二进制文件：没有任何一路能把内容送进上下文（附件只给路径，而你没有文件工具），
+          // 必须明说，否则模型很容易顺着"文件已提供"编造内容。
+          parts.push({
+            type: 'text',
+            text: `（${info.name} 是二进制/非文本文件，内容未进入上下文${attached ? '，只上传了一份只读副本' : ''}；你没有本地文件工具，无法读取它——需要内容请说明并让管理员处理）`
+          });
+        }
+        continue;
+      }
       if (media.kind === 'face') {
         const face = await fetchFaceMedia(media);
         const prep = face.buffer ? await toModelMedia(face.buffer, face.mimeType, `表情#${media.faceId ?? index}`) : null;
@@ -8493,6 +9193,34 @@ async function main() {
     return parts;
   }
 
+  function contentHasFileParts(content) {
+    return Array.isArray(content) && content.some((part) => part?.type === 'file');
+  }
+
+  /**
+   * DSH 因附件/模型能力拒绝一条带 `{type:'file'}` 的 prompt 时，去掉 file 段、改用内联文本重投一次。
+   *
+   * 为什么需要：上传成功 ≠ 这条 prompt 一定被接受。DSH 在 prompt 受理阶段会校验附件
+   * （receipt 是否属于本会话、模型是否支持该模态等），失败时整条 prompt 被拒。
+   * 若不重试，用户看到的是「消息未被接受」而文件内容也永远进不了上下文；
+   * 重试一次的成本很低，且只在错误信息明确指向附件/文件/模型不支持时才做。
+   * @returns {Promise<object>} 重试后的响应；不满足条件或重试本身失败时返回原响应。
+   */
+  async function promptWithoutFilePartsIfRejected(key, sessionId, promptText, mediaList, content, accepted) {
+    if (!contentHasFileParts(content)) return accepted;
+    const errText = `${accepted?.result?.error?.code ?? ''}: ${accepted?.result?.error?.message ?? ''}`;
+    if (!/attachment|file|unsupported|not.?support|MODEL_DOES_NOT_SUPPORT/i.test(errText)) return accepted;
+    try {
+      log(`⚠️ DSH 拒绝文件附件，改用内联文本重投一次 ${key}: ${errText}`);
+      const fallbackParts = await resolveMediaList(mediaList, { sessionId, key, fileParts: false });
+      const fallbackContent = [{ type: 'text', text: withSlangContext(promptText) }, ...fallbackParts];
+      return await api.sessions.prompt({ sessionId, mode: 'queue', content: fallbackContent });
+    } catch (error) {
+      log(`文件附件降级重投失败 ${key}: ${error?.message ?? error}`);
+      return accepted;
+    }
+  }
+
   async function fetchMediaData(mediaList) {
     const out = [];
     let index = 0;
@@ -8504,6 +9232,11 @@ async function main() {
         continue;
       }
       if (!media || typeof media !== 'object') continue;
+      if (media.kind === 'file') {
+        // 图片工具不处理文件：明确回报而不是拿 file_id 去当图片抓（那只会浪费一次失败请求）。
+        out.push({ index, kind: 'file', name: media.name ? String(media.name) : undefined, text: '（文件请用 qq_download_file 下载到下载目录）' });
+        continue;
+      }
       if (media.kind === 'face') {
         const face = await fetchFaceMedia(media);
         const prep = face.buffer ? await toModelMedia(face.buffer, face.mimeType, `表情#${media.faceId ?? index}`) : null;
@@ -8564,10 +9297,35 @@ async function main() {
 
   function mediaHintFor(key, messageRef, mediaList) {
     if (!Array.isArray(mediaList) || mediaList.length === 0 || !messageRef) return '';
-    if (currentMode === 'reserved2') {
-      return `\n【图片/表情】本条消息包含 ${mediaList.length} 个图片/表情（消息ID=${messageRef}）。如需要查看/识别，请调用 mcp__snowluma__qq_get_message_images，参数 key="${key}", messageId="${messageRef}"。`;
+    const images = mediaList.filter((m) => m?.kind !== 'file');
+    const files = mediaList.filter((m) => m?.kind === 'file');
+    const parts = [];
+    if (images.length) {
+      parts.push(currentMode === 'reserved2'
+        ? `\n【图片/表情】本条消息包含 ${images.length} 个图片/表情（消息ID=${messageRef}）。如需要查看/识别，请调用 mcp__snowluma__qq_get_message_images，参数 key="${key}", messageId="${messageRef}"。`
+        : `\n【图片/表情】本条消息包含 ${images.length} 个图片/表情（消息ID=${messageRef}）。`);
     }
-    return `\n【图片/表情】本条消息包含 ${mediaList.length} 个图片/表情（消息ID=${messageRef}）。`;
+    if (files.length) {
+      const names = files.map((f) => String(f?.name ?? '').trim() || '未命名文件').join('、');
+      if (cfg.files?.enabled === false) {
+        parts.push(`\n【文件】本条消息包含 ${files.length} 个文件（${names}，消息ID=${messageRef}）。文件处理已关闭（config.files.enabled=false），内容不会进入上下文。`);
+        return parts.join('');
+      }
+      const mode = cfg.files?.inlineText === false ? 'off' : String(cfg.files?.inlineMode ?? 'always');
+      const textFiles = files.filter((f) => isTextLikeFileName(String(f?.name ?? '')));
+      const binaryFiles = files.length - textFiles.length;
+      const bits = [];
+      if (textFiles.length && mode === 'always') bits.push('文本文件的正文已内联在下面，你可以直接读');
+      else if (textFiles.length && mode === 'fallback') bits.push('文本文件正文只在附件不可用时会内联');
+      if (binaryFiles > 0) bits.push(`${binaryFiles} 个二进制/非文本文件的内容没有进入上下文（你没有本地文件工具，读不了），不要编造其内容`);
+      const attached = cfg.files?.intoContext !== false
+        ? '文件已上传到 DSH 附件仓库（你只会拿到一条带路径的 handle 文本，路径本身你无工具可读）。'
+        : '文件未上传到 DSH（files.intoContext 关闭）。';
+      parts.push(currentMode === 'reserved2'
+        ? `\n【文件】本条消息包含 ${files.length} 个文件（${names}，消息ID=${messageRef}）。${attached}${bits.join('；')}。如需把文件保存到本机下载目录，请调用 mcp__snowluma__qq_download_file，参数 key="${key}", messageId="${messageRef}"。`
+        : `\n【文件】本条消息包含 ${files.length} 个文件（${names}，消息ID=${messageRef}）。${attached}${bits.join('；')}。`);
+    }
+    return parts.join('');
   }
 
   function findMessageMedia(key, ref) {
@@ -9920,7 +10678,7 @@ async function main() {
     }
     let content = [{ type: 'text', text: withSlangContext(promptText, key) }];
     if (Array.isArray(opts.media) && opts.media.length > 0) {
-      const imageParts = await resolveMediaList(opts.media);
+      const imageParts = await resolveMediaList(opts.media, { sessionId, key });
       content = [{ type: 'text', text: withSlangContext(promptText, key) }, ...imageParts];
     }
     // 媒体解析成功后再标记退场，避免解析异常时残留退场标记。
@@ -9932,6 +10690,10 @@ async function main() {
     } catch (error) {
       if (opts.farewell) social.exitingSessions.delete(sessionId);
       throw error;
+    }
+    // 附件被 DSH 拒绝时降级重投一次（去掉 file 段、文本内联），避免整条消息被拒。
+    if (!accepted.result.ok && Array.isArray(opts.media) && opts.media.length > 0) {
+      accepted = await promptWithoutFilePartsIfRejected(key, sessionId, promptText, opts.media, content, accepted);
     }
     if (!accepted.result.ok) {
       if (opts.farewell) social.exitingSessions.delete(sessionId);
@@ -10679,7 +11441,19 @@ async function main() {
     // 必然失败的 get_image、且 emoji_id 推出的 CDN 兜底整条失效（见 extractMediaFromSegments
     // 与「部分表情 20 秒超时」的根因）；丢了 summary，模型只看到「[图片1]」而不是「[表情:给你糖吃]」；
     // kind 被拍平还会让 mface（市场表情）被当成普通图片。
+    // 文件段单独保留定位字段：qq_download_file / qq_download_group_file 依赖这份表找回
+    // fileId/busid；把 kind 拍平成 image 会让文件段被过滤掉，工具就永远找不到。
     const safeMedia = Array.isArray(media) ? media.map((m) => {
+      if (m?.kind === 'file') {
+        const item = { kind: 'file' };
+        if (m.fileId) item.fileId = String(m.fileId);
+        if (m.busid) item.busid = String(m.busid);
+        if (m.name) item.name = String(m.name);
+        if (Number(m.size) > 0) item.size = Number(m.size);
+        if (m.file) item.file = String(m.file);
+        if (m.url) item.url = String(m.url);
+        return item;
+      }
       const kind = m?.kind === 'face' ? 'face' : (m?.kind === 'sticker' ? 'sticker' : 'image');
       const item = { kind };
       if (m?.file) item.file = String(m.file);
@@ -10689,7 +11463,10 @@ async function main() {
       if (m?.summary) item.summary = sanitizeMediaSummary(m.summary);
       if (m?.subType) item.subType = String(m.subType);
       return item;
-    }).filter((m) => (m.kind === 'face' ? !!m.faceId : !!(m.file || m.url || m.emojiId))) : [];
+    }).filter((m) => {
+      if (m.kind === 'file') return !!(m.fileId || m.file || m.url);
+      return m.kind === 'face' ? !!m.faceId : !!(m.file || m.url || m.emojiId);
+    }) : [];
     const safeForwardIds = (Array.isArray(forwardIds) ? forwardIds : []).map(sanitizeForwardId).filter(Boolean);
     if (safeForwardIds.length) {
       let set = seenForwardIds.get(key);
@@ -11488,6 +12265,9 @@ async function main() {
     return ['private', 'atMention', 'nameMention', 'poke'].includes(String(reason ?? '').split(':')[0]);
   }
 
+  // 被点名（私聊/@/叫名字/拍一拍/提问）时的合并窗口上限：再长就影响「秒回」体感了。
+  const QUICK_WAKE_WINDOW_MS = 2000;
+
   function isTimerWakeReason(reason) {
     return TIMER_WAKE_REASONS.has(String(reason ?? '').split(':')[0]);
   }
@@ -11526,7 +12306,15 @@ async function main() {
       st.sleepTimer = null;
     }
     st.pendingWakeReason = reason;
-    const batchMs = boundedTimerDelay(Number(st.wakeConfig?.batchWindowMs) || 8000, 8000, 1000, 3600000);
+    // 合并窗口的取舍：
+    //   · 默认等满 batchWindowMs（默认 8s），把「一句发成三条」的消息合起来再叫醒模型；
+    //   · 但**被点名的唤醒**（私聊/@/叫名字/拍一拍/提问）等 8 秒纯属浪费——对方已经在
+    //     等回话了。这类原因最多等 QUICK_WAKE_WINDOW_MS（取配置值与 2s 的较小值），
+    //     批量合并的收益远小于「秒回」的体感。
+    const configuredBatchMs = boundedTimerDelay(Number(st.wakeConfig?.batchWindowMs) || 8000, 8000, 1000, 3600000);
+    const wakeBase = String(reason ?? '').split(':')[0];
+    const quickWake = isDirectedWakeReason(reason) || wakeBase === 'question';
+    const batchMs = quickWake ? Math.min(configuredBatchMs, QUICK_WAKE_WINDOW_MS) : configuredBatchMs;
     st.pendingWakeTimer = setTimeout(() => {
       st.pendingWakeTimer = null;
       const finalReason = st.pendingWakeReason || reason;
@@ -11750,6 +12538,18 @@ async function main() {
         const oldestKey = mediaByRef.keys().next().value;
         if (oldestKey === undefined) break;
         mediaByRef.delete(oldestKey);
+      }
+    }
+    // QQ 文件：收到就异步另存到下载目录（不阻塞消息处理；失败只记日志）。
+    // 与投递时的附件上传共用 ensureQQFile 缓存，因此这里抓过的字节不会抓第二次。
+    if (cfg.files?.enabled !== false && cfg.files?.download !== false) {
+      for (const fileMedia of mediaList.filter((m) => m?.kind === 'file')) {
+        ensureQQFile(fileMedia, key)
+          .then((info) => {
+            if (info?.error) log(`文件自动下载失败 ${key} ${info.name}: ${info.error}`);
+            else if (info?.saved) log(`文件已保存到下载目录 ${key} ${info.saved.path}（${formatBytes(info.saved.bytes)}）`);
+          })
+          .catch((error) => log(`文件自动下载异常 ${key}: ${error?.message ?? error}`));
       }
     }
     // 引用对象是机器人自己时，视为直接对 AI 说（即使当前文字没有 @/关键词）。

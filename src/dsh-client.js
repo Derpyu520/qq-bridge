@@ -660,6 +660,59 @@ export class NodeApiClient extends AbstractApiClient {
     return response.json();
   }
 
+  /**
+   * 把一个文件上传到某个会话的附件区，拿到 staged receipt
+   * （`session/prompt` 的 `{ type:'file', receiptId }` 段需要的正是它）。
+   *
+   * 协议（DSH 0.2.0 的 file-upload 客户端路由）：`POST /api/session/uploadFileBinary?sessionId=…&name=…`，
+   * 原始字节作为 body（`content-type: application/octet-stream`），响应
+   * `{ ok:true, value:{ receiptId, file:{ attachmentId, name, bytes } } }`。必须带会话 Cookie——
+   * 直接用 doFetch 复用统一鉴权与 401 重试；body 是 Buffer，重试时可重复发送。
+   *
+   * 端点不存在（更老的 DSH / 没装 file-upload 客户端）时抛 `unsupported=true` 的错误，
+   * 让调用方回退到「文本内联」而不是让整条消息投递失败。
+   *
+   * @param {string} sessionId - 目标会话（receipt 只在该会话的 agent 作用域内有效）。
+   * @param {Buffer|Uint8Array} data - 文件字节。
+   * @param {string} [name] - 展示用文件名（DSH 侧会净化）。
+   * @param {AbortSignal} [signal] - 取消信号。
+   * @returns {Promise<{receiptId:string, file:{attachmentId:string,name:string,bytes:number}}>}
+   */
+  async uploadFile(sessionId, data, name, signal) {
+    if (!sessionId) throw new Error('uploadFile: sessionId is required');
+    const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data ?? []);
+    await this.ensureAuth(signal);
+    const query = new URLSearchParams({ sessionId: String(sessionId) });
+    if (name) query.set('name', String(name));
+    const response = await this.doFetch(`${this.baseUrl}/api/session/uploadFileBinary?${query.toString()}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: buffer,
+      ...(signal ? { signal } : {})
+    });
+    if (response.status === 404) {
+      await response.body?.cancel();
+      const error = new Error('DSH 不支持文件上传（没有 /api/session/uploadFileBinary 端点）');
+      error.unsupported = true;
+      throw error;
+    }
+    const text = await response.text();
+    let payload = null;
+    try { payload = JSON.parse(text); } catch {}
+    if (response.status !== 200 || !payload || typeof payload.ok !== 'boolean') {
+      throw new Error(`DSH 文件上传失败：HTTP ${response.status}${text ? ` ${text.slice(0, 200)}` : ''}`);
+    }
+    if (!payload.ok) {
+      const err = payload.error ?? {};
+      throw new Error(`DSH 文件上传被拒绝：${err.code ?? 'unknown'}: ${err.message ?? ''}`);
+    }
+    const value = payload.value ?? {};
+    if (typeof value.receiptId !== 'string' || !value.receiptId) {
+      throw new Error('DSH 文件上传返回缺少 receiptId');
+    }
+    return value;
+  }
+
   /** 新版 DSH 的 agentPresets 命名空间是复数；旧版基类仍映射到 agentPreset.list。 */
   agentPresets = {
     list: (payload, signal) => this.callUnary('agentPresets.list', payload, signal),

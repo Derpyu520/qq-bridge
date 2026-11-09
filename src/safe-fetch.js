@@ -213,7 +213,7 @@ function validateLimit(value, name) {
  * 返回 `{ok:true,result}` 或 `{ok:false,error,retryable}`；retryable 只标记网络层失败
  * （连接失败/超时/正文中断），大小与图片签名等策略性拒绝不重试。
  */
-function attemptOnce(url, address, limit, binary, budgetMs) {
+function attemptOnce(url, address, limit, binary, budgetMs, accept = null) {
   return new Promise((resolve) => {
     let settled = false;
     let req;
@@ -243,7 +243,7 @@ function attemptOnce(url, address, limit, binary, budgetMs) {
         headers: {
           host: url.host,
           'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36',
-          accept: binary ? 'image/*,*/*;q=0.8' : 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          accept: accept ?? (binary ? 'image/*,*/*;q=0.8' : 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'),
           'accept-language': 'zh-CN,zh;q=0.9',
         },
         servername: url.protocol === 'https:' && !net.isIP(hostname) ? hostname : undefined,
@@ -320,7 +320,7 @@ function attemptOnce(url, address, limit, binary, budgetMs) {
  * 而「第一个地址是坏的 IPv6」不会再白等 20 秒。
  * 所有地址都失败时抛最后一个错误（保留原始错误文案，便于日志排查）。
  */
-async function requestOnce(url, addresses, limit, binary = false) {
+async function requestOnce(url, addresses, limit, binary = false, accept = null) {
   const list = (Array.isArray(addresses) ? addresses : [addresses]).filter(Boolean);
   if (!list.length) throw new Error(`没有可用地址：${url.hostname}`);
   const deadline = Date.now() + REQUEST_TIMEOUT_MS;
@@ -332,7 +332,7 @@ async function requestOnce(url, addresses, limit, binary = false) {
     const budget = list.length === 1
       ? REQUEST_TIMEOUT_MS
       : Math.min(ATTEMPT_TIMEOUT_MS, remaining);
-    const outcome = await attemptOnce(url, list[i], limit, binary, budget);
+    const outcome = await attemptOnce(url, list[i], limit, binary, budget, accept);
     if (outcome.ok) return outcome.result;
     lastError = outcome.error;
     if (!outcome.retryable) throw outcome.error;
@@ -380,13 +380,20 @@ export function looksLikeImageBuffer(buf) {
   return false;
 }
 
-/** 抓取图片字节并返回 Buffer（带 SSRF 防护，且校验确实为图片）。 */
-export async function safeFetchBuffer(urlString, maxBytes = 8 * 1024 * 1024, opts = {}) {
+/**
+ * 带 SSRF 防护的字节抓取内核（图片与任意文件共用同一套校验/重定向/大小限制/地址轮换）。
+ * @param {string} urlString - 目标 URL。
+ * @param {number} maxBytes - 字节上限。
+ * @param {{imageOnly:boolean, opts?:object}} options - 是否只接受图片签名。
+ * @returns {Promise<{url:string,statusCode:number,buffer:Buffer}>}
+ */
+async function fetchBufferChecked(urlString, maxBytes, { imageOnly, opts = {} }) {
   validateLimit(maxBytes, 'maxBytes');
   const MAX_REDIRECTS = 5;
   let { url, addresses } = await validateFetchUrl(urlString, opts);
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
-    const result = await requestOnce(url, addresses, maxBytes, true);
+    // 任意文件用 */*：QQ 群文件可能是 html/zip/pdf，按 image/* 协商会被 CDN 拦或改写。
+    const result = await requestOnce(url, addresses, maxBytes, true, imageOnly ? null : '*/*');
     if ([301, 302, 303, 307, 308].includes(result.statusCode)) {
       if (!result.redirect) throw new Error(`重定向缺少 Location: ${result.statusCode}`);
       const next = new URL(result.redirect, url).toString();
@@ -394,12 +401,31 @@ export async function safeFetchBuffer(urlString, maxBytes = 8 * 1024 * 1024, opt
       continue;
     }
     if (result.statusCode < 200 || result.statusCode >= 300) {
-      throw new Error(`图片抓取失败：HTTP ${result.statusCode}`);
+      throw new Error(`${imageOnly ? '图片抓取失败' : '抓取失败'}：HTTP ${result.statusCode}`);
     }
-    if (!looksLikeImageBuffer(result.buffer)) {
+    if (imageOnly && !looksLikeImageBuffer(result.buffer)) {
       throw new Error(`抓取内容不是有效图片（PNG/JPEG/GIF/WebP）`);
     }
     return { url: url.toString(), statusCode: result.statusCode, buffer: result.buffer };
   }
   throw new Error('重定向次数过多，已停止');
+}
+
+/** 抓取图片字节并返回 Buffer（带 SSRF 防护，且校验确实为图片）。 */
+export async function safeFetchBuffer(urlString, maxBytes = 8 * 1024 * 1024, opts = {}) {
+  return fetchBufferChecked(urlString, maxBytes, { imageOnly: true, opts });
+}
+
+/**
+ * 抓取**任意文件**字节（QQ 群文件/离线文件用）。
+ *
+ * 与 safeFetchBuffer 共享全部网络侧防护（DNS 固定、逐跳 URL 校验、多地址轮换、大小上限、
+ * 总超时），唯一区别是**不校验图片签名**——群文件可能是 html/zip/pdf/docx 等。
+ * 调用方必须自己决定落盘边界（这里只负责"把字节安全地拿回来"）。
+ * @param {string} urlString - 目标 URL。
+ * @param {number} maxBytes - 字节上限（默认 20 MB，与 files.maxBytes 默认一致）。
+ * @returns {Promise<{url:string,statusCode:number,buffer:Buffer}>}
+ */
+export async function safeFetchBytes(urlString, maxBytes = 20 * 1024 * 1024, opts = {}) {
+  return fetchBufferChecked(urlString, maxBytes, { imageOnly: false, opts });
 }

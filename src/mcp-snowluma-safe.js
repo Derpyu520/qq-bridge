@@ -2,7 +2,10 @@
 //
 // 安全设计：
 // - 只暴露聊天所需的**安全动作子集**（查状态/查群/查消息/发消息），
-//   不暴露任何管理类动作（禁言、踢人、改群设置、文件上传下载等）。
+//   不暴露任何管理类动作（禁言、踢人、改群设置、任意文件上传下载等）。
+// - 唯一的文件例外是 qq_download_file：它只能把**本会话确实收到过**的 QQ 文件
+//   落盘到 config.files.dir（默认 state/downloads），不接受任意 URL，文件名净化、
+//   大小受限 —— 不是「任意文件下载」能力。
 // - 发送类工具强制校验白名单：目标群/私聊必须命中 config.json 的
 //   allow.groups / allow.private，否则拒绝 —— agent 只能往被允许的地方发消息。
 // - 所有调用走 OneBot HTTP API（httpUrl + accessToken）。
@@ -381,6 +384,10 @@ const TOOL_CONFIG_FLAGS = {
   qq_get_self_image: 'getSelfImage',
   qq_sticker_note: 'stickerNote',
   qq_set_sticker_remark: 'setStickerRemark',
+  qq_download_file: 'downloadFile',
+  qq_download_group_file: 'downloadFile',
+  qq_list_group_files: 'listGroupFiles',
+  qq_upload_file: 'uploadFile',
 };
 const disabledTools = [];
 // 别名必须同时出现在 schema 与规范化入口中，否则 Zod 会先把它丢弃。
@@ -1450,6 +1457,115 @@ if (cfg.socialV2?.sticker?.enabled !== false && cfg.socialV2?.tools?.setStickerR
         return { content: [{ type: 'text', text: serializeModelData(data) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `修改表情备注失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+}
+
+// ── QQ 文件下载工具（二代仿真模式 / 管理端私聊） ────────────────────────────
+if (cfg.socialV2?.tools?.downloadFile !== false) {
+  server.tool(
+    'qq_download_file',
+    '把当前会话里收到的 QQ 文件保存到本机下载目录（config.json 的 files.dir，默认 qq-bridge/state/downloads）。当消息文本含 [文件 xxx] 或消息的 media 里出现 kind="file" 时调用；messageId 用 qq_get_unread_messages / qq_get_recent_messages / qq_get_message_detail 返回的 messageId 或 seq。只能下载本会话确实收到过的文件，不能传任意 URL；文件名会被净化、重名自动加后缀。返回保存后的文件名/大小/路径；获取失败或该消息没有文件时如实说明，不要编造文件内容。',
+    {
+      key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+      token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+      messageId: z.string().describe('文件所在消息的 messageId 或 seq（来自 qq_get_unread_messages / qq_get_recent_messages / qq_get_message_detail）'),
+      name: z.string().optional().describe('可选：保存时使用的文件名（仅在一条消息只有一个文件时生效；会被净化）')
+    },
+    async ({ key, token, messageId, name }) => {
+      try {
+        const q = new URLSearchParams({ key, messageId: String(messageId) });
+        if (name) q.set('name', String(name));
+        const data = await agentApi(`/api/socialV2/download-file?${q.toString()}`, {
+          headers: { 'x-agent-token': token },
+          timeoutMs: 180000
+        });
+        return { content: [{ type: 'text', text: serializeModelData(data) }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `下载文件失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+}
+
+// ── 群文件列表 / 按群文件 id 下载 ────────────────────────────────────────────
+// 聊天消息里的 file_id 与群文件里的 file_id 是两套：群里发过的旧文件用消息 id 查不到，
+// 但群文件里还在。先 list 再 download，模型就不用等别人重发。
+if (cfg.socialV2?.tools?.listGroupFiles !== false) {
+  server.tool(
+    'qq_list_group_files',
+    '列出指定 QQ 群的群文件（只读）：文件名、大小、fileId、busid、上传者、上传时间、下载次数、所在目录。群文件里的 fileId 与聊天消息里的 fileId 是两套 id，要下载群文件请把这里返回的 fileId 传给 qq_download_group_file。默认递归子目录（最多 50 个目录）；传 recursive=false 只看根目录。群文件为空时返回空列表，不要编造。',
+    {
+      key: z.string().describe('会话 key，格式 group:群号'),
+      token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+      recursive: z.boolean().optional().describe('是否递归子目录，默认 true')
+    },
+    async ({ key, token, recursive }) => {
+      try {
+        const q = new URLSearchParams({ key: String(key) });
+        if (recursive === false) q.set('recursive', '0');
+        const data = await agentApi(`/api/socialV2/group-files?${q.toString()}`, {
+          headers: { 'x-agent-token': token },
+          timeoutMs: 120000
+        });
+        return { content: [{ type: 'text', text: serializeModelData(data) }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `获取群文件列表失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+}
+
+if (cfg.socialV2?.tools?.downloadFile !== false) {
+  server.tool(
+    'qq_download_group_file',
+    '把群文件保存到本机下载目录（config.json 的 files.dir）。fileId 必须来自 qq_list_group_files 返回的 fileId（形如 /0a5b…），不要自己编；也可以只传 name 按文件名精确匹配。下载后返回文件名/大小/路径，可以用 read 工具打开分析。只能下载本群文件列表里存在的文件，不接受 URL；文件名会被净化、重名自动加后缀。',
+    {
+      key: z.string().describe('会话 key，格式 group:群号'),
+      token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+      fileId: z.string().optional().describe('群文件 id（来自 qq_list_group_files 的 fileId，形如 /0a5b…）'),
+      name: z.string().optional().describe('可选：按文件名精确匹配（与 fileId 至少给一个）；也是保存时的文件名')
+    },
+    async ({ key, token, fileId, name }) => {
+      try {
+        const q = new URLSearchParams({ key: String(key) });
+        if (fileId) q.set('fileId', String(fileId));
+        if (name) q.set('name', String(name));
+        const data = await agentApi(`/api/socialV2/download-group-file?${q.toString()}`, {
+          headers: { 'x-agent-token': token },
+          timeoutMs: 300000
+        });
+        return { content: [{ type: 'text', text: serializeModelData(data) }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `下载群文件失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+}
+
+// ── 本地文件 → QQ（上传） ───────────────────────────────────────────────────
+if (cfg.socialV2?.tools?.uploadFile !== false) {
+  server.tool(
+    'qq_upload_file',
+    '【仅封闭 agent（owner 私聊）或带工具的工作区预设（qq-chat-tools）可用；纯聊天预设（qq-chat / qq-chat-v2）只能发图片与表情】把本机文件上传到 QQ：群聊会上传到群文件，私聊会发文件消息。path 只允许会话工作区（config.sessionCwd）与下载目录（files.dir）内的文件——桥接会做 realpath 白名单校验，传工作区外的路径会被拒绝；大小受 files.maxBytes 限制。name 可指定 QQ 上显示的文件名。上传大文件可能较慢（最长 5 分钟）；群文件上传后返回 verified 表示是否在群文件列表里看到它，私聊以网关返回的 file_id 为准。失败会返回具体原因；群文件权限不足时提示需要管理员。',
+    {
+      key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+      token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+      path: z.string().describe('要上传的本地文件路径（必须在会话工作区或下载目录内；支持 ~ 与相对路径）'),
+      name: z.string().optional().describe('可选：QQ 上显示的文件名（会被净化）')
+    },
+    async ({ key, token, path, name }) => {
+      try {
+        const data = await agentApi('/api/socialV2/upload-file', {
+          method: 'POST',
+          body: JSON.stringify({ key, path, name: name || undefined }),
+          headers: { 'x-agent-token': token },
+          timeoutMs: 300000
+        });
+        return { content: [{ type: 'text', text: serializeModelData(data) }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `上传文件失败：${error?.message ?? error}` }], isError: true };
       }
     }
   );

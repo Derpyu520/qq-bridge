@@ -231,6 +231,16 @@ const SAFE_EXACT = new Set([
   'todo_write',
 ])
 
+// 「本地工具」名单：默认全部拒绝；只有显式 `config.allowLocalTools: true` 的 preset
+// （目前只有 qq-chat-tools）才放行，并且只放行 preset 真正挂载的那几个。
+// 不要在这里加 subagent / workflow / plugin_manager / str_replace_editor 之类——
+// 它们能间接拿到执行面，属于本名单要挡的回归面。
+const LOCAL_TOOL_ALLOWLIST = new Set([
+  'bash', 'pwsh',
+  'read', 'read_image', 'write', 'edit',
+  'glob', 'grep',
+])
+
 // ── 诊断落盘：restrict 失败时到底为什么 ────────────────────────────────────
 //
 // 为什么必须落盘（2026-10-18 实测）：重启之后新建的 QQ 会话 schema 里，
@@ -283,7 +293,7 @@ function noteBindingDenial(exec, name) {
   } catch {}
 }
 
-export function apply(ctx) {
+export function apply(ctx, config) {
   // 1) 把已知危险全局工具从 schema 隐藏（restrict 只影响继承的全局层，
   //    不会误删 preset 自己注册的 scoped 工具）。
   // 逐个 restrict：当前 DSH 版本不存在的工具名会单独抛错并跳过，
@@ -294,6 +304,20 @@ export function apply(ctx) {
   // 是**各 preset 行自己注册的 scoped 工具**，在 QQ preset 里根本没挂载，
   // 因此本名单主要防的是"别的 composition 把它们注册进全局层"这种回归，
   // 以及 MCP 之外的宿主工具（plugin-guard / cordis 检查工具等）。
+  // config.allowLocalTools=true 时：不 restrict 掉上面这几个本地工具（否则 preset 自己
+  // 挂的 scoped 工具可能被隐藏），并在执行期白名单里放行它们；其他危险名照旧拒绝。
+  const allowLocalTools = config?.allowLocalTools === true
+  // config.denyTools：按 preset 额外屏蔽的工具（例如群聊 preset 不暴露文件上传，
+  // 只保留图片/表情发送）。名字按 DSH 的 MCP 命名空间写全，如
+  // 'mcp__snowluma__qq_upload_file'；restrict 隐藏 schema，guard 再兜一层执行期拒绝。
+  const denyTools = (Array.isArray(config?.denyTools) ? config.denyTools : [])
+    .filter((name) => typeof name === 'string' && name.length > 0)
+  const baseNames = allowLocalTools
+    ? KNOWN_DANGEROUS_GLOBAL_TOOLS.filter((name) => !LOCAL_TOOL_ALLOWLIST.has(name))
+    : KNOWN_DANGEROUS_GLOBAL_TOOLS
+  const restrictNames = [...baseNames, ...denyTools.filter((name) => !baseNames.includes(name))]
+  const denyToolSet = new Set(denyTools)
+
   const stamp = new Date().toISOString()
   const failed = []
   const attempt = (names) => {
@@ -309,7 +333,7 @@ export function apply(ctx) {
     return ok
   }
 
-  const firstOk = attempt(KNOWN_DANGEROUS_GLOBAL_TOOLS)
+  const firstOk = attempt(restrictNames)
   const firstFailed = failed.slice()
   failed.length = 0
 
@@ -317,7 +341,7 @@ export function apply(ctx) {
     // 逐个名字的报错收成一类，避免 18 行重复
     const reasons = [...new Set(firstFailed.map((f) => f.message))]
     console.error(
-      `[qq-tool-restrict] restrict 失败 ${firstFailed.length}/${KNOWN_DANGEROUS_GLOBAL_TOOLS.length}：${reasons.join(' | ')}`
+      `[qq-tool-restrict] restrict 失败 ${firstFailed.length}/${restrictNames.length}：${reasons.join(' | ')}`
     )
     writeDiagnostics([
       `${stamp} restrict ok=${firstOk} failed=${firstFailed.length} 原因: ${reasons.join(' | ')}`,
@@ -351,6 +375,8 @@ export function apply(ctx) {
     const name = exec?.name
     if (typeof name !== 'string' || name.length === 0) return '工具名无效，已拒绝'
     if (SAFE_EXACT.has(name)) return
+    if (denyToolSet.has(name)) return `工具 "${name}" 在当前模式不可用（该 preset 已屏蔽）`
+    if (allowLocalTools && LOCAL_TOOL_ALLOWLIST.has(name)) return
     if (SAFE_PREFIXES.some((prefix) => name.startsWith(prefix))) {
       // 会话绑定：凡带 key 的 QQ MCP 工具都必须是**当前会话**。未绑定会话（解不出身份）
       // 同样拒绝 —— 放行它等于给出跨会话读取的后门（见 qq-self-key.mjs 的注释）。
