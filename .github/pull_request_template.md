@@ -29,7 +29,7 @@ Audit suite: / scripts passed.
 - [ ] 新增行为带了回归脚本，**并已加进 `scripts/test-audit.mjs` 的清单**
 - [ ] 没有提交 token / Cookie / 真实 QQ 号 / 群号 / 本机绝对路径 / `state/`
 - [ ] 行为变更（配置项、工具名、端点、默认值）已同步更新 README 或 `docs/`
-- [ ] 没有绕过 [RULES.md](https://github.com/Derpyu520/qq-bridge/blob/main/RULES.md) 的设计不变量（尤其 L6 / L7）
+- [ ] 没有绕过 [RULES.md](docs/RULES.md) 的设计不变量（尤其 L6 / L7）
 
 ## 破坏性变更 / 需要使用者做什么
 

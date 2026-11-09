@@ -41,7 +41,7 @@ QQ ↔ SnowLuma ↔ qq-bridge ↔ DeepSeek Harness ↔ 模型服务
 git clone https://github.com/Derpyu520/qq-bridge.git
 cd qq-bridge
 npm install
-Copy-Item config.example.json config.json
+Copy-Item config/config.example.json config/config.json
 ```
 
 默认分支 `main` 为正式发布线；`dev` 用于开发与测试。
@@ -84,10 +84,10 @@ Windows 也可双击 `start.bat` 以守护模式运行，关闭窗口即停止�
 | 我想…… | 入口 |
 | --- | --- |
 | 安装、升级或排查连接 | [DSH 安装指南](docs/guides/DSH_SETUP.md) |
-| 了解模式、权限与管理命令 | [使用规则](RULES.md) |
+| 了解模式、权限与管理命令 | [使用规则](docs/RULES.md) |
 | 查看模型用量与费用口径 | [用量看板](docs/guides/TOKEN_USAGE_CONSOLE.md) |
-| 参与开发 | [贡献指南](CONTRIBUTING.md) · [安全基线](docs/guides/SECURITY_BASELINE.md) |
-| 报告安全漏洞 | [安全报告](SECURITY.md) |
+| 参与开发 | [贡献指南](docs/CONTRIBUTING.md) · [安全基线](docs/guides/SECURITY_BASELINE.md) |
+| 报告安全漏洞 | [安全报告](docs/SECURITY.md) |
 | 查找其他说明 | [文档索引](docs/README.md) |
 
 开发基于 `dev`，提交 PR 前运行离线回归：
@@ -98,7 +98,7 @@ npm run test:audit
 
 ## 本地扩展：QQ 文件与工具护栏
 
-> 以下是在上游基础上保留的本地功能，尚未合并进上游；配置字段都在 `config.json`，模板见 `config.example.json`。
+> 以下是在上游基础上保留的本地功能，尚未合并进上游；配置字段都在 `config.json`，模板见 `config/config.example.json`。完整的代码位置、测试与升级检查清单见 [本地扩展说明](docs/guides/LOCAL_EXTENSIONS.md)。
 
 ### QQ 文件（`files.*`）
 
@@ -129,9 +129,9 @@ npm run test:audit
 ## 使用边界与许可
 
 - 仅在知情并获准的会话中使用，遵守平台规则；使用非官方 QQ 后端可能导致账号受限。
-- 聊天内容会经 DSH 发送给所配置的模型服务；黑话自动研究默认开启，可能将提取的关键词发送给搜索服务。数据流与关闭方式见 [NOTICE](NOTICE.md#四数据传输)。
+- 聊天内容会经 DSH 发送给所配置的模型服务；黑话自动研究默认开启，可能将提取的关键词发送给搜索服务。数据流与关闭方式见 [NOTICE](docs/NOTICE.md#四数据传输)。
 - 保护 `config.json`、`state/` 与控制台令牌，保持服务仅在本机可访问。
 - DSH 离线期间的消息队列仅保存在内存中，每个会话最多 50 条；桥接进程退出后队列丢失，不保证送达。
 - 本工具不实现 QQ 登录或底层协议，不安装、打包或启停 SnowLuma 后端；当前客户端仍依赖 `@snowluma/sdk` 等包，第三方组件适用各自条款。
 
-当前代码按 [PolyForm Noncommercial 1.0.0](LICENSE) 提供，限非商业用途；`v0.2.1-r1` 及更早已发布版本沿用其发布时的 MIT 许可。第三方组件、独立关系与使用风险见 [NOTICE](NOTICE.md)。
+当前代码按 [PolyForm Noncommercial 1.0.0](LICENSE) 提供，限非商业用途；`v0.2.1-r1` 及更早已发布版本沿用其发布时的 MIT 许可。第三方组件、独立关系与使用风险见 [NOTICE](docs/NOTICE.md)。

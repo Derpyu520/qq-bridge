@@ -3,6 +3,7 @@
 // 这是"完整检查"的机器可读版本，避免只靠人工翻文件漏项。
 import fs from 'node:fs';
 import path from 'node:path';
+import { resolveConfigExamplePath, resolveConfigPath } from '../src/config-path.js';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 // 独立发语音工具在仓库上一级（不在本仓库里）：位置解析与"不在时怎么跳过"走共享口径。
 import { hasVoiceTool, skipVoiceTool, voiceToolDir, voiceToolPath } from './voice-tool-locator.mjs';
@@ -15,7 +16,10 @@ const ok = (cond, name, extra = '') => {
   if (cond) { pass += 1; console.log(`  ✅ ${name}${extra ? ' — ' + extra : ''}`); }
   else { fail += 1; console.error(`  ❌ ${name}${extra ? ' — ' + extra : ''}`); }
 };
-const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
+const read = (rel) => fs.readFileSync(
+  rel === 'config.example.json' ? resolveConfigExamplePath(ROOT)
+  : rel === 'config.json' ? resolveConfigPath(ROOT)
+  : path.join(ROOT, rel), 'utf8');
 const exists = (rel) => fs.existsSync(path.join(ROOT, rel));
 // 工具不在本仓库里时这两个返回 null —— 调用方必须先 hasVoiceTool() 守一道，
 // 免得"文件不存在"被误当成断言失败（那是跳过，不是失败）。

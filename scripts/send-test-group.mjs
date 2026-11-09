@@ -2,11 +2,12 @@
 // 用法：node scripts/send-test-group.mjs <群名关键词> [消息内容]
 import fs from 'node:fs';
 import path from 'node:path';
+import { resolveConfigPath } from '../src/config-path.js';
 import { fileURLToPath } from 'node:url';
 import { SnowLumaWebSocketClient, text } from '@snowluma/sdk';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const cfg = JSON.parse(fs.readFileSync(path.resolve(__dirname, '..', 'config.json'), 'utf8'));
+const cfg = JSON.parse(fs.readFileSync(resolveConfigPath(path.resolve(__dirname, '..')), 'utf8'));
 const { wsUrl, accessToken } = cfg.snowluma;
 
 const keyword = process.argv[2] ?? '机器人测试';

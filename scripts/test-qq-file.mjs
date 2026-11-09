@@ -6,6 +6,7 @@
 // 运行：node scripts/test-qq-file.mjs
 import fs from 'node:fs';
 import path from 'node:path';
+import { resolveConfigExamplePath } from '../src/config-path.js';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import {
@@ -202,7 +203,7 @@ console.log('## dsh-client · uploadFile');
 
 console.log('## 配置/端点/工具描述一致性');
 {
-  const example = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.example.json'), 'utf8'));
+  const example = JSON.parse(fs.readFileSync(resolveConfigExamplePath(ROOT), 'utf8'));
   ok(example.files && example.files.dir === DEFAULT_DOWNLOAD_DIR, 'config.example.json 含 files.dir');
   ok(example.files?.intoContext === true && example.files?.inlineText === true, '模板默认开启附件 + 内联');
   ok(example.files?.inlineMode === 'always', "模板 inlineMode 默认 'always'");
@@ -210,13 +211,16 @@ console.log('## 配置/端点/工具描述一致性');
   ok(example.socialV2?.tools?.downloadFile === true, '模板含 socialV2.tools.downloadFile');
 
   const bridge = fs.readFileSync(path.join(ROOT, 'src/bridge.js'), 'utf8');
+  // QQ 文件服务已拆到 src/qq-file.js：涉及抓取/缓存/群文件回退的源码断言看两份合并。
+  const qqFileSrc = fs.readFileSync(path.join(ROOT, 'src/qq-file.js'), 'utf8');
+  const all = `${bridge}\n${qqFileSrc}`;
   ok(bridge.includes('/api/socialV2/download-file'), '桥接注册了下载端点');
   ok(bridge.includes("v2ToolEnabled('downloadFile')"), '下载端点受工具开关约束');
   ok(bridge.includes('api.uploadFile('), '投递链路调用 DSH 文件上传');
   // 群文件不是图片：曾用 safeFetchBuffer（图片签名校验）抓 HTML/ZIP 全部失败。
-  ok(bridge.includes('safeFetchBytes('), '文件抓取走 safeFetchBytes（不校验图片签名）');
-  ok(bridge.includes('findGroupFileByMeta') && bridge.includes('pickGroupFileFromList('), '群文件 id 不存在时按名字+大小回退群文件列表');
-  ok(bridge.includes('findSavedDownload('), '已有同名同大小文件时复用，不重复下载');
+  ok(all.includes('safeFetchBytes('), '文件抓取走 safeFetchBytes（不校验图片签名）');
+  ok(all.includes('findGroupFileByMeta') && all.includes('pickGroupFileFromList('), '群文件 id 不存在时按名字+大小回退群文件列表');
+  ok(all.includes('findSavedDownload('), '已有同名同大小文件时复用，不重复下载');
   ok(/文件下载失败：\$\{detail\}/.test(bridge) || bridge.includes('error: `文件下载失败：${detail}`'), '下载失败把 files[].error 提升成顶层 error');
   ok(bridge.includes('文件下载失败 ${key} ${messageId}: ${detail}'), '下载失败写进桥接日志');
   ok(bridge.includes("ensureQQFile(fileMedia, key)"), '收到文件时自动另存');

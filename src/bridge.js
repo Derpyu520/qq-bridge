@@ -6,7 +6,7 @@ import { renderPatch } from '../scripts/build-agent-preset-patches.mjs';
 //   QQ 消息 → SnowLuma (OneBot v11 WS) → 本进程 → DSH Web API session.prompt
 //   DSH agent 回复/提问/审批 → events.mux 事件流 → 本进程 → send_msg → QQ
 //
-// 用法：node src/bridge.js （先编辑 ../config.json）
+// 用法：node src/bridge.js （先编辑 config/config.json，模板见 config/config.example.json）
 import fs from 'node:fs';
 import os from 'node:os';
 import http from 'node:http';
@@ -24,7 +24,7 @@ import { mdToPlain, splitForQQ, truncateText, truncateTextTail } from './md-to-p
 import { SENSITIVE_RE } from './sensitive.js';
 import { looksLikeUnfinished } from './v2-wait.js';
 import { compactModelMessage, describeAge, sanitizeUntrustedText } from './qq-model-view.js';
-import { safeFetchBuffer, safeFetchBytes, looksLikeImageBuffer } from './safe-fetch.js';
+import { safeFetchBuffer, looksLikeImageBuffer } from './safe-fetch.js';
 import { normalizeImageForModel } from './media-normalize.js';
 import { AUDIO_EXTS, cleanupTemp, describeAudio, formatBytes, formatDuration, inspectAudio, listAudioFiles, parseTargetKey, processAudioVolume, resolveAudioProcessing, resolveAudioSource, safeJoinLibrary } from './send-voice-lib.js';
 import { discoverSnowLumaConnection, persistSnowLumaEndpoint, persistToken } from './snowluma-conn.js';
@@ -35,18 +35,16 @@ import {
   DEFAULT_MAX_FILE_BYTES,
   DEFAULT_MAX_INLINE_CHARS,
   DEFAULT_MAX_INLINE_TOTAL_CHARS,
+  base64FromMaybe,
   decodeTextFile,
   describeFileMedia,
-  fileNameFromUrl,
   fileMediaFromSegment,
-  findSavedDownload,
   isTextLikeFileName,
   pickGroupFileFromList,
-  resolveDownloadDir,
-  resolveUploadPath,
-  sanitizeQQFileName,
-  uniqueDownloadPath
+  sanitizeQQFileName
 } from './qq-file-lib.js';
+import { createQQFileService } from './qq-file.js';
+import { resolveConfigExamplePath, resolveConfigPath } from './config-path.js';
 import { resolvePriceTable } from './model-prices.js';
 import { createTokenLedger } from './token-ledger.js';
 import {
@@ -80,6 +78,8 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
+// 配置目录 2026-11 起迁到 config/；resolver 兼容旧布局（根 config.json）。
+const CONFIG_FILE = resolveConfigPath(ROOT);
 const STATE_DIR = path.join(ROOT, 'state');
 const STATE_FILE = path.join(STATE_DIR, 'sessions.json');
 const ROLE_STATE_FILE = path.join(STATE_DIR, 'current-role.json');
@@ -716,7 +716,10 @@ function ignoredSender(id, cfg) {
 
 // ── 配置 ────────────────────────────────────────────────────────────────────
 function loadConfig() {
-  const p = path.join(ROOT, 'config.json');
+  const p = CONFIG_FILE;
+  if (!fs.existsSync(p)) {
+    throw new Error(`找不到配置文件：${p}\n  请把 ${resolveConfigExamplePath(ROOT)} 复制为 ${p} 后再启动（旧的仓库根 config.json 仍然兼容）。`);
+  }
   const file = readJsonSafe(p, null, true);
   if (!file || typeof file !== 'object' || Array.isArray(file)) throw new Error(`配置格式错误：${p}`);
   const cfg = {
@@ -1178,7 +1181,7 @@ const LOCK_FILE = path.join(STATE_DIR, 'bridge.lock');
  */
 function consolePortInUse() {
   try {
-    const cfg = readJsonSafe(path.join(ROOT, 'config.json'), {});
+    const cfg = readJsonSafe(CONFIG_FILE, {});
     const port = Number(cfg?.consolePort) || 3100;
     if (process.platform === 'win32') {
       const out = execFileSync('netstat', ['-ano', '-p', 'TCP'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] });
@@ -4164,7 +4167,7 @@ async function main() {
         if (req.method === 'POST' && url.pathname === '/api/roles/limit') {
           const body = await readBody();
           const next = applyRoleInjectLimit(body.maxInjectChars);
-          const configFile = path.join(ROOT, 'config.json');
+          const configFile = CONFIG_FILE;
           const file = readConfigObject(configFile);
           file.role = { ...(file.role ?? {}), maxInjectChars: next };
           atomicWriteJson(configFile, file);
@@ -4561,7 +4564,7 @@ async function main() {
           const body = await readBody();
           const oldPreset = cfg.slang?.learnerPreset;
           const oldWorkspaceTitle = cfg.slang?.workspaceTitle;
-          const configFile = path.join(ROOT, 'config.json');
+          const configFile = CONFIG_FILE;
           const file = readConfigObject(configFile);
           const merged = { ...(file.slang ?? {}), ...body };
           if (typeof merged.enabled === 'boolean') merged.enabled = merged.enabled;
@@ -4625,7 +4628,7 @@ async function main() {
         if (req.method === 'POST' && url.pathname === '/api/whitelist') {
           const body = await readBody();
           const toNum = (arr) => Array.isArray(arr) ? [...new Set(arr.map((x) => Number(String(x).trim())).filter((n) => Number.isFinite(n)))] : undefined;
-          const configFile = path.join(ROOT, 'config.json');
+          const configFile = CONFIG_FILE;
           // fail-fast：配置文件损坏时直接 500，绝不回写，避免把整个配置清成只剩 allow/deny/ownerQQ
           const file = readConfigObject(configFile);
           const allow = {
@@ -4715,7 +4718,7 @@ async function main() {
           let effort;
           try { effort = normalizeReasoningEffort(body.reasoningEffort); }
           catch (error) { sendJson({ ok: false, error: error?.message ?? '思考强度无效' }, 400); return; }
-          const configFile = path.join(ROOT, 'config.json');
+          const configFile = CONFIG_FILE;
           // fail-fast：配置损坏时直接 500，绝不回写（与白名单接口同语义）
           const file = readConfigObject(configFile);
           file.dsh = { ...(file.dsh ?? {}), reasoningEffort: effort };
@@ -4755,7 +4758,7 @@ async function main() {
             sendJson({ ok: stateDirHardened === true, hardened: stateDirHardened, path: STATE_DIR });
             return;
           }
-          const configFile = path.join(ROOT, 'config.json');
+          const configFile = CONFIG_FILE;
           const file = readConfigObject(configFile);
           const next = { ...(file.security ?? {}), ...body };
           if (typeof next.interceptNotify === 'boolean') next.interceptNotify = next.interceptNotify;
@@ -4787,7 +4790,7 @@ async function main() {
             sendJson({ ok: false, error: '控制台访问令牌只能包含字母、数字、下划线或短横线' }, 400);
             return;
           }
-          const configFile = path.join(ROOT, 'config.json');
+          const configFile = CONFIG_FILE;
           const file = readConfigObject(configFile);
           // 手动令牌写入 config.json（用户可见、可再改）；随机令牌写入 state/console-token 并清空 config 中的手动值。
           file.consoleToken = generated ? '' : newToken;
@@ -4856,7 +4859,7 @@ async function main() {
         }
         if (req.method === 'POST' && url.pathname === '/api/social') {
           const body = await readBody();
-          const configFile = path.join(ROOT, 'config.json');
+          const configFile = CONFIG_FILE;
           // fail-fast：配置文件损坏时直接 500，绝不回写，避免把整个配置清成只剩 social
           const file = readConfigObject(configFile);
           const merged = { ...(file.social ?? {}), ...body };
@@ -4991,7 +4994,7 @@ async function main() {
         }
         if (req.method === 'POST' && url.pathname === '/api/socialV2/config') {
           const body = await readBody();
-          const configFile = path.join(ROOT, 'config.json');
+          const configFile = CONFIG_FILE;
           const file = readConfigObject(configFile);
           // current 必须是「当前**生效**的 socialV2」，而不是文件里恰好写着的那一份。
           //
@@ -8498,20 +8501,6 @@ async function main() {
     return null;
   }
 
-  function base64FromMaybe(value) {
-    if (typeof value !== 'string') return null;
-    const s = value.trim();
-    if (!s) return null;
-    if (s.startsWith('base64://')) return s.slice('base64://'.length).replace(/\s/g, '');
-    if (s.startsWith('data:image/')) {
-      const idx = s.indexOf(',');
-      if (idx >= 0) return s.slice(idx + 1).replace(/\s/g, '');
-    }
-    // 纯 base64（允许少量空白）
-    if (/^[A-Za-z0-9+/=\s]+$/.test(s)) return s.replace(/\s/g, '');
-    return null;
-  }
-
   // 媒体上限（config.json 可调，但必须收敛到安全区间）：
   //   maxBytes  —— 单条消息里图片/表情的总字节上限。8MB 能覆盖绝大多数动图表情；
   //                太大会让 base64 常驻内存（×1.33）并拖慢 DSH 上传。
@@ -8744,342 +8733,21 @@ async function main() {
   }
 
   // ── QQ 文件（OneBot file 段）字节获取、落盘与缓存 ──────────────────────────
-  //
-  // 与图片完全不同的地方：文件段没有可直接内联的字节，必须由桥接去网关换取下载链接。
-  // 安全口径与图片一致：**绝不把消息里的原始 URL 交给网关重新抓取**，链接要么来自
-  // 消息段、要么来自 bot.request('get_group_file_url'/'get_file')，抓取一律走
-  // safeFetchBuffer（DNS 固定 + 逐跳校验 + 大小上限），落盘只进配置的下载目录。
-  const fileByteCache = new Map(); // cacheKey -> { buffer,name,mime,via,bytes,saved,error,at }
-  const FILE_CACHE_TTL_MS = 10 * 60 * 1000; // 收到与投递之间通常只隔几秒；10 分钟足够复用
-  const FILE_CACHE_MAX = 24;
-  const FILE_CACHE_MAX_BYTES = 64 * 1024 * 1024;
-
-  function fileConfig() {
-    return cfg.files ?? {};
-  }
-
-  function fileCacheKey(media) {
-    return [media?.fileId, media?.file, media?.url, media?.name].map((v) => String(v ?? '')).join('|');
-  }
-
-  function trimFileByteCache() {
-    let total = 0;
-    for (const entry of fileByteCache.values()) total += entry?.buffer?.length ?? 0;
-    while (fileByteCache.size > FILE_CACHE_MAX || total > FILE_CACHE_MAX_BYTES) {
-      const oldest = fileByteCache.keys().next().value;
-      if (oldest === undefined) break;
-      total -= fileByteCache.get(oldest)?.buffer?.length ?? 0;
-      fileByteCache.delete(oldest);
-    }
-  }
-
-  function downloadDirAbs() {
-    return resolveDownloadDir(fileConfig().dir, ROOT);
-  }
-
-  /** 把字节落盘到下载目录（净化文件名 + 防重名；已存在同名则加 -2 后缀）。 */
-  function saveFileToDownloadDir(buffer, name) {
-    const dir = downloadDirAbs();
-    fs.mkdirSync(dir, { recursive: true });
-    const target = uniqueDownloadPath(dir, sanitizeQQFileName(name));
-    fs.writeFileSync(target, buffer, { mode: 0o600 });
-    return { path: target, name: path.basename(target), dir, bytes: buffer.length };
-  }
-
-  /**
-   * 列出群文件（root + 子目录，广度优先）。
-   *
-   * 用途有两个：① 「聊天里的 file_id 找不到群文件」时按名字+大小回退；
-   * ② `qq_list_group_files` 工具让模型直接看到群文件里有什么（而不是只能等别人在群里发）。
-   * 返回的条目保留 SnowLuma 原始字段（file_id/file_name/file_size/busid/upload_time/uploader_name…），
-   * 另加 folder_id/folder_name 便于展示。
-   *
-   * 遍历有上限（默认 50 个目录）：大群目录树可能很深，列表/下载路径都不能无限翻。
-   * @param {number} groupId
-   * @param {{recursive?:boolean, maxFolders?:number}} [options]
-   * @returns {Promise<{folders:object[], files:object[]}>}
-   */
-  async function listGroupFiles(groupId, { recursive = true, maxFolders = 50 } = {}) {
-    const folders = [];
-    const files = [];
-    const queue = [{ folderId: '/', folderName: '' }];
-    const seen = new Set(['/']);
-    let budget = Math.max(1, Math.min(200, Number(maxFolders) || 50));
-    while (queue.length > 0 && budget > 0) {
-      budget -= 1;
-      const { folderId, folderName } = queue.shift();
-      let payload;
-      try {
-        const raw = await bot.request('get_group_files_by_folder', { group_id: groupId, folder_id: folderId });
-        payload = raw?.data ?? raw;
-      } catch (error) {
-        if (folderId === '/') throw error;
-        continue;
-      }
-      for (const f of Array.isArray(payload?.files) ? payload.files : []) {
-        files.push({ ...f, folder_id: folderId, folder_name: folderName });
-      }
-      for (const folder of Array.isArray(payload?.folders) ? payload.folders : []) {
-        const id = String(folder?.folder_id ?? '').trim();
-        if (!id) continue;
-        const name = String(folder?.folder_name ?? '').trim();
-        folders.push({ folder_id: id, folder_name: name, file_count: Number(folder?.total_file_count) || 0, parent_id: folderId });
-        if (!recursive || seen.has(id)) continue;
-        seen.add(id);
-        queue.push({ folderId: id, folderName: name });
-      }
-    }
-    return { folders, files };
-  }
-
-  /**
-   * 在群文件列表里按「文件名 + 大小」找同名文件。
-   *
-   * 为什么需要：**聊天消息里的 file_id 与群文件里的 file_id 是两套 id**（实测同一个文件：
-   * 段里是 `/14fe…`，群文件列表里是 `/0a5b…`）。用段里的 id 调 get_group_file_url 会报
-   * 「文件不存在」；而群文件里确实存在同名同大小的文件。此时用列表里的 file_id 才能取到
-   * 下载链接。只按 name + size 匹配，不做模糊匹配（避免把同名但不同内容的文件当成本文件）。
-   * @param {number} groupId
-   * @param {{name?:string,size?:number}} media
-   * @returns {Promise<object|null>} 命中的群文件条目（含 file_id/busid）。
-   */
-  async function findGroupFileByMeta(groupId, media) {
-    const wantedName = String(media?.name ?? '').trim();
-    if (!wantedName) return null;
-    const { files } = await listGroupFiles(groupId, { recursive: true, maxFolders: 20 });
-    return pickGroupFileFromList(files, { name: wantedName, size: media?.size });
-  }
-
-  /**
-   * 换取文件字节：段内 URL → 群文件下载链接 → 群文件列表按名字回退 → get_file。
-   * 任何一路成功即返回；全部失败抛错（错误信息里带上试过哪些渠道，便于群友/管理员排查）。
-   * @param {object} media - extractMediaFromSegments 产出的 file 元数据。
-   * @param {string} key - 会话 key（群文件链接需要群号）。
-   * @param {{maxBytes?:number}} [options]
-   * @returns {Promise<{buffer:Buffer,mime:string,via:string}>}
-   */
-  async function fetchQQFileBytes(media, key, { maxBytes = DEFAULT_MAX_FILE_BYTES } = {}) {
-    const limit = Number(maxBytes) > 0 ? Number(maxBytes) : DEFAULT_MAX_FILE_BYTES;
-    const attempts = [];
-    const fromUrl = async (url, via) => {
-      // 群文件不是图片：必须用 safeFetchBytes（同一套 SSRF/重定向/大小防护，但不校验图片签名）。
-      // 曾用 safeFetchBuffer 抓群文件，HTML/zip/pdf 全部被判「不是有效图片」而失败。
-      const fetched = await safeFetchBytes(String(url), limit);
-      return { buffer: fetched.buffer, mime: fetched.mimeType || 'application/octet-stream', via };
-    };
-    if (media.url) {
-      try { return await fromUrl(media.url, 'segment-url'); }
-      catch (error) { attempts.push(`segment-url: ${error?.message ?? error}`); }
-    }
-    const target = parseTargetKey(key);
-    if (target?.kind === 'group' && (media.fileId || media.name)) {
-      try {
-        const info = await bot.request('get_group_file_url', {
-          group_id: Number(target.id),
-          file_id: media.fileId,
-          busid: Number(media.busid) || 102
-        });
-        const url = info?.url ?? info?.data?.url;
-        if (url) return await fromUrl(url, 'group-file-url');
-        attempts.push(`group-file-url: ${info?.wording ?? '未返回 url'}`);
-      } catch (error) { attempts.push(`group-file-url: ${error?.message ?? error}`); }
-      // 聊天里收到的文件 id 与「群文件」里的 id 是两套：群临时文件/聊天文件用段里的
-      // file_id 调 get_group_file_url 会报「文件不存在」。如果群文件里存在同名（同大小）
-      // 的文件，就用群文件列表里的 file_id 再取一次下载链接。
-      try {
-        const hit = await findGroupFileByMeta(Number(target.id), media);
-        if (hit) {
-          const info = await bot.request('get_group_file_url', {
-            group_id: Number(target.id),
-            file_id: String(hit.file_id ?? hit.id ?? ''),
-            busid: Number(hit.busid) || 102
-          });
-          const url = info?.url ?? info?.data?.url;
-          if (url) return await fromUrl(url, 'group-file-list-url');
-          attempts.push(`group-file-list-url: ${info?.wording ?? '未返回 url'}`);
-        } else {
-          attempts.push('group-file-list: 群文件里没有同名同大小的文件');
-        }
-      } catch (error) { attempts.push(`group-file-list: ${error?.message ?? error}`); }
-    }
-    if (media.fileId || media.file) {
-      try {
-        const raw = await bot.request('get_file', {
-          ...(media.fileId ? { file_id: media.fileId } : {}),
-          ...(media.file ? { file: media.file } : {})
-        });
-        const obj = raw && typeof raw === 'object' ? (raw.data ?? raw) : {};
-        const base64 = base64FromMaybe(obj.base64) || base64FromMaybe(obj.data) || base64FromMaybe(obj.file);
-        if (base64) {
-          const buf = Buffer.from(base64, 'base64');
-          if (buf.length > 0 && buf.length <= limit) return { buffer: buf, mime: 'application/octet-stream', via: 'get_file-base64' };
-          if (buf.length > limit) throw new Error(`超过上限 ${formatBytes(limit)}`);
-        }
-        if (obj.url) return await fromUrl(obj.url, 'get_file-url');
-        if (typeof obj.file === 'string' && fs.existsSync(obj.file) && isSafeLocalMediaPath(obj.file)) {
-          const stat = fs.statSync(obj.file);
-          if (stat.size <= limit) return { buffer: fs.readFileSync(obj.file), mime: 'application/octet-stream', via: 'get_file-local' };
-        }
-        attempts.push('get_file: 没有可下载内容');
-      } catch (error) { attempts.push(`get_file: ${error?.message ?? error}`); }
-    }
-    if (media.file && fs.existsSync(media.file) && isSafeLocalMediaPath(media.file)) {
-      try {
-        const stat = fs.statSync(media.file);
-        if (stat.size <= limit) return { buffer: fs.readFileSync(media.file), mime: 'application/octet-stream', via: 'segment-local' };
-      } catch (error) { attempts.push(`segment-local: ${error?.message ?? error}`); }
-    }
-    throw new Error(`无法获取文件字节（${attempts.join('；') || '消息段里没有 file_id/url'}）`);
-  }
-
-  /**
-   * 幂等获取一个 QQ 文件：命中缓存直接复用；否则抓字节、写入下载目录（按配置）、记缓存。
-   * 失败不抛异常——返回 `{ error }` 交给调用方决定降级方式（内联/只报元数据）。
-   * @param {object} media - file 元数据。
-   * @param {string} key - 会话 key。
-   * @param {{needBytes?:boolean, save?:boolean|null, name?:string}} [options]
-   * @returns {Promise<{name:string,bytes:number,mime:string,buffer:Buffer|null,saved:object|null,error:string|null,via:string,cached:boolean}>}
-   */
-  async function ensureQQFile(media, key, { needBytes = true, save = null, name = null } = {}) {
-    const limit = Number(fileConfig().maxBytes) > 0 ? Number(fileConfig().maxBytes) : DEFAULT_MAX_FILE_BYTES;
-    const cacheKey = fileCacheKey(media);
-    const wantSave = save === null ? fileConfig().download !== false : save === true;
-    const cached = fileByteCache.get(cacheKey);
-    if (cached && Date.now() - cached.at < FILE_CACHE_TTL_MS && (!needBytes || cached.buffer)) {
-      const hit = { ...cached, cached: true };
-      if (wantSave && !hit.saved && hit.buffer) {
-        try {
-          hit.saved = saveFileToDownloadDir(hit.buffer, hit.name);
-          hit.name = hit.saved.name;
-          fileByteCache.set(cacheKey, { ...hit, at: Date.now() });
-        } catch (error) {
-          hit.error = hit.error ?? `另存失败：${error?.message ?? error}`;
-        }
-      }
-      return hit;
-    }
-    const displayName = name || media.name || fileNameFromUrl(media.url) || (media.fileId ? `qq-file-${media.fileId}` : 'qq-file');
-    const entry = {
-      name: displayName,
-      bytes: Number(media.size) > 0 ? Number(media.size) : 0,
-      mime: '',
-      buffer: null,
-      saved: null,
-      error: null,
-      via: '',
-      cached: false
-    };
-    // 已经有同名同大小的落盘文件时直接复用（读盘比重新下载便宜，也不会产生 -2/-3 副本）。
-    // 大文件尤其重要：files.maxBytes 调到 1G 后，重复下载 90MB 群文件会又慢又费内存。
-    const existing = wantSave ? findSavedDownload(downloadDirAbs(), displayName, entry.bytes) : null;
-    if (existing) {
-      entry.saved = existing;
-      entry.name = existing.name;
-      entry.bytes = existing.bytes;
-      entry.via = 'existing-download';
-      if (needBytes) {
-        try { entry.buffer = fs.readFileSync(existing.path); } catch { entry.buffer = null; }
-      }
-      fileByteCache.set(cacheKey, { ...entry, at: Date.now() });
-      trimFileByteCache();
-      return entry;
-    }
-    if (Number(media.size) > limit) {
-      entry.error = `文件超过上限（${formatBytes(Number(media.size))} > ${formatBytes(limit)}）`;
-      fileByteCache.set(cacheKey, { ...entry, at: Date.now() });
-      trimFileByteCache();
-      return entry;
-    }
-    if (needBytes) {
-      try {
-        const got = await fetchQQFileBytes(media, key, { maxBytes: limit });
-        entry.buffer = got.buffer;
-        entry.mime = got.mime;
-        entry.via = got.via;
-        entry.bytes = got.buffer.length;
-      } catch (error) {
-        entry.error = String(error?.message ?? error);
-        fileByteCache.set(cacheKey, { ...entry, at: Date.now() });
-        trimFileByteCache();
-        return entry;
-      }
-    }
-    if (wantSave && entry.buffer) {
-      try {
-        entry.saved = saveFileToDownloadDir(entry.buffer, entry.name);
-        entry.name = entry.saved.name;
-      } catch (error) {
-        entry.error = `另存失败：${error?.message ?? error}`;
-      }
-    }
-    fileByteCache.set(cacheKey, { ...entry, at: Date.now() });
-    trimFileByteCache();
-    return entry;
-  }
-
-  /**
-   * 上传白名单根目录：默认「会话工作区 + files.dir」，配置 files.uploadRoots 可追加。
-   * 上传是出站能力，白名单比下载更严格——只有这些目录里的真实文件可以发给 QQ。
-   */
-  function uploadRootsAbs() {
-    const roots = [
-      cfg.sessionCwd ? path.resolve(String(cfg.sessionCwd)) : path.join(STATE_DIR, 'agents'),
-      resolveDownloadDir(cfg.files?.dir, ROOT)
-    ];
-    const extra = Array.isArray(cfg.files?.uploadRoots) ? cfg.files.uploadRoots : [];
-    for (const entry of extra) {
-      const resolved = resolveDownloadDir(entry, ROOT);
-      if (resolved) roots.push(resolved);
-    }
-    return [...new Set(roots)];
-  }
-
-  /**
-   * 把本地文件上传到 QQ：群聊走 upload_group_file（进群文件），私聊走 upload_private_file。
-   * 路径必须落在 uploadRootsAbs() 内（realpath 校验，防穿越/软链逃逸），大小受 files.maxBytes 约束。
-   * 群文件上传后会尝试用群文件列表按「名字+大小」确认落地；私聊只能以网关返回的 file_id 为准。
-   */
-  async function uploadLocalFileToQQ(key, rawPath, { name = '' } = {}) {
-    const target = parseTargetKey(key);
-    if (!target) { const error = new Error('key 格式应为 group:群号 或 private:QQ号'); error.client = true; throw error; }
-    const limit = Number(cfg.files?.maxBytes) > 0 ? Number(cfg.files.maxBytes) : DEFAULT_MAX_FILE_BYTES;
-    let picked;
-    try {
-      picked = resolveUploadPath(rawPath, {
-        roots: uploadRootsAbs(),
-        cwd: cfg.sessionCwd ? String(cfg.sessionCwd) : process.cwd()
-      });
-    } catch (error) {
-      error.client = true; // 路径/白名单问题 → 400，不是网关故障
-      throw error;
-    }
-    if (picked.size > limit) {
-      const error = new Error(`文件超过上限（${formatBytes(picked.size)} > ${formatBytes(limit)}）`);
-      error.client = true;
-      throw error;
-    }
-    const displayName = sanitizeQQFileName(name || picked.name);
-    const action = target.kind === 'group' ? 'upload_group_file' : 'upload_private_file';
-    const params = target.kind === 'group'
-      ? { group_id: Number(target.id), file: picked.path, name: displayName }
-      : { user_id: Number(target.id), file: picked.path, name: displayName };
-    // 上传可能传很久：单次请求预算给到 5 分钟（SDK 默认 30s 不够）。
-    const raw = await bot.request(action, params, { timeoutMs: 300000 });
-    if (raw?.status && raw.status !== 'ok') throw new Error(`网关拒绝 ${action}：${raw.wording || raw.retcode}`);
-    if (Number(raw?.retcode ?? 0) !== 0) throw new Error(`网关拒绝 ${action}：${raw.wording || raw.retcode}`);
-    const data = raw?.data ?? raw ?? {};
-    const fileId = data?.file_id ? String(data.file_id) : null;
-    let verified = null;
-    if (target.kind === 'group') {
-      try {
-        const { files } = await listGroupFiles(Number(target.id), { recursive: true, maxFolders: 20 });
-        verified = !!pickGroupFileFromList(files, { name: displayName, size: picked.size });
-      } catch {
-        verified = null; // 列表查不到不影响「已上传」这个事实，只表示未能验证
-      }
-    }
-    return { key: `${target.kind}:${target.id}`, name: displayName, size: picked.size, fileId, verified };
-  }
+  // 具体实现在 src/qq-file.js（createQQFileService）；这里只做依赖注入与转发，
+  // bridge.js 继续用原来的函数名，调用点不用改。bot 是后置创建的，用 getBot 延迟取。
+  const {
+    fileConfig,
+    downloadDirAbs,
+    listGroupFiles,
+    ensureQQFile,
+    uploadLocalFileToQQ
+  } = createQQFileService({
+    getBot: () => bot,
+    cfg,
+    root: ROOT,
+    stateDir: STATE_DIR,
+    isSafeLocalMediaPath
+  });
 
   async function resolveMediaList(mediaList, { sessionId = null, key = null, fileParts = true } = {}) {
     const parts = [];
@@ -13723,7 +13391,7 @@ async function main() {
     cfg.snowluma.wsUrl = wsUrl;
     if (followEndpoint && r.baseUrl) cfg.snowluma.httpUrl = r.baseUrl;
     try {
-      const w = persistSnowLumaEndpoint(path.join(ROOT, 'config.json'), {
+      const w = persistSnowLumaEndpoint(CONFIG_FILE, {
         ...(acceptHttpToken ? { accessToken: httpToken } : {}),
         ...(followEndpoint ? { wsUrl, httpUrl: r.baseUrl } : {})
       });
@@ -13743,7 +13411,7 @@ async function main() {
   /** 只写文件、不动物件（连接已成功时用）。 */
   async function syncTokenToFile() {
     try {
-      const r = persistToken(path.join(ROOT, 'config.json'), cfg.snowluma.accessToken ?? '');
+      const r = persistToken(CONFIG_FILE, cfg.snowluma.accessToken ?? '');
       // 只记「已写回」，不打印 token 片段：日志会被贴进 issue / 截图，
       // 前 4 个字符同样是凭据的一部分（CWE-532，见 PR #13）。
       if (r.updated) log('🔄 已把当前 token 写回 config.json');

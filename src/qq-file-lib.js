@@ -310,3 +310,20 @@ export function resolveUploadPath(rawPath, { roots = [], cwd = process.cwd(), ho
   }
   return { path: real, name: path.basename(real), size: stat.size };
 }
+
+/**
+ * 从网关返回的字段里尽力解析 base64（`base64://` / `data:` / 纯 base64）。
+ * 只接受字符串；解析不出返回 null。
+ */
+export function base64FromMaybe(value) {
+  if (typeof value !== 'string') return null;
+  const s = value.trim();
+  if (!s) return null;
+  if (s.startsWith('base64://')) return s.slice('base64://'.length).replace(/\s/g, '');
+  if (s.startsWith('data:image/')) {
+    const idx = s.indexOf(',');
+    if (idx >= 0) return s.slice(idx + 1).replace(/\s/g, '');
+  }
+  if (/^[A-Za-z0-9+/=\s]+$/.test(s)) return s.replace(/\s/g, '');
+  return null;
+}

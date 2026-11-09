@@ -7,6 +7,7 @@
 // 运行：node scripts/test-forward.mjs
 import fs from 'node:fs';
 import path from 'node:path';
+import { resolveConfigExamplePath } from '../src/config-path.js';
 import { fileURLToPath } from 'node:url';
 import {
   sanitizeForwardId,
@@ -87,7 +88,7 @@ check('nodeText 清洗 CQ 字符串', nodeText({ message: '[CQ:image,file=x]' })
 
 // 4. 配置默认开关
 try {
-  const config = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.example.json'), 'utf8'));
+  const config = JSON.parse(fs.readFileSync(resolveConfigExamplePath(ROOT), 'utf8'));
   check('config.socialV2.tools.getForwardMsg 默认开启', config.socialV2?.tools?.getForwardMsg !== false);
   check('config.socialV2.tools.sendPoke 默认开启', config.socialV2?.tools?.sendPoke !== false);
   check('config.socialV2.wake.recommendedPoke 默认开启', config.socialV2?.wake?.recommendedPoke !== false);

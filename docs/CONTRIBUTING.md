@@ -17,8 +17,13 @@
 git clone https://github.com/Derpyu520/qq-bridge.git
 cd qq-bridge
 npm install
+cp config/config.example.json config/config.json   # 本机配置（config/.gitignore 已排除）
 npm run test:audit
 ```
+
+本地私密文件（真实配置、日志、内部笔记、一次性调试脚本）按目录归类：根 `.gitignore` 只放全局规则，
+具体文件加到它所在目录的 `.gitignore`（如 `config/.gitignore`、`docs/.gitignore`、
+`scripts/.gitignore`），不要堆回根文件。
 
 ⚠️ **不要用 `npm ci --ignore-scripts`**。`postinstall` 会跑 `scripts/patch-snowluma-sdk.mjs`，
 给 `@snowluma/sdk` 的相对导入补 `.js` 扩展名（这两个上游包自己的 ESM 打包有问题）。
@@ -75,7 +80,7 @@ PR 里请写清楚：
 ## 6. 许可
 
 提交 PR 即表示你同意你的贡献按本仓库的
-[PolyForm Noncommercial 1.0.0](LICENSE) 发布（许可范围与第三方组件声明见 [NOTICE.md](NOTICE.md)）。
+[PolyForm Noncommercial 1.0.0](../LICENSE) 发布（许可范围与第三方组件声明见 [NOTICE.md](NOTICE.md)）。
 
 如果你不能接受这一点（例如你的雇主对该代码有 CLA 或再许可要求），**请先开 issue 讨论**，
 不要直接提 PR。

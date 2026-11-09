@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { resolveConfigExamplePath } from '../src/config-path.js';
 import { fileURLToPath } from 'node:url';
 import {
   AUDIO_EXTS, describeAudio, formatBytes, formatDuration,
@@ -119,7 +120,7 @@ console.log('## 配置项（AI 发语音默认关闭，等语音库准备好再�
   //   ② 更要紧的是语义错了：AI 发语音是**受支持的功能**，用户按文档打开它之后，
   //      这条断言会去断言**用户的当前状态**并失败 —— 测试不该因为用户用了功能而变红。
   // 用户当前值只做提示，不参与判定。
-  const exCfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.example.json'), 'utf8'));
+  const exCfg = JSON.parse(fs.readFileSync(resolveConfigExamplePath(ROOT), 'utf8'));
   ok(exCfg.socialV2?.tools?.sendVoice === false, 'config.example.json tools.sendVoice=false（出厂默认不给 AI 发语音）');
   ok(exCfg.socialV2?.voice?.enabled === false, 'config.example.json voice.enabled=false（出厂默认总闸关闭）');
   ok(exCfg.socialV2?.voice?.allowAbsolutePath === false, '出厂默认禁止绝对路径（安全默认）');

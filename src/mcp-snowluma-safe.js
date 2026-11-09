@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import { resolveConfigPath } from './config-path.js';
 // 出站文本的敏感信息拦截**统一由桥接负责**（bridge.js 的 auditAndSend / 各发送端点的
 // SENSITIVE_RE 校验）：所有 QQ 发送都经由桥接 HTTP API，因此 MCP 侧不再重复实现一遍。
 // 这里 import 只用于「出站审计口径一致」的说明，不在 MCP 内做拦截——
@@ -25,6 +26,7 @@ import { serializeModelData } from './qq-model-view.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
+const CONFIG_FILE = resolveConfigPath(ROOT);
 
 // ── 会话绑定（SELF_KEY）──────────────────────────────────────────────────────
 //
@@ -64,7 +66,7 @@ function selfKeyGuard(key) {
 
 function loadConfig() {
   try {
-    let text = fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8');
+    let text = fs.readFileSync(CONFIG_FILE, 'utf8');
     if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
     return JSON.parse(text);
   } catch {

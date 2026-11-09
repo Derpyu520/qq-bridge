@@ -22,6 +22,8 @@ import * as modelPrices from '../src/model-prices.js';
 import * as tokenLedger from '../src/token-ledger.js';
 import * as voiceLib from '../src/send-voice-lib.js';
 import * as qqFile from '../src/qq-file-lib.js';
+import { createQQFileService } from '../src/qq-file.js';
+import { resolveConfigExamplePath, resolveConfigPath } from '../src/config-path.js';
 import * as presetPrompt from '../src/preset-prompt.js';
 import * as roleCard from '../src/role-card.js';
 import * as stateAcl from '../src/state-acl.mjs';
@@ -215,6 +217,7 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     resolveInstalledPreset, synchronizePreset, renderPatch, persistSnowLumaEndpoint, persistToken,
     ...markdown, ...sensitive, ...wait, ...safeFetch, ...forward, ...slang, ...sticker,
     ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...qqFile, ...presetPrompt, ...roleCard,
+    createQQFileService, resolveConfigPath, resolveConfigExamplePath,
     // 桥接的出图出口会调归一化（体积/动图抽帧）：VM 里必须能拿到这几个函数。
     normalizeImageForModel: mediaNormalize.normalizeImageForModel,
     sniffImage: mediaNormalize.sniffImage,

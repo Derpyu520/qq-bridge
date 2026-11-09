@@ -15,6 +15,7 @@
 // `--direct` 可绕过桥接直连 SnowLuma，仅用于桥接没启动时的应急排查。
 import fs from 'node:fs';
 import path from 'node:path';
+import { resolveConfigPath } from '../src/config-path.js';
 import { fileURLToPath } from 'node:url';
 import {
   describeAudio, formatBytes, formatDuration, inspectAudio, listAudioFiles,
@@ -23,7 +24,7 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
-const CONFIG_PATH = path.join(ROOT, 'config.json');
+const CONFIG_PATH = resolveConfigPath(ROOT);
 
 // ── 参数解析 ────────────────────────────────────────────────────────────────
 const argv = process.argv.slice(2);

@@ -1,0 +1,2 @@
+# Runtime state and local config (never publish)
+/config.json

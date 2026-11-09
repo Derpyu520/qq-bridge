@@ -4,6 +4,7 @@
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
+import { resolveConfigPath } from '../src/config-path.js';
 import fs from 'node:fs';
 import { NodeApiClient, unwrap, createTurnCollector, discoverDshLaunchToken } from '../src/dsh-client.js';
 
@@ -13,7 +14,7 @@ const ROOT = path.resolve(__dirname, '..');
 async function main() {
   let auth;
   try {
-    const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
+    const cfg = JSON.parse(fs.readFileSync(resolveConfigPath(ROOT), 'utf8'));
     auth = {
       token: cfg.dsh?.authToken || discoverDshLaunchToken(),
       header: cfg.dsh?.authHeader,

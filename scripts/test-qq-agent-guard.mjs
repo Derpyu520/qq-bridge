@@ -11,6 +11,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { resolveConfigExamplePath } from '../src/config-path.js';
 import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_DENY_EXEC,
@@ -172,7 +173,7 @@ console.log('## qq-chat-tools preset 契约');
   ok(toolsYml.includes('allowLocalTools: true'), 'qq-chat-tools 仍放行本地工具');
   ok(pkg.dsh?.bundle?.patch?.includes('./presets/qq-chat-tools.patch.yml'), 'bundle 注册了第三个 patch 层');
 
-  const example = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.example.json'), 'utf8'));
+  const example = JSON.parse(fs.readFileSync(resolveConfigExamplePath(ROOT), 'utf8'));
   ok(Array.isArray(example.agentGuard?.denyRead) && example.agentGuard.denyRead.includes('~/.ssh'), 'config.example 含 agentGuard.denyRead');
   ok(Array.isArray(example.agentGuard?.denyExec) && example.agentGuard.denyExec.length > 0, 'config.example 含 agentGuard.denyExec');
 }

@@ -1,6 +1,6 @@
 name: PR base guard
 
-# 分支模型（CONTRIBUTING.md §5）：main = 发布线，只在发布时从 dev 合并；
+# 分支模型（docs/CONTRIBUTING.md §5）：main = 发布线，只在发布时从 dev 合并；
 # dev = 日常开发线，外面提的 PR 一律以 dev 为目标分支。
 # GitHub 自己不阻止别人把 PR 提到 main，所以这里自动改指 dev。
 #

@@ -1,6 +1,7 @@
 // Execute both real preset plugins against a captured tools service, without DSH/QQ.
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import { resolveConfigExamplePath } from '../src/config-path.js';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -78,7 +79,7 @@ import fs from 'node:fs';
   }
   // ③ 配置项不得复活（代码与模板两侧都查）
   assert.ok(!code.includes('allowProcessControl'), 'mcp-host-server.js 不得再读取 allowProcessControl');
-  const example = fs.readFileSync(path.join(root, 'config.example.json'), 'utf8');
+  const example = fs.readFileSync(resolveConfigExamplePath(root), 'utf8');
   assert.ok(!example.includes('allowProcessControl'), 'config.example.json 不得再提供 allowProcessControl');
   // ④ 只读工具必须还在（别把整个 server 删空）
   assert.ok(host.includes("'snowluma_status'"), 'snowluma_status（只读探活）必须保留');

@@ -13,6 +13,7 @@
 // 纯决策函数 `planStop()` 不碰真实进程，回归见 scripts/test-restart-instance.mjs。
 import fs from 'node:fs';
 import path from 'node:path';
+import { resolveConfigPath } from '../src/config-path.js';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -179,7 +180,7 @@ export function getListenerPid(port) {
 
 export function readConsolePort(root) {
   try {
-    const cfg = JSON.parse(fs.readFileSync(path.join(root, 'config.json'), 'utf8').replace(/^\uFEFF/, ''));
+    const cfg = JSON.parse(fs.readFileSync(resolveConfigPath(root), 'utf8').replace(/^\uFEFF/, ''));
     const port = Number(cfg?.consolePort);
     if (Number.isInteger(port) && port > 0 && port < 65536) return port;
   } catch {}

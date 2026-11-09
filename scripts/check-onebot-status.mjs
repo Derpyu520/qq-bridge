@@ -1,11 +1,12 @@
 // 查询 SnowLuma 网关与 QQ 会话状态：HTTP API + WebSocket
 import fs from 'node:fs';
 import path from 'node:path';
+import { resolveConfigPath } from '../src/config-path.js';
 import { fileURLToPath } from 'node:url';
 import { SnowLumaWebSocketClient } from '@snowluma/sdk';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const cfg = JSON.parse(fs.readFileSync(path.resolve(__dirname, '..', 'config.json'), 'utf8'));
+const cfg = JSON.parse(fs.readFileSync(resolveConfigPath(path.resolve(__dirname, '..')), 'utf8'));
 const { wsUrl, httpUrl, accessToken } = cfg.snowluma;
 const baseHttp = String(httpUrl || 'http://127.0.0.1:3000').replace(/\/+$/, '');
 

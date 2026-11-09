@@ -41,7 +41,7 @@ Run in PowerShell:
 git clone https://github.com/Derpyu520/qq-bridge.git
 cd qq-bridge
 npm install
-Copy-Item config.example.json config.json
+Copy-Item config/config.example.json config/config.json
 ```
 
 `main` is the release branch; `dev` is for development and testing.
@@ -86,10 +86,10 @@ Most detailed documentation is currently in Chinese.
 | Task | Documentation |
 | --- | --- |
 | Install, upgrade, or troubleshoot | [DSH setup](docs/guides/DSH_SETUP.md) |
-| Modes, permissions, and commands | [Usage rules](RULES.md) |
+| Modes, permissions, and commands | [Usage rules](docs/RULES.md) |
 | Model usage and cost estimates | [Usage dashboard](docs/guides/TOKEN_USAGE_CONSOLE.md) |
-| Contribute | [Contributing](CONTRIBUTING.md) · [Security baseline](docs/guides/SECURITY_BASELINE.md) |
-| Report a vulnerability | [Security policy](SECURITY.md) |
+| Contribute | [Contributing](docs/CONTRIBUTING.md) · [Security baseline](docs/guides/SECURITY_BASELINE.md) |
+| Report a vulnerability | [Security policy](docs/SECURITY.md) |
 | Find other documentation | [Documentation index](docs/README.md) |
 
 Develop on `dev` and run the offline suite before submitting a PR:
@@ -101,9 +101,9 @@ npm run test:audit
 ## Usage boundaries and license
 
 - Use only in conversations where participants are informed and use is permitted. Follow platform rules; using an unofficial QQ backend may lead to account restrictions.
-- DSH sends chat content to your configured model provider. Automatic slang research is enabled by default and may send extracted keywords to search services. See [NOTICE](NOTICE.md#四数据传输) for data flows and controls.
+- DSH sends chat content to your configured model provider. Automatic slang research is enabled by default and may send extracted keywords to search services. See [NOTICE](docs/NOTICE.md#四数据传输) for data flows and controls.
 - Protect `config.json`, `state/`, and console tokens. Keep services accessible only locally.
 - While DSH is offline, messages are queued only in memory, up to 50 per conversation. The queue is lost when the bridge exits and delivery is not guaranteed.
 - The bridge does not implement QQ login or its underlying protocol, or install, bundle, start, or stop the SnowLuma backend. It currently uses client packages including `@snowluma/sdk`; third-party terms apply separately.
 
-The current code is available under [PolyForm Noncommercial 1.0.0](LICENSE) for noncommercial use. Releases up to and including `v0.2.1-r1` retain their original MIT license. See [NOTICE](NOTICE.md) for third-party components, project independence, and usage risks.
+The current code is available under [PolyForm Noncommercial 1.0.0](LICENSE) for noncommercial use. Releases up to and including `v0.2.1-r1` retain their original MIT license. See [NOTICE](docs/NOTICE.md) for third-party components, project independence, and usage risks.

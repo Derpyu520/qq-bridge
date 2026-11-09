@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
+import { resolveConfigPath } from '../src/config-path.js';
 import { test } from 'node:test';
 import { z } from 'zod';
 
@@ -164,6 +165,7 @@ function loadSnowlumaTools(fetchImpl, fixtureConfig = null, httpImpl = null, fix
     fs: modeAwareFs,
     SENSITIVE_RE: { test: () => false },
     serializeModelData: (value) => JSON.stringify(value),
+    resolveConfigPath,
   });
   const callTool = async (name, arguments_ = {}) => {
     const tool = tools.get(name);

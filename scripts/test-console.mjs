@@ -1,6 +1,7 @@
 // 控制台增强功能综合测试（node 直接调 API）
 import fs from 'node:fs';
 import path from 'node:path';
+import { resolveConfigPath } from '../src/config-path.js';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -9,7 +10,7 @@ const BASE = 'http://127.0.0.1:3100';
 
 function readConsoleToken() {
   try {
-    const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
+    const cfg = JSON.parse(fs.readFileSync(resolveConfigPath(ROOT), 'utf8'));
     if (cfg.consoleToken) return String(cfg.consoleToken);
   } catch {}
   try {

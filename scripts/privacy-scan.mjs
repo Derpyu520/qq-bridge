@@ -124,13 +124,14 @@ function listFiles() {
     return { files: [...new Set([...tracked, ...others])], via: 'git ls-files' };
   }
   // git 不可用（沙箱禁止 spawn / 没装 git / 不是仓库）：退化为目录遍历 + 读 .gitignore。
-  // 这样脚本在任何环境下都能给出**有意义的**结果，而不是一句"拿不到文件列表"。
-  const ignores = readGitignorePatterns();
+  // 忽略规则**按目录分层读取**（根 .gitignore + 各子目录 .gitignore），与 git 的语义一致：
+  // 子目录规则只作用于该目录下的相对路径。只读根 .gitignore 会在“规则分散到各目录”
+  // 的布局下漏掉本地私密文件（docs/.gitignore、config/.gitignore 等）。
   const out = [];
   const seen = new Set();
   const MAX_DEPTH = 24;
   const MAX_FILE_BYTES = 8 * 1024 * 1024;
-  const walk = (dir, rel, depth) => {
+  const walk = (dir, rel, depth, inheritedIgnores) => {
     if (depth > MAX_DEPTH) return;
     // 真实存在的坑：本仓库里 `state/setup-dsh-test-home/plugins/qq-mode-console` 是一个
     // **junction**，指回仓库自身 ⇒ 朴素遍历会无限递归。所以必须显式跳过所有 reparse point
@@ -142,10 +143,17 @@ function listFiles() {
     seen.add(real);
     let entries;
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    // 当前目录自己的 .gitignore（规则相对于 rel）
+    const ignores = [...inheritedIgnores, ...readGitignoreRules(dir, rel)];
+    const isIgnored = (childRel) => ignores.some(({ baseRel, re }) => {
+      if (baseRel && childRel !== baseRel && !childRel.startsWith(baseRel + '/')) return false;
+      const relative = baseRel ? childRel.slice(baseRel.length + 1) : childRel;
+      return re.test(relative) || re.test(`${relative}/`);
+    });
     for (const e of entries) {
       const childRel = rel ? `${rel}/${e.name}` : e.name;
       if (SKIP_DIRS.has(e.name) || SKIP_DIRS.has(childRel)) continue;
-      if (ignores.some((re) => re.test(childRel) || re.test(`${childRel}/`))) continue;
+      if (isIgnored(childRel)) continue;
       const abs = path.join(dir, e.name);
       let st = null;
       try { st = fs.lstatSync(abs); } catch { continue; }
@@ -153,14 +161,14 @@ function listFiles() {
         // 0x400 = FILE_ATTRIBUTE_REPARSE_POINT
         continue;
       }
-      if (st.isDirectory()) walk(abs, childRel, depth + 1);
+      if (st.isDirectory()) walk(abs, childRel, depth + 1, ignores);
       else if (st.isFile()) {
         if (st.size > MAX_FILE_BYTES) continue;
         out.push(childRel);
       }
     }
   };
-  walk(ROOT, '', 0);
+  walk(ROOT, '', 0, []);
   return { files: out, via: `目录遍历（git 不可用，已尽力套用 .gitignore；跳过 ${seen.size} 个真实目录）` };
 }
 
@@ -171,25 +179,32 @@ const SKIP_DIRS = new Set([
   'state', 'audio', 'assets/vendor',
 ]);
 
-/** 把 .gitignore 里"简单形态"的规则转成正则（够用即可：目录名、文件名、*.ext、/path）。 */
-function readGitignorePatterns() {
+/**
+ * 读取某个目录的 .gitignore，返回 `{ baseRel, re }` 规则列表。
+ *
+ * 只支持"简单形态"（够用即可）：目录名、文件名、`*.ext`、`/path`。
+ * 规则语义按 git 近似实现：含 `/` 的按该目录下的相对路径匹配；不含 `/` 的
+ * 匹配该目录下**任意层级**的同名文件/目录（例如 `*.log`）。
+ * @param {string} dirAbs - 目录绝对路径。
+ * @param {string} baseRel - 目录相对仓库根的路径（根目录为 ''）。
+ */
+function readGitignoreRules(dirAbs, baseRel) {
   let text = '';
-  try { text = fs.readFileSync(path.join(ROOT, '.gitignore'), 'utf8'); } catch { return []; }
+  try { text = fs.readFileSync(path.join(dirAbs, '.gitignore'), 'utf8'); } catch { return []; }
   const out = [];
   for (let line of text.split('\n')) {
     line = line.trim();
     if (!line || line.startsWith('#') || line.startsWith('!')) continue;
-    const p = line.replace(/^\//, '').replace(/\/$/, '');
+    const p = line.replace(/^\/+/, '').replace(/\/+$/, '');
     if (!p) continue;
-    // 关键点：`*.log` 这类"只有 basename 通配"的规则要匹配**任意目录下**的同名文件，
-    // 而不是拼成 `^*\.log`（那是个非法正则）。含 `/` 的规则按路径前缀匹配。
     const hasSlash = p.includes('/');
-    const base = hasSlash ? p : path.basename(p);
-    const baseRe = globToRe(hasSlash ? p : base).source;
     try {
-      out.push(hasSlash
-        ? new RegExp(`(?:^|/)${baseRe}(?:/|$)`)
-        : new RegExp(`(?:^|/)${baseRe}$`));
+      out.push({
+        baseRel,
+        re: hasSlash
+          ? new RegExp(`^${globToRe(p).source}(?:/|$)`)
+          : new RegExp(`(?:^|/)${globToRe(path.basename(p)).source}$`)
+      });
     } catch { /* 忽略无法解析的规则 */ }
   }
   return out;

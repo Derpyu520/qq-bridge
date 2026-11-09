@@ -1,0 +1,15 @@
+# Local one-off dev/debug/patch scripts
+# (machine-specific paths/IDs, or bound to artifacts of a single probe run under state/)
+/cleanup-probe-sessions.mjs
+/cleanup-probe-workspaces.mjs
+/cleanup-test-sessions.mjs
+/debug-whitelist.mjs
+/diag-archive.mjs
+/fix-probe-workspace-title.mjs
+/patch-qq-chat-v2-collect-memory.mjs
+/patch-qq-chat-v2-presleep.mjs
+/patch-qq-chat-v2-stickers.mjs
+/patch-web-mcp-timeout.mjs
+
+# 本机专用的隐私扫描规则（含真实 QQ 号/路径，不入库）
+/privacy-rules.json

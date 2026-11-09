@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
+import { resolveConfigPath } from '../src/config-path.js';
 import dns from 'node:dns';
 import https from 'node:https';
 import { EventEmitter } from 'node:events';
@@ -38,6 +39,7 @@ function loadTools({ selfKey = 'group:123' } = {}) {
     URL, URLSearchParams, AbortSignal, Buffer, setTimeout, clearTimeout,
     process: { env: { QQ_BRIDGE_SELF_KEY: selfKey }, argv: [], cwd: () => '/fixture' },
     console: { error() {} }, http: { request() { throw new Error('Unexpected long poll'); } },
+    resolveConfigPath,
     SENSITIVE_RE: { test: () => false }, serializeModelData: JSON.stringify,
     fetch: async (url, init) => { calls.push({ url, init }); return Response.json({ ok: true }); },
   });

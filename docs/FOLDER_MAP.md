@@ -1,7 +1,7 @@
 # 仓库目录地图（FOLDER_MAP）
 
 > 说明顶层目录、主要脚本和公开 / 本地文档边界。本文描述当前结构，不作为删除文件的指令。
-> 文档索引见 [README.md](README.md)。最后核对：2026-11-01。
+> 文档索引见 [README.md](README.md)。最后核对：2026-11-09。
 
 ## 一、工作区与仓库布局
 
@@ -19,19 +19,18 @@ DSH/                         ← 工作区根（不是仓库根）
 
 | 路径 | 作用 | 修改注意事项 |
 | --- | --- | --- |
-| `src/` | 桥接主程序、DSH 客户端、MCP server、共享库和核心模块 | 包含 `.js` 与 `.mjs`。`bridge.js` 约 1.3 万行；`state-acl.mjs`、`core/*.mjs` 同样属于源码 |
+| `src/` | 桥接主程序、DSH 客户端、MCP server、共享库和核心模块 | 包含 `.js` 与 `.mjs`。`bridge.js` 约 1.3 万行；`qq-file-lib.js` 是 QQ 文件共享纯函数、`qq-file.js` 是 QQ 文件服务（下载/落盘/上传）；`state-acl.mjs`、`core/*.mjs` 同样属于源码 |
 | `scripts/` | 离线回归、安装、诊断、探针和运维脚本 | 文件以 Git 跟踪清单为准；新增回归脚本应加入 `scripts/test-audit.mjs` |
-| `dsh/agent-presets/` | `qq-chat` / `qq-chat-v2` 的权威 preset 源 | 修改后运行 `node scripts/build-agent-preset-patches.mjs` 重新生成 bundle patch |
+| `dsh/agent-presets/` | `qq-chat` / `qq-chat-v2` / `qq-chat-tools` 的权威 preset 源 | 修改后运行 `node scripts/build-agent-preset-patches.mjs` 重新生成 bundle patch；`qq-*.mjs` 只是 re-export 壳，实现文件在 `plugins/qq-agent-presets/` |
 | `plugins/` | DSH bundle：`qq-agent-presets` 与 `qq-mode-console` | 修改后需重新同步安装并重启 DSH；`qq-mode-console` 目前只有 host 半 |
 | `public/console.html` | 桥接自带本地控制台 | 修改前端契约时同步 fixture、基线和离线回归 |
-| `roles/` | 人格卡与人格写作说明 | 属于用户可编辑内容；权限和注入规则见 `RULES.md`、`roles/README.md` |
+| `roles/` | 人格卡与人格写作说明 | 属于用户可编辑内容；权限和注入规则见 `docs/RULES.md`、`roles/README.md` |
 | `assets/` | 仓库用图片等资源 | 当前仅跟踪 `deepseek娘.png`；演示视频作为 Release 附件管理，不入库 |
 | `audio/` | 本地语音库，默认被 `.gitignore` 排除 | 用户音频不应提交或随意删除 |
 | `state/` | 会话、模式、日志、锁、令牌等运行时数据 | 被 `.gitignore` 排除；不要提交，也不要在测试中使用生产副本 |
-| `docs/` | 公开指南、历史记录和本地文档目录约定 | 公开 / 本地边界见第三节 |
+| `docs/` | 公开指南、历史记录、规则/许可/安全/贡献文档 | 本地扩展清单见 [LOCAL_EXTENSIONS](guides/LOCAL_EXTENSIONS.md)；公开 / 本地边界见第三节 |
 | `node_modules/`、`.npm-cache/` | 依赖与缓存 | 不入库 |
-| `config.example.json` | 配置模板 | 修改配置结构时同步代码、文档和相关测试 |
-| `config.json` | 用户真实配置 | 不入库，测试不得依赖它 |
+| `config/` | 配置目录：`config.example.json` 模板（入库）、`config.json` 用户真实配置（`.gitignore`） | 修改配置结构时同步代码、文档和相关测试；旧布局的根目录 `config.json` 仍兼容 |
 
 ## 二、`scripts/` 命名与用途
 
@@ -82,8 +81,14 @@ docs/
 公开文档不要给这些本地资料提供链接。`PROJECT_GUIDE.md` 是历史说明书，不是当前实现的唯一权威来源；
 当前行为以代码、入库指南和带日期的验证记录为准。
 
-根目录主要保留 `README.md`、`README.en.md`、`RULES.md`。`LICENSE`、`NOTICE.md`、`SECURITY.md`、
-`CONTRIBUTING.md` 及 `.github/` 社区健康文件是约定例外，不适用于“其他文档一律进 `docs/`”的规则。
+根目录只保留 `README.md`、`README.en.md`、`LICENSE` 与 `config/` 目录；`RULES.md`、`NOTICE.md`、
+`SECURITY.md`、`CONTRIBUTING.md` 与各指南都在 `docs/`，`.github/` 只放社区健康文件与工作流。
+
+`.gitignore` 采用「根规则 + 目录规则」分层：根 `.gitignore` 只放全局项（依赖、运行时状态、
+日志、`audio/`），各目录用各自的 `.gitignore` 管本目录的本地文件
+（`config/.gitignore`、`docs/.gitignore`、`docs/guides/.gitignore`、`scripts/.gitignore`、`assets/.gitignore`）。
+新增本机私密文件时，把规则加到**它所在目录**的 `.gitignore`，不要堆回根文件；
+`scripts/privacy-scan.mjs` 在 git 不可用时会逐目录读取这些规则做回退扫描。
 
 ## 四、仓库外独立语音工具
 

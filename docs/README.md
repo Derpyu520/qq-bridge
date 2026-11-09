@@ -1,8 +1,8 @@
 # 文档索引
 
-> 本索引优先列出**已入库、可在公开仓库阅读**的文档。根目录主要保留 `README.md`、`README.en.md`、
-> `RULES.md`；GitHub 社区健康文件与许可文件按惯例也放在根目录或 `.github/`，包括 `LICENSE`、
-> `NOTICE.md`、`SECURITY.md` 和 `CONTRIBUTING.md`。
+> 本索引优先列出**已入库、可在公开仓库阅读**的文档。根目录保留 `README.md`、`README.en.md` 与
+> `LICENSE`；`RULES.md`、`NOTICE.md`、`SECURITY.md`、`CONTRIBUTING.md` 与各指南都在 `docs/`，
+> `.github/` 只放社区健康文件与工作流。
 >
 > 状态标记：✅ 当前使用说明 · 🗄️ 带日期的历史记录（用于追溯，不代表当前实现或最新验证结果）。
 > 仓库目录结构与 `scripts/` 命名约定见 [FOLDER_MAP.md](FOLDER_MAP.md)。
@@ -14,14 +14,20 @@
 | 文档 | 内容 | 状态 |
 | --- | --- | --- |
 | [DSH 安装指南](guides/DSH_SETUP.md) | 兼容范围、依赖安装、DSH 插件与 preset、启动验证和常见故障排查 | ✅ |
-| [权限与安全规则](../RULES.md) | 四种模式、权限分层、人格与仿真提示词、黑话学习和管理命令 | ✅ |
+| [权限与安全规则](RULES.md) | 四种模式、权限分层、人格与仿真提示词、黑话学习和管理命令 | ✅ |
 | [控制台「令牌与花费」看板](guides/TOKEN_USAGE_CONSOLE.md) | 用量来源、计价口径、API、配置和存储 | ✅ |
 | [控制台离线预览与回归](guides/CONSOLE-UI-TESTING.md) | `npm run preview:console`、`npm run test:console-ui` 与基线维护 | ✅ |
 | [发布前隐私检查](guides/PRIVACY.md) | 工作树与历史扫描、命中判读、CI 用法及历史扫描存档 | ✅ |
 | [安全基线与威胁模型](guides/SECURITY_BASELINE.md) | 已实现的安全边界、残余风险、发布检查和改动检查单 | ✅ |
-| [第三方组件与数据传输说明](../NOTICE.md) | 著作权、许可、第三方组件、独立关系、主要网络出口和使用风险 | ✅ |
-| [安全报告策略](../SECURITY.md) | 私密漏洞报告渠道、支持范围与部署侧要求 | ✅ |
-| [参与贡献](../CONTRIBUTING.md) | 环境、测试、PR 和分支协作方式 | ✅ |
+| [第三方组件与数据传输说明](NOTICE.md) | 著作权、许可、第三方组件、独立关系、主要网络出口和使用风险 | ✅ |
+| [安全报告策略](SECURITY.md) | 私密漏洞报告渠道、支持范围与部署侧要求 | ✅ |
+| [参与贡献](CONTRIBUTING.md) | 环境、测试、PR 和分支协作方式 | ✅ |
+
+## 本地扩展（本 fork 相对上游）
+
+| 文档 | 内容 | 状态 |
+| --- | --- | --- |
+| [本地扩展说明](guides/LOCAL_EXTENSIONS.md) | QQ 文件/群文件、上传文件、qq-chat-tools 与 agentGuard、唤醒提速、ffprobe 4.4 兼容，以及升级上游时的检查清单 | ✅ 2026-11-09 |
 
 ## 当前工程记录
 
@@ -55,11 +61,11 @@
 | 需求 | 入口 |
 | --- | --- |
 | 安装、升级或排查连接 | [DSH 安装指南](guides/DSH_SETUP.md) |
-| 了解模式、权限与管理命令 | [使用规则](../RULES.md) |
+| 了解模式、权限与管理命令 | [使用规则](RULES.md) |
 | 修改人格卡 | [人格卡写作规范](../roles/README.md) |
 | 查看用量与费用口径 | [用量看板](guides/TOKEN_USAGE_CONSOLE.md) |
 | 修改控制台并运行离线回归 | [控制台测试指南](guides/CONSOLE-UI-TESTING.md) |
 | 修改安全相关代码 | [安全基线](guides/SECURITY_BASELINE.md) |
 | 核查 DSH 版本适配 | [0.2.2 适配记录](guides/DSH_022_ADAPTATION.md) |
 | 查找目录或脚本用途 | [FOLDER_MAP](FOLDER_MAP.md) |
-| 报告安全问题 | [安全策略](../SECURITY.md) |
+| 报告安全问题 | [安全策略](SECURITY.md) |

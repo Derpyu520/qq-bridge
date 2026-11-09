@@ -18,6 +18,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { resolveConfigPath } from '../src/config-path.js';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { NodeApiClient, unwrap, discoverDshLaunchToken } from '../src/dsh-client.js';
@@ -36,7 +37,7 @@ function check(label, cond, extra = '') {
 
 function readAuth() {
   try {
-    const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
+    const cfg = JSON.parse(fs.readFileSync(resolveConfigPath(ROOT), 'utf8'));
     return {
       token: cfg.dsh?.authToken || discoverDshLaunchToken(),
       header: cfg.dsh?.authHeader,

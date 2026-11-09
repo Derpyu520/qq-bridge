@@ -1,0 +1,4 @@
+# 大体积演示视频（10.93 MB）：改由 Release 附件托管，README 有链接。
+# 注意：移除只影响此后提交、--depth 1 克隆与 Release 的 Source zip；
+# 历史中的旧 blob 仍在，完整 clone 的体积要等历史重写后才会下降。
+/project-intro.mp4

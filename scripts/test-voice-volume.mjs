@@ -33,7 +33,6 @@ function run(bin, args, timeoutMs = 60000) {
   });
 }
 const ffmpeg = (args, t) => run(process.env.FFMPEG_PATH || 'ffmpeg', args, t);
-const ffprobe = (args, t) => run(process.env.FFPROBE_PATH || 'ffprobe', args, t);
 
 /**
  * 自己算 WAV 的 RMS 电平（dBFS）——不依赖 ffmpeg 的统计输出。

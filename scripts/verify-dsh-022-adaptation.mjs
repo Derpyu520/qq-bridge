@@ -50,6 +50,7 @@
 // 以免覆盖运行期间用户或其他客户端的并发更改。
 import fs from 'node:fs';
 import path from 'node:path';
+import { resolveConfigPath } from '../src/config-path.js';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { dshHome, dshModulesDir } from './dsh-modules.mjs';
@@ -218,7 +219,7 @@ check('qq-mode-console link 依赖已注册', String(pkg.dependencies['qq-mode-c
 check('qq-mode-console 已 link 进 node_modules', fs.existsSync(path.join(DSH_HOME, 'profiles/web/node_modules/qq-mode-console')));
 
 // ── 3. 仓库配置：模型 ───────────────────────────────────────────────────────
-const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
+const cfg = JSON.parse(fs.readFileSync(resolveConfigPath(ROOT), 'utf8'));
 check('config.json dsh.model = deepseek-flash', cfg.dsh?.model === 'deepseek-flash', `当前 ${cfg.dsh?.model}`);
 const bridgeSrc = fs.readFileSync(path.join(ROOT, 'src/bridge.js'), 'utf8');
 // 只看可执行代码，忽略注释（注释里会提到旧名做历史说明）。

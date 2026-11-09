@@ -10,11 +10,12 @@
 import { SnowLumaWebSocketClient } from '@snowluma/sdk';
 import fs from 'node:fs';
 import path from 'node:path';
+import { resolveConfigPath } from '../src/config-path.js';
 import { fileURLToPath } from 'node:url';
 import { discoverSnowLumaConnection } from '../src/snowluma-conn.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
+const cfg = JSON.parse(fs.readFileSync(resolveConfigPath(ROOT), 'utf8'));
 const timeoutMs = (Number(process.argv[2]) || 45) * 1000;
 
 // 用项目自己的自发现拿「当前真正可用」的 token 与端点。

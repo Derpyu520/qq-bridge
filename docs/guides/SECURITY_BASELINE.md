@@ -1,7 +1,7 @@
 # 安全基线与威胁模型（qq-bridge）
 
 > 本文把项目里**已经实现的**安全边界、**已知的**残余风险、以及**每次发布必须回归**的
-> 检查项集中到一处。与之配套的承诺性文档是 [../../RULES.md](../../RULES.md)（面向使用者的
+> 检查项集中到一处。与之配套的承诺性文档是 [../RULES.md](../RULES.md)（面向使用者的
 > 权限说明）；本文偏工程实现，供改动代码前后对照。
 >
 > 维护规则：任何改动如果改变了下面任一条目，**必须在同一个 PR 里更新本文**。
@@ -44,7 +44,7 @@
 | 发送强制白名单 | 所有 `/api/send/*`、`/api/socialV2/send-*` | 目标必须命中 `allow.groups` / `allow.private`（每次都重新校验，不做缓存） |
 | 动态 ACL | `resolveVoicePathForV2()` / `voicePathInsideLibrary()` | 语音只能取语音库目录内的文件；贴纸只能发收藏库内的表情；图片只能读 SnowLuma home 内的本地文件（realpath 复核防符号链接逃逸） |
 | 工具参数 | MCP 注册与执行期会话守卫 | 未知键严格拒绝；支持的别名须显式声明、无冲突并归一化，目标别名同样接受可信会话绑定检查 |
-| **只探测、不部署**（L6 设计不变量） | `mcp-host-server.js` | 该 MCP server **只提供 `snowluma_status`（只读探活 `get_login_info`）**。⚠️ **v0.1.5 起删除了 `start_snowluma` / `stop_snowluma` 与 `snowluma.allowProcessControl`**：SnowLuma EULA §5.4 规定「将其并入第三方安装包或 Docker 镜像、**通过自动化脚本部署**」须事先书面授权，原生组件属**专有组件**。⇒ 本程序不安装、不复制、不打包、不程序化启停 SnowLuma；用户自行安装与启动。详见 [NOTICE](../../NOTICE.md) |
+| **只探测、不部署**（L6 设计不变量） | `mcp-host-server.js` | 该 MCP server **只提供 `snowluma_status`（只读探活 `get_login_info`）**。⚠️ **v0.1.5 起删除了 `start_snowluma` / `stop_snowluma` 与 `snowluma.allowProcessControl`**：SnowLuma EULA §5.4 规定「将其并入第三方安装包或 Docker 镜像、**通过自动化脚本部署**」须事先书面授权，原生组件属**专有组件**。⇒ 本程序不安装、不复制、不打包、不程序化启停 SnowLuma；用户自行安装与启动。详见 [NOTICE](../NOTICE.md) |
 
 ### 3. 出站内容（模型能说什么、能发什么）
 

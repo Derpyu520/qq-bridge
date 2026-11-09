@@ -4,6 +4,7 @@
 // 3) 可选 live 模式：QQ_BRIDGE_TEST_LIVE=1 时调用 SnowLuma 拉取收藏表情并验证 safeFetchBuffer 可抓图
 import fs from 'node:fs';
 import path from 'node:path';
+import { resolveConfigExamplePath } from '../src/config-path.js';
 import { fileURLToPath } from 'node:url';
 import {
   normalizeStickerEntry,
@@ -86,7 +87,7 @@ console.log('## sticker-lib 纯函数');
 
 console.log('## 配置文件');
 {
-  const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.example.json'), 'utf8'));
+  const cfg = JSON.parse(fs.readFileSync(resolveConfigExamplePath(ROOT), 'utf8'));
   const tools = cfg.socialV2?.tools ?? {};
   ok(tools.listStickers === true, 'config listStickers=true');
   ok(tools.getStickerImage === true, 'config getStickerImage=true');

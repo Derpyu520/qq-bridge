@@ -14,6 +14,8 @@
 // `settings/describe` 才认账。绝不因为「这个本地端口开着」就切过去——
 // 那会把桥接的请求送给用户机器上任何一个恰好占着端口的本地服务。
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { resolveConfigPath } from './config-path.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
@@ -170,7 +172,8 @@ export async function discoverDshBaseUrl({ current, log = () => {} } = {}) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const configured = (() => {
     try {
-      const file = JSON.parse(readFileSync(new URL('../config.json', import.meta.url), 'utf8'));
+      const root = fileURLToPath(new URL('..', import.meta.url));
+      const file = JSON.parse(readFileSync(resolveConfigPath(root), 'utf8'));
       return file?.dsh?.baseUrl ?? '';
     } catch {
       return '';
