@@ -1,0 +1,39 @@
+# qq-bridge 的 MCP 行：由 bundle 拥有，不由安装器注入。
+#
+# 为什么是 bundle 而不是写 profile 的 cordis.patch.yml：
+#   profile patch 是用户覆盖层，安装器写它就必须整文件读写；
+#   而整文件 yaml.dump 会抹掉注释和其它安装器的标记，还会和 DSH 设置页并发丢更新。
+#   bundle 自带的 patch 随包发布、只读，`plugin_manager install_bundle` 只改
+#   profile 的 package.json，不碰 profile patch。
+#
+# 改这里的行之后：重新跑一次 `plugin_manager install_bundle`（link 安装会重新读这个文件），
+# 或者重启 DSH。
+
+- insert:
+    - id: mcp-snowluma
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: snowluma
+        transport: stdio
+        command: 'C:\Program Files\nodejs\node.exe'
+        args:
+          - 'C:\qq机器人\qq-bridge\src\mcp-snowluma-safe.js'
+        toolCallTimeoutMs: 725000
+- insert:
+    - id: mcp-snowluma-host
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: snowluma-host
+        transport: stdio
+        command: 'C:\Program Files\nodejs\node.exe'
+        args:
+          - 'C:\qq机器人\qq-bridge\src\mcp-host-server.js'
+- insert:
+    - id: mcp-web-search-safe
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: web-search-safe
+        transport: stdio
+        command: 'C:\Program Files\nodejs\node.exe'
+        args:
+          - 'C:\qq机器人\qq-bridge\src\mcp-web-search-safe.js'
