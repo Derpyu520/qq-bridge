@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 import {resolveInstalledPreset, synchronizePreset} from '../src/preset-sync.js';
 import {renderPatch} from './build-agent-preset-patches.mjs';
 import {bridgeHarness} from './audit-bridge-harness.mjs';

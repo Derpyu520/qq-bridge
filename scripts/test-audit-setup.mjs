@@ -12,7 +12,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const parserRoot = process.env.QQ_BRIDGE_TEST_YAML_ROOT || path.dirname(require.resolve('js-yaml/package.json'));
-const yaml = (await import(pathToFileURL(path.join(parserRoot, 'dist/js-yaml.mjs')).href)).default;
+// js-yaml 5 的 ESM 入口没有 default export，用命名空间导入（load/dump 照常可用）。
+const yaml = await import(pathToFileURL(path.join(parserRoot, 'dist/js-yaml.mjs')).href);
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-bridge-audit-setup-'));
 let failures = 0;
 

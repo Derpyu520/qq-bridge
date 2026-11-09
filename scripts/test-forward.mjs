@@ -101,7 +101,7 @@ const consoleTokenFile = path.join(ROOT, 'state', 'console-token');
 const socialV2File = path.join(ROOT, 'state', 'social-v2.json');
 if (process.env.QQ_BRIDGE_TEST_LIVE === '1' && fs.existsSync(consoleTokenFile) && fs.existsSync(socialV2File)) {
   try {
-    const config = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
+    const config = JSON.parse(fs.readFileSync(resolveConfigPath(ROOT), 'utf8'));
     const social = JSON.parse(fs.readFileSync(socialV2File, 'utf8'));
     // 只挑**当前白名单内**的会话来探活：以前盲取 conversations[0]，群被移出白名单后
     // 端点会先撞「当前模式不允许读取该会话」(403)，永远到不了「未见过的 forward id」(404) 那条断言，

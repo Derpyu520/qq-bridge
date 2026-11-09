@@ -26,7 +26,7 @@ import os from 'node:os';
 import path from 'node:path';
 import https from 'node:https';
 import { URL } from 'node:url';
-import YAML from 'js-yaml';
+import * as YAML from 'js-yaml';
 import { resolveSafeAddresses, safeFetch } from './safe-fetch.js';
 
 const DEFAULT_BASE_URL = 'https://api.deepseek.com/anthropic/v1';

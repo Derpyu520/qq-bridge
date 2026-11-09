@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { test } from 'node:test';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 import {
   PRESET_BLOCKING_SUBSTRINGS,
   PRESET_REQUIRED_MARKERS,

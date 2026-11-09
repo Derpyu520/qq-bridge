@@ -22,6 +22,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { resolveConfigPath } from '../src/config-path.js';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { hardenDir, hardenFile, isHardened, manualDirCommand } from '../src/state-acl.mjs';
@@ -40,9 +41,8 @@ function sayAlways(msg) { console.log(msg); }
 // state/ 之外的凭据文件：config.json 里是真实的 SnowLuma OneBot accessToken ——
 // 拿到它等于拿到 QQ 账号的收发控制权。它跟 state/ 一样在仓库树里，继承来的 ACE 同样
 // 对 BUILTIN\Users 可读，所以一并收紧。
-const SECRET_FILES = ['config.json']
-  .map((name) => path.join(ROOT, name))
-  .filter((file) => fs.existsSync(file));
+// config/ 新布局与根目录旧布局都收：resolver 返回当前实际生效的那份。
+const SECRET_FILES = [resolveConfigPath(ROOT)].filter((file) => fs.existsSync(file));
 
 /** 用 UAC 提权跑一次自己，然后回读确认。返回 { ok, detail }。 */
 function elevateAndRetry() {

@@ -18,7 +18,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(__dirname, '..');
@@ -64,13 +64,15 @@ function sourceDirFor(name) {
 class JsExpression {
   constructor(source) { this.source = String(source); }
 }
-const JS_EXPRESSION_TYPE = new yaml.Type('tag:yaml.org,2002:js', {
-  kind: 'scalar',
-  construct: (data) => new JsExpression(data),
-  instanceOf: JsExpression,
+// js-yaml 5 的自定义标签：resolve 只在显式 `!!js` 时接手（普通标量返回 NOT_RESOLVED），
+// dump 时靠 identify/represent 原样输出 `!!js <源码>`。
+const JS_EXPRESSION_TAG = yaml.defineScalarTag('tag:yaml.org,2002:js', {
+  resolve: (source, isExplicit) => (isExplicit ? new JsExpression(source) : yaml.NOT_RESOLVED),
+  identify: (value) => value instanceof JsExpression,
   represent: (value) => value.source,
 });
-export const PATCH_SCHEMA = yaml.DEFAULT_SCHEMA.extend([JS_EXPRESSION_TYPE]);
+// 基线用 CORE_SCHEMA（YAML 1.2）：preset 源里只有普通标量/列表/映射与 `!!js`。
+export const PATCH_SCHEMA = yaml.CORE_SCHEMA.withTags(JS_EXPRESSION_TAG);
 
 /**
  * 比较用投影：把 `!!js` 的 JsExpression 变成普通对象 `{ __js: 源码 }`。

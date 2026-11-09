@@ -2,12 +2,13 @@
 // （initialize → tools/list → tools/call），确认动作执行工具可用。
 import fs from 'node:fs';
 import path from 'node:path';
+import { resolveConfigPath } from '../src/config-path.js';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const cfg = JSON.parse(fs.readFileSync(path.resolve(__dirname, '..', 'config.json'), 'utf8'));
+const cfg = JSON.parse(fs.readFileSync(resolveConfigPath(path.resolve(__dirname, '..')), 'utf8'));
 const endpoint = String(cfg.snowluma?.httpUrl || 'http://127.0.0.1:3000/').replace(/\/?$/, '/');
 const token = cfg.snowluma?.accessToken || '';
 

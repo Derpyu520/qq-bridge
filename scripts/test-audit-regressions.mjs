@@ -877,20 +877,29 @@ await test('R11 mdToPlain 保留 * 列表与乘法式，且拒绝二次方退化
   assert.equal(mdToPlain('2 * 3 * 4 = 24'), '2 * 3 * 4 = 24', '乘法式里的 * 不能被当成斜体删掉');
   assert.equal(mdToPlain('**粗体** 与 *斜体*'), '粗体 与 斜体', '正常的粗体/斜体仍然要去标记');
 
+  // 用 **CPU 时间**而不是墙钟判定：CI/本机高负载时墙钟会被调度放大
+  // （load average 9+ 时同一段纯 CPU 代码能从 50ms 涨到 600ms+，产生假红），
+  // 但真正的 O(n²) 退化在 CPU 时间上依然会明显爆掉。
   const evil = `${'!['.repeat(20000)}${'[a]('.repeat(10000)}`;
-  const t0 = Date.now();
+  const t0 = process.hrtime.bigint();
+  const cpu0 = process.cpuUsage();
   mdToPlain(evil);
-  const elapsed = Date.now() - t0;
-  assert.ok(elapsed < 500, `畸形 Markdown 不得卡住事件循环（实际 ${elapsed}ms）`);
+  const wallMs = Number(process.hrtime.bigint() - t0) / 1e6;
+  const cpu = process.cpuUsage(cpu0);
+  const cpuMs = (cpu.user + cpu.system) / 1000;
+  assert.ok(cpuMs < 500, `畸形 Markdown 不得卡住事件循环（CPU ${cpuMs.toFixed(1)}ms / 墙钟 ${wallMs.toFixed(0)}ms）`);
 });
 
 // ── R12. 黑话候选扫描次数有上限 ─────────────────────────────────────────────
 await test('R12 extractJsonArray 对大量 "[" 不退化（扫描次数有上限）', async () => {
-  const t0 = Date.now();
+  const t0 = process.hrtime.bigint();
+  const cpu0 = process.cpuUsage();
   const out = extractJsonArray('['.repeat(100000));
-  const elapsed = Date.now() - t0;
+  const wallMs = Number(process.hrtime.bigint() - t0) / 1e6;
+  const cpu = process.cpuUsage(cpu0);
+  const cpuMs = (cpu.user + cpu.system) / 1000;
   assert.equal(out, null);
-  assert.ok(elapsed < 1000, `扫描必须有界（实际 ${elapsed}ms）`);
+  assert.ok(cpuMs < 1000, `扫描必须有界（CPU ${cpuMs.toFixed(1)}ms / 墙钟 ${wallMs.toFixed(0)}ms）`);
 });
 
 // ── R13. 表情文本截断不切开代理对 ──────────────────────────────────────────

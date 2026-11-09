@@ -66,9 +66,9 @@
     "@deepseek-ai/dsh-host-apiproxy": "0.1.1-rc.2",
     "@deepseek-ai/schemastery": "^3.18.1",
     "@modelcontextprotocol/sdk": "^1.32.2",
-    "@snowluma/mcp": "^1.14.20",
-    "@snowluma/sdk": "^1.14.20",
-    "js-yaml": "^4.3.2",
+    "@snowluma/mcp": "^2.4.2",
+    "@snowluma/sdk": "^2.4.2",
+    "js-yaml": "^5.5.0",
     "zod": "^4.6.7"
   }
 }

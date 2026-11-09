@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 import {
   BUNDLE_DIR, GUARD_SPECIFIER, PATCH_SCHEMA, PRESETS, REPO_ROOT, plainForCompare,
   buildPatches, patchFileFor, presetRowId,

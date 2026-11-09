@@ -2,11 +2,12 @@
 // 验证地址、端口、accessToken 是否正确。成功即打印 ✅ 并退出。
 import fs from 'node:fs';
 import path from 'node:path';
+import { resolveConfigPath } from '../src/config-path.js';
 import { fileURLToPath } from 'node:url';
 import { SnowLumaWebSocketClient } from '@snowluma/sdk';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const cfg = JSON.parse(fs.readFileSync(path.resolve(__dirname, '..', 'config.json'), 'utf8'));
+const cfg = JSON.parse(fs.readFileSync(resolveConfigPath(path.resolve(__dirname, '..')), 'utf8'));
 const { wsUrl, accessToken } = cfg.snowluma;
 
 console.log(`测试连接 ${wsUrl}（token ${accessToken ? '已配置' : '未配置'}）…`);
