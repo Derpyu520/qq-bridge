@@ -1,5 +1,5 @@
-import { resolveInstalledPreset, synchronizePreset } from './preset-sync.js';
-import { renderPatch } from '../scripts/build-agent-preset-patches.mjs';
+import { resolveInstalledPreset, synchronizePreset } from './dsh/preset-sync.js';
+import { renderPatch } from '../scripts/setup/build-agent-preset-patches.mjs';
 // QQ ↔ DeepSeek Harness 桥接主程序。
 //
 // 链路：
@@ -13,22 +13,22 @@ import http from 'node:http';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { extractPresetPrefix, presetPromptBlockers, presetPromptWarnings, renderPresetPromptYaml } from './preset-prompt.js';
-import { GEN1_ROLE_LINE_RE, parseRoleSections, roleCharStats, roleSectionReport, selectRoleText } from './role-card.js';
+import { extractPresetPrefix, presetPromptBlockers, presetPromptWarnings, renderPresetPromptYaml } from './text/preset-prompt.js';
+import { GEN1_ROLE_LINE_RE, parseRoleSections, roleCharStats, roleSectionReport, selectRoleText } from './text/role-card.js';
 import { fileURLToPath } from 'node:url';
 import { SnowLumaWebSocketClient, text } from '@snowluma/sdk';
-import { NodeApiClient, unwrap, createTurnCollector, discoverDshLaunchToken } from './dsh-client.js';
-import { discoverDshBaseUrl } from './dsh-endpoint.js';
-import { mdToPlain, splitForQQ, truncateText, truncateTextTail } from './md-to-plain.js';
-import { SENSITIVE_RE } from './sensitive.js';
-import { looksLikeUnfinished } from './v2-wait.js';
-import { compactModelMessage, describeAge, sanitizeUntrustedText } from './qq-model-view.js';
-import { safeFetchBuffer, looksLikeImageBuffer } from './safe-fetch.js';
-import { normalizeImageForModel } from './media-normalize.js';
-import { AUDIO_EXTS, cleanupTemp, describeAudio, formatBytes, formatDuration, inspectAudio, listAudioFiles, parseTargetKey, processAudioVolume, resolveAudioProcessing, resolveAudioSource, safeJoinLibrary } from './send-voice-lib.js';
-import { discoverSnowLumaConnection, persistSnowLumaEndpoint, persistToken } from './snowluma-conn.js';
-import { hardenDir, manualDirCommand } from './state-acl.mjs';
-import { extractForwardIds, forwardIdFromData, sanitizeForwardId, formatForwardResponse } from './forward.js';
+import { NodeApiClient, unwrap, createTurnCollector, discoverDshLaunchToken } from './dsh/dsh-client.js';
+import { discoverDshBaseUrl } from './dsh/dsh-endpoint.js';
+import { mdToPlain, splitForQQ, truncateText, truncateTextTail } from './text/md-to-plain.js';
+import { SENSITIVE_RE } from './text/sensitive.js';
+import { looksLikeUnfinished } from './qq/v2-wait.js';
+import { compactModelMessage, describeAge, sanitizeUntrustedText } from './qq/qq-model-view.js';
+import { safeFetchBuffer, looksLikeImageBuffer } from './util/safe-fetch.js';
+import { normalizeImageForModel } from './media/media-normalize.js';
+import { AUDIO_EXTS, cleanupTemp, describeAudio, formatBytes, formatDuration, inspectAudio, listAudioFiles, parseTargetKey, processAudioVolume, resolveAudioProcessing, resolveAudioSource, safeJoinLibrary } from './media/send-voice-lib.js';
+import { discoverSnowLumaConnection, persistSnowLumaEndpoint, persistToken } from './qq/snowluma-conn.js';
+import { hardenDir, manualDirCommand } from './util/state-acl.mjs';
+import { extractForwardIds, forwardIdFromData, sanitizeForwardId, formatForwardResponse } from './qq/forward.js';
 import {
   DEFAULT_DOWNLOAD_DIR,
   DEFAULT_MAX_FILE_BYTES,
@@ -41,11 +41,11 @@ import {
   isTextLikeFileName,
   pickGroupFileFromList,
   sanitizeQQFileName
-} from './qq-file-lib.js';
-import { createQQFileService } from './qq-file.js';
-import { resolveConfigExamplePath, resolveConfigPath } from './config-path.js';
-import { resolvePriceTable } from './model-prices.js';
-import { createTokenLedger } from './token-ledger.js';
+} from './qq/qq-file-lib.js';
+import { createQQFileService } from './qq/qq-file.js';
+import { resolveConfigExamplePath, resolveConfigPath } from './util/config-path.js';
+import { resolvePriceTable } from './dsh/model-prices.js';
+import { createTokenLedger } from './dsh/token-ledger.js';
 import {
   loadSlang,
   saveSlang,
@@ -61,7 +61,7 @@ import {
   slangScopeVisible,
   SLANG_STATUS,
   SLANG_MAX_ENTRIES
-} from './slang-learner.js';
+} from './text/slang-learner.js';
 import {
   loadStickerStore,
   saveStickerStore,
@@ -73,7 +73,7 @@ import {
   buildStickerStrategyHint,
   applyStickerNote,
   markStickerUsed
-} from './sticker-lib.js';
+} from './qq/sticker-lib.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -246,7 +246,7 @@ function loadOrCreateConsoleToken() {
  * 这台机器的用户都能读走控制台令牌、Snowluma accessToken、各会话 agentToken 和全部 QQ 聊天记录。
  * 这里用 icacls 切断 state/ 的继承链，只保留「当前用户 + SYSTEM + Administrators」。
  *
- * ⚠️ 具体实现已抽到 `src/state-acl.mjs`（与 scripts/harden-state-acl.mjs 共用同一份）。
+ * ⚠️ 具体实现已抽到 `src/state-acl.mjs`（与 scripts/ops/harden-state-acl.mjs 共用同一份）。
  * 这里原本自带一份**会破坏数据**的实现：
  *   · `icacls DIR /inheritance:r /grant:r "u:(OI)(CI)F" /T` —— (OI)(CI) 是目录专用标志，
  *     套到 /T 展开的文件上会失败，而 /inheritance:r 已摘掉文件的继承 ACE，净结果是
@@ -3202,7 +3202,7 @@ async function main() {
     if (dshPresetIds.includes(wanted)) return wanted;
     log(`⚠️ preset "${wanted}" 不在 DSH 可用清单（${dshPresetIds.join(', ')}）中`);
     if (strict) {
-      log(`⛔ 群聊/仿真会话缺少 preset "${wanted}"，拒绝回退到 DSH 默认 preset（会把本地工具暴露给 QQ 群）；请运行 node scripts/setup-dsh.mjs 并重启 DSH`);
+      log(`⛔ 群聊/仿真会话缺少 preset "${wanted}"，拒绝回退到 DSH 默认 preset（会把本地工具暴露给 QQ 群）；请运行 node scripts/setup/setup-dsh.mjs 并重启 DSH`);
       return '';
     }
     return dshDefaultPreset || '';
@@ -4135,7 +4135,7 @@ async function main() {
           const rs = readRoleState();
           const summaries = roleSummaries();
           sendJson({
-            // roles 保持「人格名字符串数组」的既有契约（scripts/test-console.mjs 等调用方依赖它）；
+            // roles 保持「人格名字符串数组」的既有契约（scripts/tests/live/test-console.mjs 等调用方依赖它）；
             // 富信息放在 summaries 里，新老调用方互不影响。
             roles: summaries.map((role) => role.name),
             summaries,
@@ -9270,7 +9270,7 @@ async function main() {
       const strictPreset = currentMode !== 'closed-agent';
       if (strictPreset && !preset) {
         const wanted = currentMode === 'reserved2' ? (cfg.socialV2?.agentPreset || cfg.agentPreset) : cfg.agentPreset;
-        throw new Error(`拒绝为 ${key} 创建会话：模式 ${currentMode} 需要 preset "${wanted}"，但它不在 DSH 可用清单中（${dshPresetIds.join(', ') || '未知'}）。回退到 DSH 默认 preset 会把本地工具暴露给 QQ 群；请先运行 node scripts/setup-dsh.mjs 并重启 DSH。`);
+        throw new Error(`拒绝为 ${key} 创建会话：模式 ${currentMode} 需要 preset "${wanted}"，但它不在 DSH 可用清单中（${dshPresetIds.join(', ') || '未知'}）。回退到 DSH 默认 preset 会把本地工具暴露给 QQ 群；请先运行 node scripts/setup/setup-dsh.mjs 并重启 DSH。`);
       }
       // 归组：所有 QQ 会话挂到同一个 workspace（幂等创建），GUI 里不再散落「未分组」
       // 创建顺序有安全含义：
@@ -13499,7 +13499,7 @@ process.on('unhandledRejection', (error) => {
  * emitter 逐个调用监听器、不做任何保护。stdout 的读者（守护 cmd 窗口）一旦消失，
  * `console.log` 会抛 EPIPE —— 这个异常会一路穿过 log() → 监听器 → emit → socket 回调，
  * 变成 uncaughtException。没有兜底的话整个 24/7 进程直接死掉且不留堆栈，
- * 在 start.bat 的重启循环里就变成「每 5 秒崩一次」。
+ * 在启动器（npm start）的重启循环里就变成「每 5 秒崩一次」。
  */
 process.on('uncaughtException', (error) => {
   try { log('致命异常（进程即将退出）:', error?.stack ?? error?.message ?? error); } catch {}

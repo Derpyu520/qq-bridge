@@ -82,7 +82,7 @@ repository**」，而 `packages/sdk`、`packages/mcp` 位于该仓库之内，�
 
 1. 仓库内不含、不分发上述两个包的代码。`node_modules/` 已在 `.gitignore` 中；已跟踪文件内不包含
    任何原生二进制（`.node` / `.dll` / `.so`），亦不包含 `@snowluma` 路径下的文件。
-2. `npm install` 的 `postinstall` 会运行 `scripts/patch-snowluma-sdk.mjs`，对
+2. `npm install` 的 `postinstall` 会运行 `scripts/setup/patch-snowluma-sdk.mjs`，对
    `node_modules/@snowluma/{sdk,mcp}` 的 `dist/**/*.js` 执行一次机械修补（为相对导入补充 `.js`
    扩展名，规避该两包自身的 ESM 打包缺陷）。该修补仅作用于本机安装副本，不进入本仓库；
    SnowLuma 许可 §2(c) 允许为自身非商业使用而修改。**本软件不修改 SnowLuma 应用本体，
@@ -146,7 +146,7 @@ SnowLuma 采用源码可见的非商业许可（[LICENSE](https://github.com/Sno
 
 该约束已作为设计不变量 L6 记录于本项目的[安全基线](guides/SECURITY_BASELINE.md)。
 原 `start_snowluma` / `stop_snowluma` 工具与 `snowluma.allowProcessControl` 配置项已于 v0.1.5 移除，
-并有回归断言（`scripts/test-audit-setup-guards.mjs`）防止回退。
+并有回归断言（`scripts/audit/test-audit-setup-guards.mjs`）防止回退。
 
 ### 3.6 构成本软件明示排除的使用形态
 

@@ -19,9 +19,9 @@ DSH/                         ← 工作区根（不是仓库根）
 
 | 路径 | 作用 | 修改注意事项 |
 | --- | --- | --- |
-| `src/` | 桥接主程序、DSH 客户端、MCP server、共享库和核心模块 | 包含 `.js` 与 `.mjs`。`bridge.js` 约 1.3 万行；`qq-file-lib.js` 是 QQ 文件共享纯函数、`qq-file.js` 是 QQ 文件服务（下载/落盘/上传）；`state-acl.mjs`、`core/*.mjs` 同样属于源码 |
+| `src/` | 桥接主程序与共享模块 | 入口 `bridge.js` / `self-test.js` / `mcp-*.js` 留在根目录（MCP server 由 DSH 按路径启动，不能随便挪）；按职责分目录：`dsh/`（客户端/端点/preset/账本/价目）、`qq/`（文件/转发/表情/连接/等待）、`media/`（图片归一/语音）、`text/`（Markdown/脱敏/人格/提示词/黑话）、`web/`（联网搜索）、`util/`（安全抓取/ACL/配置路径）；`core/` 是 session-router |
 | `scripts/` | 离线回归、安装、诊断、探针和运维脚本 | 文件以 Git 跟踪清单为准；新增回归脚本应加入 `scripts/test-audit.mjs` |
-| `dsh/agent-presets/` | `qq-chat` / `qq-chat-v2` / `qq-chat-tools` 的权威 preset 源 | 修改后运行 `node scripts/build-agent-preset-patches.mjs` 重新生成 bundle patch；`qq-*.mjs` 只是 re-export 壳，实现文件在 `plugins/qq-agent-presets/` |
+| `dsh/agent-presets/` | `qq-chat` / `qq-chat-v2` / `qq-chat-tools` 的权威 preset 源 | 修改后运行 `node scripts/setup/build-agent-preset-patches.mjs` 重新生成 bundle patch；`qq-*.mjs` 只是 re-export 壳，实现文件在 `plugins/qq-agent-presets/` |
 | `plugins/` | DSH bundle：`qq-agent-presets` 与 `qq-mode-console` | 修改后需重新同步安装并重启 DSH；`qq-mode-console` 目前只有 host 半 |
 | `public/console.html` | 桥接自带本地控制台 | 修改前端契约时同步 fixture、基线和离线回归 |
 | `roles/` | 人格卡与人格写作说明 | 属于用户可编辑内容；权限和注入规则见 `docs/RULES.md`、`roles/README.md` |
@@ -34,33 +34,34 @@ DSH/                         ← 工作区根（不是仓库根）
 
 ## 二、`scripts/` 命名与用途
 
-以下是主要约定，不是允许随意删除的清单。是否仍被使用应结合 `package.json`、
-`scripts/test-audit.mjs` 和实际引用判断。
+脚本索引（按前缀分类、标注 audit/npm 入口）见 [scripts/README.md](../scripts/README.md)，
+由 `node scripts/setup/gen-scripts-index.mjs` 生成；`scripts/tests/offline/test-scripts-index.mjs` 会在
+`test:audit` 里检查索引是否过期。下面是约定摘要，不是允许随意删除的清单；是否仍被使用
+应结合 `package.json`、`scripts/test-audit.mjs` 和实际引用判断。
 
-| 前缀 / 文件 | 用途与注意事项 |
+| 目录 | 用途与注意事项 |
 | --- | --- |
-| `test-*.mjs` | 自动化测试。只有加入 `scripts/test-audit.mjs` 的测试才会随 `npm run test:audit` 执行 |
-| `test-audit-*.mjs` | 离线审计子模块，覆盖桥接、协议、网络、运行时、权限和安装边界 |
-| `test-dsh-*.mjs` | DSH 契约测试；有些使用离线夹具，有些需要活的 DSH，环境要求以各文件和 `package.json` 为准 |
-| `console-ui-*` | 控制台离线预览、fixture 和 API 基线；说明见 [CONSOLE-UI-TESTING](guides/CONSOLE-UI-TESTING.md) |
-| `setup-*.mjs` | DSH 插件、preset 与 MCP 的幂等安装 |
-| `verify-*.mjs` | DSH 适配和 persona 一致性检查 |
-| `probe-*.mjs` | 本机兼容性检查，鉴权路径以各脚本为准（部分使用 `probe-auth.mjs`）。`probe-snowluma-heartbeat` 只读；`probe-020-settings` 将读取的 mode 原值写回以验证写入路径；`probe-020-protocol` 会创建测试会话 / 工作区，结束后归档会话、删除工作区并清理临时目录。可能连接真实本机服务，不属于纯离线套件 |
-| `scan-*.mjs` | 工具名、依赖或其他静态对账 |
-| `privacy-scan.mjs` | 工作树与历史隐私扫描；本地规则模板为 `privacy-rules.example.json` |
-| `patch-*.mjs` | 兼容性修补。`patch-snowluma-sdk.mjs` 是 `postinstall` 依赖，不能当作一次性脚本删除 |
-| `stop-bridge-instance.mjs` | 供 `restart.bat` 使用；结合锁 PID、控制台端口和当前仓库绝对脚本路径验证实例，无法证明归属时拒绝停止 |
-| `harden-state-acl.mjs`、`diagnose-acl.mjs` | Windows ACL 收紧与只读诊断 |
-| `send-*.mjs` | 可能向真实 QQ 发送内容的小工具，运行前必须核对目标和环境 |
-| `cleanup-*`、`fix-*`、`diag-*`、`debug-*` | 清理、一次性修复或调试脚本；删除前仍需检查引用，不能仅凭前缀认定无用 |
+| `audit/` | 离线审计子模块（桥接、协议、网络、运行时、权限、安装边界）与 `audit-bridge-harness.mjs` 夹具 |
+| `tests/offline/` | 离线测试。只有登记在 `scripts/test-audit.mjs` 清单里的才会随 `npm run test:audit` 执行 |
+| `tests/live/` | 需要 DSH / SnowLuma / QQ 的实时测试（`test-dsh-*`、`test-mcp-*`、`test-onebot-connection` 等），环境要求见各文件头 |
+| `probes/` | 探针与适配校验（`probe-*`、`verify-*`、`probe-auth`/`adaptation-probe-helpers`）。可能连接真实本机服务，不属于纯离线套件；`probe-snowluma-heartbeat` 只读，`probe-020-settings` 会写回原值，`probe-020-protocol` 会建测试会话/工作区并自清理 |
+| `setup/` | 安装、生成与修补：`setup-dsh`、`build-agent-preset-patches`、`patch-snowluma-sdk`（postinstall 依赖，不能删）、`gen-scripts-index` |
+| `ops/` | 运维、诊断与扫描：`privacy-scan`（规则模板 `privacy-rules.example.json`）、`check-onebot-status`、`diagnose-acl`、`harden-state-acl`、`scan-dsh-tool-names`、`stop-bridge-instance`（供 `npm run stop` / `npm run restart` 使用） |
+| `console/` | 控制台离线预览、fixture 与 API 基线；说明见 [CONSOLE-UI-TESTING](guides/CONSOLE-UI-TESTING.md) |
+| `send/` | 可能向真实 QQ 发送内容的小工具，运行前必须核对目标和环境 |
+| `lib/` | 共享实现：`dsh-modules`、`dsh-tool-names`、`voice-tool-locator` |
+| `fixtures/` | 测试夹具资源 |
+| 根目录 | 只有 `test-audit.mjs`（运行入口）与 `README.md`（本索引导航） |
+
+一次性清理/修复/调试脚本（`cleanup-*`、`fix-*`、`diag-*`、`debug-*`）不提交，规则在 `scripts/.gitignore`。
 
 ### 不应误删的基础文件
 
 - `scripts/test-audit.mjs` 清单中的回归脚本；
-- `scripts/audit-bridge-harness.mjs`、`scripts/dsh-modules.mjs` 等共享实现；
-- `scripts/console-ui-*` 的 fixture 与基线；
-- `scripts/patch-snowluma-sdk.mjs`；
-- `scripts/privacy-rules.example.json`。
+- `scripts/audit/audit-bridge-harness.mjs`、`scripts/lib/dsh-modules.mjs` 等共享实现；
+- `scripts/console/` 的 fixture 与基线；
+- `scripts/setup/patch-snowluma-sdk.mjs`；
+- `scripts/ops/privacy-rules.example.json`。
 
 ## 三、公开与本地文档边界
 
@@ -88,12 +89,12 @@ docs/
 日志、`audio/`），各目录用各自的 `.gitignore` 管本目录的本地文件
 （`config/.gitignore`、`docs/.gitignore`、`docs/guides/.gitignore`、`scripts/.gitignore`、`assets/.gitignore`）。
 新增本机私密文件时，把规则加到**它所在目录**的 `.gitignore`，不要堆回根文件；
-`scripts/privacy-scan.mjs` 在 git 不可用时会逐目录读取这些规则做回退扫描。
+`scripts/ops/privacy-scan.mjs` 在 git 不可用时会逐目录读取这些规则做回退扫描。
 
 ## 四、仓库外独立语音工具
 
-`voice-tool/` 位于工作区而非本仓库。它可以复用本仓库的 `src/voice-core.js` 与
-`src/snowluma-conn.js`，但独立部署和运行。相关测试通过 `scripts/voice-tool-locator.mjs` 查找它；
+`voice-tool/` 位于工作区而非本仓库。它可以复用本仓库的 `src/media/voice-core.js` 与
+`src/qq/snowluma-conn.js`，但独立部署和运行。相关测试通过 `scripts/lib/voice-tool-locator.mjs` 查找它；
 目录不存在时应明确跳过对应检查，而不是把“缺少可选工具”误判为通过或失败。
 
 本地语音库、工具配置和运行状态仍按各自 `.gitignore` 规则处理，不应因文档整理而移动或删除。

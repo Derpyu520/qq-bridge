@@ -16,8 +16,8 @@
 //   - 响应体按字节流限量读取，避免超大响应拖垮进程。
 // - 搜索结果/抓取结果仅作为“候选解释”，最终是否入库仍由控制台人工确认。
 import path from 'node:path';
-import { safeFetch } from './safe-fetch.js';
-import { webSearch } from './web-search.js';
+import { safeFetch } from './util/safe-fetch.js';
+import { webSearch } from './web/web-search.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';

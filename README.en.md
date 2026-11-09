@@ -64,7 +64,7 @@ When running on the same machine, normally leave `dsh.authToken` empty so the br
 ### 3. Install DSH plugins
 
 ```powershell
-node scripts/setup-dsh.mjs
+node scripts/setup/setup-dsh.mjs
 ```
 
 This installs the chat presets and MCP tools into DSH. **It is required for a fresh installation.** Restart DSH afterwards. For profiles other than `web`, see the [setup guide](docs/guides/DSH_SETUP.md#安装步骤).
@@ -77,7 +77,7 @@ npm start
 
 Open the [local console](http://127.0.0.1:3100) and enter the console token. Automatically generated tokens are stored in `state/console-token`; if `consoleToken` is set in `config.json`, use that value instead. Startup logs do not print the token. New installations default to second-generation simulation (`reserved2`), which speaks selectively; switch to `chat` for an initial message test from an allowed conversation.
 
-On Windows, `start.bat` also runs the bridge with automatic restart. Closing its window stops it.
+`npm start` runs the bridge in watch mode (auto-restart 5 s after a crash); `npm run start:once` runs once; `npm run restart` verifies and stops this checkout's instance first; Ctrl+C or closing the terminal stops it.
 
 ## Documentation and development
 

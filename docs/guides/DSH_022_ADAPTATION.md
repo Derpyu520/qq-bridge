@@ -37,7 +37,7 @@
 
 ## 1. DSH API 兼容性实测：没动
 
-2026-11-05，`node scripts/verify-dsh-022-adaptation.mjs` 在**运行中的 0.2.2-rc.1** 上逐项断言，
+2026-11-05，`node scripts/probes/verify-dsh-022-adaptation.mjs` 在**运行中的 0.2.2-rc.1** 上逐项断言，
 **77 通过 / 0 失败**（含 8 项语法检查；workspace-write 沙箱下跳过语法检查，计 69）：
 
 这是当时版本的验证记录；2026-11-06 修复了探针错误处理并新增清理断言，当前脚本的
@@ -104,13 +104,13 @@
   - `LOCAL_EXECUTION_TOOLS` 增加 `apply_patch`；
   - 调度面改成 `schedule_create / schedule_list / schedule_view / schedule_edit`；
   - 删除 `schedule_update / schedule_delete`。
-- [scripts/test-preset-local-tools.mjs](../../scripts/test-preset-local-tools.mjs)：与守卫保持同一份名单。
-- [scripts/verify-dsh-022-adaptation.mjs](../../scripts/verify-dsh-022-adaptation.mjs)：新增 `GUARD_022_NAMES` 断言。
+- [scripts/tests/offline/test-preset-local-tools.mjs](../../scripts/tests/offline/test-preset-local-tools.mjs)：与守卫保持同一份名单。
+- [scripts/probes/verify-dsh-022-adaptation.mjs](../../scripts/probes/verify-dsh-022-adaptation.mjs)：新增 `GUARD_022_NAMES` 断言。
 
 ### 2.4 怎么验证
 
 1. `npm run scan:tool-names` —— 325 个包、83 个候选名；**悬空 0 / 未覆盖危险名 0**。
-2. `node scripts/test-preset-local-tools.mjs` —— 7/7，含“守卫名单里的每个名字都是
+2. `node scripts/tests/offline/test-preset-local-tools.mjs` —— 7/7，含“守卫名单里的每个名字都是
    DSH 真实注册的工具”。
 3. `verify:adaptation` 的 `GUARD_022_NAMES` 断言。
 4. 活体：`probe-tools.mjs qq-chat` / `qq-chat-v2` 都只调 MCP 工具、未出现本地工具调用
@@ -155,7 +155,7 @@ QQ 上表现为“它不理我了”，而桥接日志里没有报错。
 
 ### 4.2 改法
 
-[src/dsh-client.js](../../src/dsh-client.js) 的 `sendOpen` 请求体加：
+[src/dsh/dsh-client.js](../../src/dsh/dsh-client.js) 的 `sendOpen` 请求体加：
 
 ```js
 request: {
@@ -165,7 +165,7 @@ request: {
 }
 ```
 
-并在 [scripts/test-audit-protocol.mjs](../../scripts/test-audit-protocol.mjs) 加一条
+并在 [scripts/audit/test-audit-protocol.mjs](../../scripts/audit/test-audit-protocol.mjs) 加一条
 协议断言，防止以后又被“简化”掉。
 
 ### 4.3 为什么安全
@@ -274,7 +274,7 @@ CI 的 audit 主 job 保留原名、跑 Node 24；另加一条 Node 22 兼容 jo
 1. **先看 `state/tool-restrict.log` 的 `known global tools`**：新增名字基本等于
    1 个必须补的守卫条目；别只看 `restrict ok=` 的分子——大部分名字是 scoped 工具，
    restrict 对它们本来就抛错，要看失败样例里有没有全局工具。
-2. **升级后立刻跑 `node scripts/probe-tools.mjs qq-chat-v2`**：同时覆盖 persona 装配、
+2. **升级后立刻跑 `node scripts/probes/probe-tools.mjs qq-chat-v2`**：同时覆盖 persona 装配、
    工具面、MCP 调用三条链路，是全仓库最便宜的一次端到端体检。
 3. **`verify:adaptation` 必须在活 DSH 上跑**：静态断言看不出提示词变量被删、
    `activate` 语义变化、projection 形状变化。

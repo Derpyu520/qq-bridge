@@ -64,7 +64,7 @@ Copy-Item config/config.example.json config/config.json
 ### 3. 安装 DSH 插件
 
 ```powershell
-node scripts/setup-dsh.mjs
+node scripts/setup/setup-dsh.mjs
 ```
 
 这一步会把聊天预设和 MCP 工具接入 DSH，**首次安装也必须执行**。完成后重启 DSH；使用非 `web` profile 时见[安装指南](docs/guides/DSH_SETUP.md#安装步骤)。
@@ -77,7 +77,7 @@ npm start
 
 打开 [本地控制台](http://127.0.0.1:3100) 并输入控制台令牌。自动生成的令牌保存在 `state/console-token`；如果已在 `config.json` 配置 `consoleToken`，则使用该值。启动日志不会打印令牌。新装默认使用二代仿真模式（`reserved2`），会选择性发言；测试收发时可先切到 `chat`，再从白名单会话发送消息。
 
-Windows 也可双击 `start.bat` 以守护模式运行，关闭窗口即停止。
+`npm start` 是守护模式（桥接崩溃后 5 秒自动重启）；`npm run start:once` 只跑一次；`npm run restart` 会先验证停止本仓库实例再启动；Ctrl+C 或关闭终端即停止。
 
 ## 文档与开发
 

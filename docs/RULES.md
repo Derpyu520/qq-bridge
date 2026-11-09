@@ -6,7 +6,7 @@
 控制台会**同时**写穿到 DSH 设置与本地 `qq-bridge/state/mode.json`，两者保持一致。
 （DSH 设置页目前**没有** `qq-mode` 卡片：该插件只有 host 半，未实现浏览器半。详见 docs/guides/DSH_SETUP.md。）
 桥接每 5 秒读取一次；控制台切换立即应用。会话持久化记录创建时的模式、preset 和管理员边界，权限变化时自动撤销旧会话映射和二代 token，并在下次消息到达时重建，避免继续使用旧的高权限 preset。升级前没有这些权限元数据的旧会话也会重建一次，历史仍保留在 DSH。
-全新安装运行 `scripts/setup-dsh.mjs` 后，DSH 设置与本地兜底默认均为 `reserved2`；若已存在 `state/mode.json` 或 DSH 设置旧值，脚本不会覆盖。
+全新安装运行 `scripts/setup/setup-dsh.mjs` 后，DSH 设置与本地兜底默认均为 `reserved2`；若已存在 `state/mode.json` 或 DSH 设置旧值，脚本不会覆盖。
 
 | 模式 | 允许通道 | agent preset | 用途 |
 | --- | --- | --- | --- |
@@ -115,6 +115,6 @@
 ## 事故与兜底
 
 - 群友诱导 agent 时，preset 的工具限制和目标白名单是主要硬边界。发送工具仍可能造成白名单内的误发；敏感信息正则属于启发式审计，不能识别任意秘密或保证“最多只发一条”。账号和会话隔离仍需结合实际运行模式使用。
-- 想彻底关闭机器人：停止桥接进程（start.bat 窗口 Ctrl+C）或 SnowLuma。
-- 修改白名单/角色/owner 后保存即热更新（控制台写入 config.json / state/*.json 后即时生效）；修改 preset（权威源在 `dsh/agent-presets/`，改完跑 `node scripts/build-agent-preset-patches.mjs` 重新生成 bundle patch）后重启 DSH 生效。
+- 想彻底关闭机器人：停止桥接进程（运行 `npm run stop`，或守护窗口 Ctrl+C）或 SnowLuma。
+- 修改白名单/角色/owner 后保存即热更新（控制台写入 config.json / state/*.json 后即时生效）；修改 preset（权威源在 `dsh/agent-presets/`，改完跑 `node scripts/setup/build-agent-preset-patches.mjs` 重新生成 bundle patch）后重启 DSH 生效。
 - ⚠️ 桥接只能运行一个实例：消息异常时先检查任务管理器里是否有多余的 `node ...bridge.js`。

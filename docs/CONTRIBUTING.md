@@ -25,7 +25,7 @@ npm run test:audit
 具体文件加到它所在目录的 `.gitignore`（如 `config/.gitignore`、`docs/.gitignore`、
 `scripts/.gitignore`），不要堆回根文件。
 
-⚠️ **不要用 `npm ci --ignore-scripts`**。`postinstall` 会跑 `scripts/patch-snowluma-sdk.mjs`，
+⚠️ **不要用 `npm ci --ignore-scripts`**。`postinstall` 会跑 `scripts/setup/patch-snowluma-sdk.mjs`，
 给 `@snowluma/sdk` 的相对导入补 `.js` 扩展名（这两个上游包自己的 ESM 打包有问题）。
 跳过它，`test-snowluma-upstream-health.mjs` 会稳定失败——那是预期行为，不是你的改动坏了。
 

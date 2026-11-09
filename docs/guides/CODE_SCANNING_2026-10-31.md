@@ -15,7 +15,7 @@
 
 ## 验证与行为变化
 
-新增离线回归 [`test-code-scanning-boundaries.mjs`](../../scripts/test-code-scanning-boundaries.mjs)，已加入 `npm run test:audit`，覆盖：
+新增离线回归 [`test-code-scanning-boundaries.mjs`](../../scripts/tests/offline/test-code-scanning-boundaries.mjs)，已加入 `npm run test:audit`，覆盖：
 
 - 正常配置默认值，以及超大数、非有限数、非法字符串和递归定时调度。
 - 临时 HTTP 服务拒绝修改可执行路径，且保留本地设置与其他可编辑的语音选项。

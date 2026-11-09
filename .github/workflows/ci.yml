@@ -90,7 +90,7 @@ jobs:
 
       # 只扫将要提交的内容，不扫历史（历史检查需要完整 clone，见 PRIVACY.md）。
       - name: privacy-scan --tracked-only
-        run: node scripts/privacy-scan.mjs --tracked-only
+        run: node scripts/ops/privacy-scan.mjs --tracked-only
 
   audit:
     # 主回归保留原 job 名：GitHub 分支保护若锁了 "离线回归（test:audit）"，

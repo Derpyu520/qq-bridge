@@ -14,7 +14,7 @@
 >
 > **脚本改名提示**：本文写于 0.2.0 适配期间，当时的验证脚本叫
 > `verify-dsh-020-adaptation.mjs`；后续已改名为
-> [`verify-dsh-022-adaptation.mjs`](../../scripts/verify-dsh-022-adaptation.mjs)。
+> [`verify-dsh-022-adaptation.mjs`](../../scripts/probes/verify-dsh-022-adaptation.mjs)。
 > 文中出现的旧命令仅作历史记录，当前请用 `npm run verify:adaptation`。
 
 ---
@@ -38,19 +38,19 @@
 
 | # | 文件 | 改动 | 对治的问题 |
 | --- | --- | --- | --- |
-| 1 | `src/dsh-client.js` | 新增 `inboxItemsOfProjections` / `inboxItemIds` / `controlBaselineInboxItems`；`_readSessionQueue` 改为「`session/projections` 主路径 + `session/control` 回退」；`METHOD_ARG_WRAPPERS` 增加 `session/projections` | §2 队列读不出来 |
+| 1 | `src/dsh/dsh-client.js` | 新增 `inboxItemsOfProjections` / `inboxItemIds` / `controlBaselineInboxItems`；`_readSessionQueue` 改为「`session/projections` 主路径 + `session/control` 回退」；`METHOD_ARG_WRAPPERS` 增加 `session/projections` | §2 队列读不出来 |
 | 2 | `plugins/qq-agent-presets/qq-tool-restrict.mjs` | restrict 名单 **52 → 67**，补 15 个名字 | §3 工具面漂移 |
-| 3 | `scripts/dsh-tool-names.mjs`（新增） | 工具名抽取的**唯一实现**（原测试里那份模糊抽取器误报真名） | §3 对账工具 |
-| 4 | `scripts/scan-dsh-tool-names.mjs`（新增） | 拿安装包与守卫名单双向求差的 CLI（`npm run scan:tool-names`） | §3 对账工具 |
+| 3 | `scripts/lib/dsh-tool-names.mjs`（新增） | 工具名抽取的**唯一实现**（原测试里那份模糊抽取器误报真名） | §3 对账工具 |
+| 4 | `scripts/ops/scan-dsh-tool-names.mjs`（新增） | 拿安装包与守卫名单双向求差的 CLI（`npm run scan:tool-names`） | §3 对账工具 |
 | 5 | `plugins/qq-mode-console/lib/index.js` | 删掉 0.2.0 已移除的 `ctx.settings.register()` 死路，`apply()` 改为显式空实现 | §4 设置命名空间 |
-| 6 | `scripts/test-qq-mode-plugin.mjs` | 重写为 6 项，钉住命名空间可用的三点前提 + 「不许把已删除的 API 加回来」 | §4 |
-| 7 | `scripts/probe-auth.mjs`（新增）+ 5 个探针 + 4 个运维脚本 | 鉴权统一走本机 DSH 会话凭据生成 Cookie；夹具改到系统临时目录 | §5 遗留缺口 |
-| 8 | `scripts/probe-020-protocol.mjs`、`probe-020-settings.mjs`（新增） | 0.2.0 契约探针（帧结构 / settings 命名空间） | §2 §4 取证 |
-| 9 | `scripts/test-dsh-inbox-projection.mjs`（新增，12 项） | 用**真实 0.2.0 帧骨架**钉住队列解析（离线，已进 `test:audit`） | §2 回归网 |
-| 10 | `scripts/test-dsh-session-retire.mjs`（新增，11 项） | 活 DSH 端到端：退役会话必须成功且真的清掉队列 | §2 回归网 |
-| 11 | `scripts/test-audit-protocol.mjs` | 3 条会话退役用例按两条路径重写（含 0.2.0 形状断言） | §2 回归网 |
+| 6 | `scripts/tests/offline/test-qq-mode-plugin.mjs` | 重写为 6 项，钉住命名空间可用的三点前提 + 「不许把已删除的 API 加回来」 | §4 |
+| 7 | `scripts/probes/probe-auth.mjs`（新增）+ 5 个探针 + 4 个运维脚本 | 鉴权统一走本机 DSH 会话凭据生成 Cookie；夹具改到系统临时目录 | §5 遗留缺口 |
+| 8 | `scripts/probes/probe-020-protocol.mjs`、`probe-020-settings.mjs`（新增） | 0.2.0 契约探针（帧结构 / settings 命名空间） | §2 §4 取证 |
+| 9 | `scripts/tests/offline/test-dsh-inbox-projection.mjs`（新增，12 项） | 用**真实 0.2.0 帧骨架**钉住队列解析（离线，已进 `test:audit`） | §2 回归网 |
+| 10 | `scripts/tests/live/test-dsh-session-retire.mjs`（新增，11 项） | 活 DSH 端到端：退役会话必须成功且真的清掉队列 | §2 回归网 |
+| 11 | `scripts/audit/test-audit-protocol.mjs` | 3 条会话退役用例按两条路径重写（含 0.2.0 形状断言） | §2 回归网 |
 | 12 | `scripts/verify-dsh-015-adaptation.mjs` → `verify-dsh-020-adaptation.mjs` | 活 DSH 段重写为 0.2.0 契约；语法检查在禁止 spawn 的环境改为**显式跳过**而非假失败 | §6 |
-| 13 | `scripts/test-preset-local-tools.mjs` | 删掉自带的模糊抽取器，改用 §3 的唯一实现；名单同步 | §3 |
+| 13 | `scripts/tests/offline/test-preset-local-tools.mjs` | 删掉自带的模糊抽取器，改用 §3 的唯一实现；名单同步 | §3 |
 | 14 | `scripts/test-audit.mjs` | 清单加入 2 个新脚本（28 → 30） | §6 |
 | 15 | 版本身份：`package.json`、`package-lock.json`、两个插件包、三个 MCP serverInfo | 0.1.7 → **0.2.0** | §6 |
 | 16 | 文档：`README.md`、`README.en.md`、`RULES.md`、`docs/FOLDER_MAP.md`、`docs/guides/DSH_SETUP.md`、`docs/guides/SECURITY_BASELINE.md`、`docs/guides/PROJECT_GUIDE.md` | 版本行、preset 安装位置、鉴权说明、脚本清单、过期清单 | §6 |
@@ -89,7 +89,7 @@
 
 ### 2.3 0.2.0 的实际契约（实测）
 
-`session/control` 的开场 baseline（`scripts/probe-020-protocol.mjs` 采样，逐键确认）：
+`session/control` 的开场 baseline（`scripts/probes/probe-020-protocol.mjs` 采样，逐键确认）：
 
 ```
 { type: 'baseline',
@@ -144,9 +144,9 @@ POST /api/session/projections   { request: { sessionId } }
 
 ### 3.2 对账工具（新增）
 
-- `scripts/dsh-tool-names.mjs`：从已安装的 `@deepseek-ai/dsh-*` 与用户插件里抽真实工具名
+- `scripts/lib/dsh-tool-names.mjs`：从已安装的 `@deepseek-ai/dsh-*` 与用户插件里抽真实工具名
   （锚定 `register(defineTool({ name }))` / `toolName:` / 任意层级的 `*.patch.yml`）。
-- `scripts/scan-dsh-tool-names.mjs`：`npm run scan:tool-names`，双向求差并给退出码。
+- `scripts/ops/scan-dsh-tool-names.mjs`：`npm run scan:tool-names`，双向求差并给退出码。
 - **抽取实现只有一份**，扫描器与 `test-preset-local-tools.mjs` 共用。
 
 > 顺带修掉一个危险缺陷：`test-preset-local-tools.mjs` 原先自带一份**模糊**抽取器
@@ -170,7 +170,7 @@ POST /api/session/projections   { request: { sessionId } }
 ### 3.4 怎么验证
 
 `npm run scan:tool-names` → 悬空（假名）0 个、未覆盖的危险名 0 个；
-`node scripts/test-preset-local-tools.mjs` 7 项全过；`verify:adaptation` 增加两条对应断言。
+`node scripts/tests/offline/test-preset-local-tools.mjs` 7 项全过；`verify:adaptation` 增加两条对应断言。
 
 ---
 
@@ -223,7 +223,7 @@ schema 接受全部 mode 拼写、**不再出现 `settings.register`**（只看�
   `?token=` 再换 Cookie"的引导。这条路在 0.1.7 就死了（启动 token 只存在内存、日志里是上一个进程的
   陈旧值），于是一律 401 —— **诊断工具本身坏了，而且没人会注意到**（探针不在回归套件里；
   生产代码当时修好了，工具没跟上）。
-  → 新增 `scripts/probe-auth.mjs`，统一走本机 DSH 会话凭据生成 Cookie，并提供
+  → 新增 `scripts/probes/probe-auth.mjs`，统一走本机 DSH 会话凭据生成 Cookie，并提供
   `probeRpc` / `probeMuxSocket` / `probeWorkspaceDir`；9 个脚本全部改用它。
 - **落盘**：探针与测试夹具原先写在仓库 `state/` 下。`state/` 被 `harden-state-acl.mjs` 收紧了 ACL
   （见 §7.2），在 DSH 沙箱会话里**写不进去**（EPERM）。
@@ -275,7 +275,7 @@ schema 接受全部 mode 拼写、**不再出现 `settings.register`**（只看�
 `fast-uri` 3.1.7→3.1.8、`ip-address` 10.5.0→10.7.3。两者都是
 `@modelcontextprotocol/sdk@1.30.0` 的**传递依赖**（经 `ajv` / `express-rate-limit`），
 在 0.1.7 时代就存在，与 0.2.0 无关。影响面也小：告警文案提到 SSRF 绕过，而本项目自己的
-SSRF 防护 `src/safe-fetch.js` 是独立实现、**没有用 `ip-address`**；`express-rate-limit` 只在
+SSRF 防护 `src/util/safe-fetch.js` 是独立实现、**没有用 `ip-address`**；`express-rate-limit` 只在
 HTTP transport 下起作用，而三个 MCP server 全是 stdio。清掉是为了让已发布版本的门面干净：
 `npm audit` → 0，GitHub 上 5 条告警全部转为 fixed。
 
@@ -364,12 +364,12 @@ HTTP transport 下起作用，而三个 MCP server 全是 stdio。清掉是为�
 
 1. `npm run verify:adaptation`（先看红在哪；活 DSH 段是主要信号；脚本文件名随 DSH 版本改名，入口名不变）。
 2. `npm run scan:tool-names` —— **每次升级必跑**。守住两类漂移：假名静默失效、新能力漏隐藏。
-3. `node scripts/probe-020-protocol.mjs` —— 采样 `session/control` / `session/follow` / `$events` /
+3. `node scripts/probes/probe-020-protocol.mjs` —— 采样 `session/control` / `session/follow` / `$events` /
    `session/cancel` 的**DSH RPC 返回结构（原始帧）**，与本文 §2.3 §8 对照。
-4. `node scripts/probe-020-settings.mjs` —— 命名空间是否还在、是否还可写。
+4. `node scripts/probes/probe-020-settings.mjs` —— 命名空间是否还在、是否还可写。
 5. `npm run test:dsh-inbox` + `npm run test:session-retire:e2e` —— 队列与退役路径。
 6. `npm run test:audit`（脚本数量以当前 `scripts/test-audit.mjs` 为准）与 `npm run verify:persona`。
-7. 若 DSH 改了 preset / 插件装载机制：`node scripts/setup-dsh.mjs` 后重启 DSH，再看
+7. 若 DSH 改了 preset / 插件装载机制：`node scripts/setup/setup-dsh.mjs` 后重启 DSH，再看
    `npm run test:setup-idempotent`。
 8. `npm run privacy-scan` + `npm run diagnose:acl`（后者需在**无沙箱**终端跑）。
 
@@ -452,7 +452,7 @@ v0.2.0 发布后，有人反馈「**QQ 注入失败**」。调查后修了三类
 
 ⇒ 任何照 README 克隆的人跑自检都会看到一堆红，**看起来像"这个项目装出来就是坏的"**。
 
-**修复**：新增 `scripts/voice-tool-locator.mjs` 统一解析位置（支持 `QQ_BRIDGE_VOICE_TOOL_DIR` 覆盖），
+**修复**：新增 `scripts/lib/voice-tool-locator.mjs` 统一解析位置（支持 `QQ_BRIDGE_VOICE_TOOL_DIR` 覆盖），
 缺目录时**明确跳过**（`⏭ 跳过…（这是跳过，不是通过）`）而不是崩溃；`config.json` 相关断言改为
 只断言 `config.example.json` 的**出厂默认** —— 顺带修掉一个语义错误：原先它断言的是**用户当前状态**，
 于是用户按文档打开「AI 发语音」之后测试就会变红（测试不该因为用户用了功能而失败）。
@@ -556,7 +556,7 @@ AAAA 排在 A 前面，而本机没有 IPv6 出口；旧 `safe-fetch` 只取 `ad
 
 ### J.2 联网搜索
 
-`src/web-search.js`（新）：与 `@deepseek-ai/dsh-web-search-deepseek` 相同的
+`src/web/web-search.js`（新）：与 `@deepseek-ai/dsh-web-search-deepseek` 相同的
 `POST https://api.deepseek.com/anthropic/v1/messages` + `web_search_20250305` 服务端工具，
 凭据顺序 `webSearch.apiKey` → 环境变量（默认 `DEEPSEEK_API_KEY`）→ `$DSH_HOME/.credentials.yaml`；
 Bing **RSS** 仅作兜底；5 分钟查询缓存；空结果显式 `note`。安全：key 只发往校验过的

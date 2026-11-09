@@ -12,4 +12,6 @@
 /patch-web-mcp-timeout.mjs
 
 # 本机专用的隐私扫描规则（含真实 QQ 号/路径，不入库）
+/ops/privacy-rules.json
+# 旧位置（脚本迁移到子目录前）继续忽略，避免误提交
 /privacy-rules.json

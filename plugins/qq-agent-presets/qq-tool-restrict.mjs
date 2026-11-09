@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url'
 //   「相对 patch 文件锚定」（dsh-app-boot 的 anchorInsertedPluginNames），不会走进
 //   preset 行的 config.plugins —— 所以守卫只能用**从 profile 目录可解析的裸说明符**。
 //   该包以 link: 依赖注册在 profile package.json，node_modules junction 由
-//   scripts/setup-dsh.mjs（或 dsh-super-injector 的 dev_heal_links）维护：
+//   scripts/setup/setup-dsh.mjs（或 dsh-super-injector 的 dev_heal_links）维护：
 //   不写死任何绝对路径，仓库搬家后重建链接即可。
 // 作用：
 //  1) 用 tools.restrict 把本地执行/文件类工具与开发工具从**工具清单**里隐藏（注册期）；
@@ -77,7 +77,7 @@ export const inject = ['tools']
  * **`dsh_snapshot`/`dsh_rollback` 真的进过仿真会话的 schema**——本名单初版漏了它们。
  *
  * 2026-09-29 针对 DSH 0.2.0-rc.2 重新对账（同样不是逐个打补丁，而是拿安装包重扫）。
- * 对账工具：`node scripts/scan-dsh-tool-names.mjs`（可重复运行；它从已安装的
+ * 对账工具：`node scripts/ops/scan-dsh-tool-names.mjs`（可重复运行；它从已安装的
  * `@deepseek-ai/dsh-*` 里抽真实工具名，与本名单求双向差）。
  * 该轮结论：**旧名字全部还在**（0 个假名，0.1.7 那次替换后没有再次改名），
  * 但 0.2.0 的包里多出 13 个「危险语义」名字是名单没覆盖的，逐条判定如下：
@@ -98,7 +98,7 @@ export const inject = ['tools']
  *   ④ 无人值守的自我调度（`dsh-schedule`，0.2.0 起是可选 bundle）：
  *      · `schedule_create` / `schedule_list` / `schedule_update` / `schedule_delete`
  *
- * 2026-10-22 针对 DSH 0.2.1-rc.2 重新对账（`node scripts/scan-dsh-tool-names.mjs`）。
+ * 2026-10-22 针对 DSH 0.2.1-rc.2 重新对账（`node scripts/ops/scan-dsh-tool-names.mjs`）。
  * DSH 这轮把不少能力从「实验组合包」转正，工具面因此变了三处：
  *   ① **新增一个真的会进仿真会话的全局工具**：`dsh-base` 现在默认挂
  *      `working-directory` + `tool-working-directory` 两行，于是 `working_directory`

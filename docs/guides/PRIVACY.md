@@ -6,10 +6,10 @@
 ## 一、运行扫描
 
 ```bash
-node scripts/privacy-scan.mjs                # 扫描已跟踪文件和未忽略的新文件（推荐）
-node scripts/privacy-scan.mjs --tracked-only # 只扫描 Git 已跟踪文件
-node scripts/privacy-scan.mjs --history      # 追加扫描全部 Git 历史（发布前运行）
-node scripts/privacy-scan.mjs --json         # 机读输出
+node scripts/ops/privacy-scan.mjs                # 扫描已跟踪文件和未忽略的新文件（推荐）
+node scripts/ops/privacy-scan.mjs --tracked-only # 只扫描 Git 已跟踪文件
+node scripts/ops/privacy-scan.mjs --history      # 追加扫描全部 Git 历史（发布前运行）
+node scripts/ops/privacy-scan.mjs --json         # 机读输出
 ```
 
 也可以使用：
@@ -82,7 +82,7 @@ npm run privacy-scan:history
 
 ```yaml
 - name: Privacy scan
-  run: node scripts/privacy-scan.mjs --tracked-only
+  run: node scripts/ops/privacy-scan.mjs --tracked-only
 ```
 
 CI 只扫描当前 checkout 的已跟踪文件。历史扫描需要完整克隆且耗时更长，作为发布前人工检查，

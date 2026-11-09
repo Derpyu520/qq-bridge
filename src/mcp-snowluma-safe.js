@@ -16,13 +16,13 @@ import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { resolveConfigPath } from './config-path.js';
+import { resolveConfigPath } from './util/config-path.js';
 // 出站文本的敏感信息拦截**统一由桥接负责**（bridge.js 的 auditAndSend / 各发送端点的
 // SENSITIVE_RE 校验）：所有 QQ 发送都经由桥接 HTTP API，因此 MCP 侧不再重复实现一遍。
 // 这里 import 只用于「出站审计口径一致」的说明，不在 MCP 内做拦截——
 // 在 MCP 里拦会连「安全拒绝理由」都拿不到，反而让模型无法把话说清楚。
-import { SENSITIVE_RE } from './sensitive.js';
-import { serializeModelData } from './qq-model-view.js';
+import { SENSITIVE_RE } from './text/sensitive.js';
+import { serializeModelData } from './qq/qq-model-view.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
