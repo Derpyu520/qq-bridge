@@ -41,8 +41,40 @@ function candidateProfiles(home) {
   return names;
 }
 
-export function dshModulesDir() {
-  const override = process.env.DSH_INSTALL_MODULES || process.env.DSH_MODULES;
+/**
+ * 解析要检查/操作的 profile 名。
+ *
+ * DSH 本身没有"当前 profile"这个概念：桌面版是 `desktop`，SDK 版是 `sdk`，老文档里是 `web`。
+ * 以前几个脚本把 `web` 写死，在 desktop 机器上直接 ENOENT。顺序：
+ *   1. 环境变量 DSH_PROFILE（显式优先，不改任何人写死的行为）
+ *   2. profiles 下唯一目录
+ *   3. desktop
+ *   4. web
+ *   5. 都不满足 → 返回 name: null，由调用方决定是报错还是跳过
+ *
+ * 返回 `{ name, why, available }`，`why` 用于把"为什么选了这个"写进输出。
+ */
+export function dshProfileName(home = dshHome()) {
+  const fromEnv = String(process.env.DSH_PROFILE ?? '').trim();
+  if (fromEnv) return { name: fromEnv, why: 'DSH_PROFILE', available: [] };
+
+  let available = [];
+  try {
+    available = fs.readdirSync(path.join(home, 'profiles'), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort();
+  } catch {
+    return { name: null, why: '读不到 profiles 目录', available: [] };
+  }
+
+  if (available.length === 1) return { name: available[0], why: '唯一目录', available };
+  if (available.includes('desktop')) return { name: 'desktop', why: '桌面版', available };
+  if (available.includes('web')) return { name: 'web', why: 'web 默认', available };
+  return { name: null, why: 'profiles 下没有 desktop/web 且不止一个', available };
+}
+
+export function dshModulesDir() {  const override = process.env.DSH_INSTALL_MODULES || process.env.DSH_MODULES;
   if (override) return override;
 
   const home = dshHome();
