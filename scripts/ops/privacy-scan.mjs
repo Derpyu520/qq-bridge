@@ -51,7 +51,7 @@ const DEFAULT_RULES = {
     { name: '带凭据的 URL', pattern: 'https?://[^/\\s:@]+:[^/\\s:@]+@', flags: 'i' },
   ],
   // 这些文件本来就不该进公开仓库；出现即失败（无论内容）。
-  denyFiles: ['config.json', 'work/config.json', 'config/config.json', 'state/', 'audio/', '*.log', '*.bak', '*.bak-*', 'roles/*.md.bak*'],
+  denyFiles: ['config.json', 'work/config.json', 'config/config.json', 'state/', 'audio/', '*.log', '*.bak', '*.bak-*', 'roles/*.md.bak*', 'roles/*.json.bak*'],
   // 路径/整行匹配到这些就跳过（脱敏模板、示例、测试夹具、已声明含占位符的文档）。
   // 注意：这是**误报白名单**，不是"这些文件不用检查"——加入前先确认里面确实只有占位数据。
   allowPaths: [

@@ -108,6 +108,27 @@ await test('injectEveryNWakes=1 时退回每次全量', async () => {
   } finally { await h.close(); }
 });
 
+await test('JSON 人格卡可注入，并按 mode 筛选小节', async () => {
+  const card = JSON.stringify({
+    schema: 'qq-bridge.role/v1',
+    sections: [
+      { mode: 'all', heading: '一、你是谁', text: '- 性格：只认一个称呼。' },
+      { mode: 'v1', heading: '二、分条', text: '一代专用：空格分条。' },
+      { mode: 'v2', heading: '二、分条', text: '二代专用：qq_send_message 数组分条。' }
+    ]
+  });
+  const h = await bridgeHarness({ config: baseConfig, files: {
+    'roles/测试人格.json': card,
+    'state/current-role.json': JSON.stringify({ role: '测试人格', mode: 'active' })
+  } });
+  try {
+    const prompt = h.buildWakePromptV2(KEY, 'atMention');
+    assert.match(prompt, /只认一个称呼/);
+    assert.match(prompt, /qq_send_message 数组分条/);
+    assert.doesNotMatch(prompt, /空格分条/);
+  } finally { await h.close(); }
+});
+
 await test('计数落盘到 state/role-inject.json（不写进 social-v2.json）', async () => {
   const h = await bridgeHarness({ config: baseConfig, files: baseFiles() });
   try {

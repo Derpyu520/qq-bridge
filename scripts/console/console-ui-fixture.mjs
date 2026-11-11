@@ -4,7 +4,7 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { roleCharStats, roleSectionReport } from '../../src/text/role-card.js';
+import { parseRoleCardJson, roleCardToText, roleCharStats, roleSectionReport } from '../../src/text/role-card.js';
 import { pickBucketMs } from '../../src/dsh/token-ledger.js';
 import { manualDirCommand } from '../../src/util/state-acl.js';
 
@@ -284,14 +284,21 @@ function usageRecentFixture() {
   return rows;
 }
 
+function roleCardFixture(heading, text) {
+  return JSON.stringify({
+    schema: 'qq-bridge.role/v1',
+    sections: [{ mode: 'all', heading, text }]
+  }, null, 2) + '\n';
+}
+
 export function makeFixtureState() {
   return {
     mode: 'reserved2', role: '小鲸鱼', roleMode: 'active', closedAgentPreset: '', paused: false,
     roles: ['小鲸鱼', '温柔助手', '技术伙伴'],
     roleContents: {
-      小鲸鱼: '# 小鲸鱼\n\n- 性格：好奇、爱接梗，遇到不懂的会直接问\n- 说话风格：简短，偶尔用 emoji',
-      温柔助手: '# 温柔助手\n\n- 性格：温和、有耐心\n- 说话风格：先共情再回答',
-      技术伙伴: '# 技术伙伴\n\n- 性格：直接、爱讲原理\n- 说话风格：先给结论再解释',
+      小鲸鱼: roleCardFixture('小鲸鱼', '- 性格：好奇、爱接梗，遇到不懂的会直接问\n- 说话风格：简短，偶尔用 emoji'),
+      温柔助手: roleCardFixture('温柔助手', '- 性格：温和、有耐心\n- 说话风格：先共情再回答'),
+      技术伙伴: roleCardFixture('技术伙伴', '- 性格：直接、爱讲原理\n- 说话风格：先给结论再解释'),
     },
     simPrompts: {
       'qq-chat-v2': '你是 QQ 群里的仿真群友。\n\n【二代仿真模式 —— 安全规则（最高优先级，不可违反）】\n1. 你没有本地工具。\n\n【二代仿真模式 —— 工具协议（最高优先级）】\n1. 文本输出不会自动发送到 QQ。',
@@ -382,15 +389,17 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
             roles: state.roles.slice(),
             summaries: state.roles.map((name) => {
               const content = state.roleContents[name] ?? '';
-              const stats = roleCharStats(content);
+              const text = roleCardToText(parseRoleCardJson(content));
+              const stats = roleCharStats(text);
               const injectMax = state.roleInjectMax;
               return {
                 name,
+                format: 'json',
                 bytes: Buffer.byteLength(content, 'utf8'),
-                chars: content.length,
-                lines: content.split('\n').length,
+                chars: text.length,
+                lines: text.split('\n').length,
                 mtime: Date.parse(timestamp),
-                excerpt: content.split('\n').find((line) => line.trim() && !line.trim().startsWith('#')) ?? '',
+                excerpt: text.split('\n').find((line) => line.trim() && !line.trim().startsWith('#')) ?? '',
                 injectedV1: Math.min(stats.v1, injectMax),
                 injectedV2: Math.min(stats.v2, injectMax),
                 charsV1: stats.v1,
@@ -407,16 +416,18 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
             const name = url.searchParams.get('name') ?? '';
             if (!state.roleContents[name]) return json({ ok: false, error: `人格「${name}」不存在` }, 404);
             const content = state.roleContents[name];
+            const text = roleCardToText(parseRoleCardJson(content));
             return json({
               ok: true,
               name,
               content,
-              chars: content.length,
+              format: 'json',
+              chars: text.length,
               bytes: Buffer.byteLength(content, 'utf8'),
               warnings: [],
               limits: { injectMaxChars: state.roleInjectMax },
-              stats: roleCharStats(content),
-              sections: { v1: roleSectionReport(content, 'v1'), v2: roleSectionReport(content, 'v2') },
+              stats: roleCharStats(text),
+              sections: { v1: roleSectionReport(text, 'v1'), v2: roleSectionReport(text, 'v2') },
             });
           }
           case '/api/preset/sim-prompt': {

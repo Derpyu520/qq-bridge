@@ -42,9 +42,13 @@ let r = await api('/api/roles');
 const origRole = r.body.current ?? null;
 ok('角色列表', r.body.roles?.includes('傲娇助手'), JSON.stringify(r.body));
 
-// 3. 创建人格
+// 3. 创建人格（JSON 卡）
 const TEST_ROLE = '测试人格Tmp';
-r = await api('/api/roles/create', 'POST', { name: TEST_ROLE, content: '- 性格：测试\n- 说话风格：简短' });
+const TEST_ROLE_CARD = JSON.stringify({
+  schema: 'qq-bridge.role/v1',
+  sections: [{ mode: 'all', heading: '测试', text: '- 性格：测试\n- 说话风格：简短' }]
+}, null, 2);
+r = await api('/api/roles/create', 'POST', { name: TEST_ROLE, content: TEST_ROLE_CARD });
 ok('创建人格', r.body.ok === true, JSON.stringify(r.body));
 r = await api('/api/roles');
 ok('创建后列表出现', r.body.roles?.includes(TEST_ROLE));
@@ -97,7 +101,7 @@ r = await api('/api/test-send', 'POST', { kind: 'group', id: '100003', message: 
 ok('非白名单发送被拒', r.body.ok === false && r.status === 403, JSON.stringify(r.body));
 
 // 10. 清理测试人格（用绝对路径，不依赖运行目录）
-fs.rmSync(new URL(`../../../roles/${TEST_ROLE}.md`, import.meta.url), { force: true });
+fs.rmSync(new URL(`../../../roles/${TEST_ROLE}.json`, import.meta.url), { force: true });
 r = await api('/api/roles');
 ok('测试人格已清理', !r.body.roles?.includes(TEST_ROLE));
 

@@ -25,7 +25,7 @@ DSH/                         ← 工作区根（不是仓库根）
 | `plugins/` | DSH bundle：`qq-agent-presets` 与 `qq-mode-console` | 修改后需重新同步安装并重启 DSH；`qq-mode-console` 目前只有 host 半 |
 | `work/` | **经常编辑、运行中**的文件：`console.html` 本地控制台前端、`console-ui-contracts.json` 契约基线、`config.json` 本机配置（`.gitignore` 排除，由 scripts/ensure-config.mjs 在 npm 生命周期生成） | 桥接/测试读取这里的最新版本；改完跑 preview/test-console-ui/test:audit；旧布局 `config/config.json` 与根 `config.json` 仍兼容 |
 | `data/` | 很少改动的**静态基线/模板**：`console.before.html` 旧版快照、`console-ui-legacy-ids.json` 旧 ID、`config.example.json` 配置模板、`privacy-rules.example.json` 隐私规则模板 | 运行时不写；只有重录基线/改模板时才动 |
-| `roles/` | 人格卡与人格写作说明 | 属于用户可编辑内容；权限和注入规则见 `docs/RULES.md`、`roles/README.md` |
+| `roles/` | 人格卡（`<角色名>.json`，旧 `.md` 可读）与写作说明 | 属于用户可编辑内容；格式与校验见 `roles/README.md`，注入规则见 `docs/RULES.md` |
 | `assets/` | 仓库用图片等资源 | 当前仅跟踪 `deepseek娘.png`；演示视频作为 Release 附件管理，不入库 |
 | `audio/` | 本地语音库，默认被 `.gitignore` 排除 | 用户音频不应提交或随意删除 |
 | `state/` | 会话、模式、日志、锁、令牌等运行时数据 | 被 `.gitignore` 排除；不要提交，也不要在测试中使用生产副本 |

@@ -1852,7 +1852,12 @@ button:active:not(:disabled) {
           <label>人格名（中文 / 字母 / 数字 / 横线）</label>
           <input type="text" id="newRoleName" placeholder="如：猫娘">
           <label>人格提示词（Markdown）</label>
-          <textarea id="newRoleContent" class="role-editor" placeholder="- 性格：…&#10;- 说话风格：…&#10;- 背景设定：…"></textarea>
+          <textarea id="newRoleContent" class="role-editor" placeholder='{
+  "schema": "qq-bridge.role/v1",
+  "sections": [
+    { "mode": "all", "heading": "一、你是谁", "text": "…" }
+  ]
+}'></textarea>
           <div class="row" style="margin-top:8px">
             <button id="roleCreate">新建人格</button>
             <button id="roleDuplicate">另存为副本</button>
@@ -2782,7 +2787,7 @@ async function saveMode(mode) {
 // 人格提示词 = roles/<名称>.md，桥接每条消息注入，保存即生效。
 let roleEditorState = { mode: 'new', name: '' };
 let roleCache = [];
-let roleInjectMax = 6000;
+let roleInjectMax = 8000;
 
 function setRoleMsg(text, ok) {
   const el = document.getElementById('roleCreateMsg');
@@ -2801,9 +2806,25 @@ function renderRoleEditor() {
 function roleEditorWarnings(text) {
   const value = String(text ?? '');
   const warns = [];
-  if (value.length > roleInjectMax) warns.push(`超出注入上限：当前 ${value.length} 字符，只有前 ${roleInjectMax} 字符会进入提示词（多余 ${value.length - roleInjectMax} 字符不会生效）`);
-  if (/\[SILENT\]|空格分隔|按空格|用空格|空格分句|空格代表|自动转发|回复会自动|输出\s*\[SILENT\]/i.test(value)) {
-    warns.push('含一代仿真专用指令（[SILENT] / 空格分句 / 自动转发），二代仿真下这些行会被自动过滤');
+  if (!value.trim()) return warns;
+  let card = null;
+  try { card = JSON.parse(value); }
+  catch (error) { warns.push(`JSON 解析失败：${error.message}`); }
+  if (card) {
+    if (!Array.isArray(card.sections) || card.sections.length === 0) warns.push('sections 必须是非空数组');
+    else {
+      const parts = [];
+      for (const [i, section] of card.sections.entries()) {
+        if (!section || typeof section.text !== 'string') { warns.push(`sections[${i}].text 必须是字符串`); continue; }
+        const tag = section.mode === 'v1' ? ' 〔一代〕' : section.mode === 'v2' ? ' 〔二代〕' : '';
+        parts.push(`${section.heading ? '## ' + section.heading + tag + '\n' : ''}${section.text}`);
+      }
+      const rendered = parts.join('\n\n');
+      if (rendered.length > roleInjectMax) warns.push(`超出注入上限：当前模式约 ${rendered.length} 字符，只有前 ${roleInjectMax} 字符会进入提示词（多余部分不会生效）`);
+      if (/\[SILENT\]|空格分隔|按空格|用空格|空格分句|空格代表|自动转发|回复会自动/i.test(rendered)) {
+        warns.push('含一代仿真专用指令（[SILENT] / 空格分句 / 自动转发），未标 〔一代〕 的小节在二代下会被过滤');
+      }
+    }
   }
   return warns;
 }
@@ -3092,7 +3113,7 @@ document.getElementById('roleDuplicate').addEventListener('click', async () => {
 document.getElementById('roleDelete').addEventListener('click', async () => {
   const name = document.getElementById('newRoleName').value.trim();
   if (!name) { setRoleMsg('请先选择或填写要删除的人格名', false); return; }
-  if (!confirm(`确定删除人格「${name}」？该操作不可撤销（roles/${name}.md）。`)) return;
+  if (!confirm(`确定删除人格「${name}」？该操作不可撤销（roles/${name}.json）。`)) return;
   const r = await api('/api/roles/delete', 'POST', { name });
   if (!r.ok) { setRoleMsg('❌ ' + (r.error || '删除失败'), false); return; }
   resetRoleForm();

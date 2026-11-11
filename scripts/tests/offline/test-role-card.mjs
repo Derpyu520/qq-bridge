@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { test } from 'node:test';
-import { parseRoleSections, roleCharStats, roleSectionReport, selectRoleText } from '../../../src/text/role-card.js';
+import { normalizeRoleCard, parseRoleCardJson, parseRoleSections, roleCardFromText, roleCardToJson, roleCardToText, roleCharStats, roleSectionReport, selectRoleText } from '../../../src/text/role-card.js';
 
 const CARD = [
   '# 角色卡：测试',
@@ -92,11 +92,35 @@ test('统计与小节报告可用于控制台预览', () => {
   assert.equal(common.injected, true);
 });
 
-test('真实人格卡可用，且筛选不丢公共内容', () => {
-  const file = new URL('../../../roles/小鲸鱼.md', import.meta.url);
-  const raw = fs.readFileSync(file, 'utf8');
-  const v2 = selectRoleText(raw, 'v2');
-  const v1 = selectRoleText(raw, 'v1');
+test('Markdown 卡可以无损转成 JSON 卡，筛选结果一致', () => {
+  const card = roleCardFromText(CARD);
+  const parsed = parseRoleCardJson(roleCardToJson(card));
+  const text = roleCardToText(parsed);
+  assert.equal(selectRoleText(text, 'v1'), selectRoleText(CARD, 'v1'));
+  assert.equal(selectRoleText(text, 'v2'), selectRoleText(CARD, 'v2'));
+  assert.match(text, /〔一代〕/);
+  assert.match(text, /〔二代〕/);
+});
+
+test('JSON 卡校验：拒绝坏 JSON / 坏模式 / 空节 / 重复标题 / 未知字段', () => {
+  assert.throws(() => parseRoleCardJson('{'), /JSON 解析失败/);
+  assert.throws(() => normalizeRoleCard({ sections: [] }), /sections 必须是非空数组/);
+  assert.throws(() => normalizeRoleCard({ sections: [{ mode: 'v3', text: 'x' }] }), /mode 只能是/);
+  assert.throws(() => normalizeRoleCard({ sections: [{ text: '   ' }] }), /text 不能为空/);
+  assert.throws(() => normalizeRoleCard({ sections: [{ heading: 'A', text: 'x' }, { heading: 'A', text: 'y' }] }), /小节重复/);
+  // 同一标题按 v1/v2 各写一份是合法用法
+  assert.doesNotThrow(() => normalizeRoleCard({ sections: [{ mode: 'v1', heading: 'A', text: 'x' }, { mode: 'v2', heading: 'A', text: 'y' }] }));
+  assert.throws(() => normalizeRoleCard({ sections: [{ text: 'x' }], typo: 1 }), /未知字段/);
+  // 只有标题没有正文的小节是合法的（顶层标题常见）
+  assert.doesNotThrow(() => normalizeRoleCard({ sections: [{ heading: '标题', text: '' }, { text: '正文' }] }));
+});
+
+test('真实 JSON 人格卡可用，且筛选不丢公共内容', () => {
+  const file = new URL('../../../roles/小鲸鱼.json', import.meta.url);
+  const card = parseRoleCardJson(fs.readFileSync(file, 'utf8'));
+  const rendered = roleCardToText(card);
+  const v2 = selectRoleText(rendered, 'v2');
+  const v1 = selectRoleText(rendered, 'v1');
   assert.ok(v2.length > 0 && v1.length > 0);
   // 人设部分两种模式都必须保留
   for (const text of [v1, v2]) {

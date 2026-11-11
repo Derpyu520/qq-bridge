@@ -14,7 +14,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { extractPresetPrefix, presetPromptBlockers, presetPromptWarnings, renderPresetPromptYaml } from './text/preset-prompt.js';
-import { GEN1_ROLE_LINE_RE, parseRoleSections, roleCharStats, roleSectionReport, selectRoleText } from './text/role-card.js';
+import { GEN1_ROLE_LINE_RE, parseRoleCardJson, parseRoleSections, roleCardFromText, roleCardToJson, roleCardToText, roleCharStats, roleSectionReport, selectRoleText } from './text/role-card.js';
 import { fileURLToPath } from 'node:url';
 import { SnowLumaWebSocketClient, text } from '@snowluma/sdk';
 import { NodeApiClient, unwrap, createTurnCollector, discoverDshLaunchToken } from './dsh/dsh-client.js';
@@ -287,17 +287,23 @@ function readActivityTail(n) {
 
 function listRoles() {
   try {
-    return fs.readdirSync(path.join(ROOT, 'roles'))
-      .filter((f) => f.endsWith('.md') && f !== 'README.md')
-      .map((f) => f.slice(0, -3))
-      .sort((a, b) => a.localeCompare(b, 'zh-CN'));
+    const names = new Map();
+    for (const file of fs.readdirSync(path.join(ROOT, 'roles'))) {
+      if (file === 'README.md') continue;
+      const ext = ROLE_FILE_EXTENSIONS.find((candidate) => file.endsWith(candidate));
+      if (!ext) continue;
+      const name = file.slice(0, -ext.length);
+      // .json 优先于同名旧版 .md（迁移期两者可能并存）
+      if (!names.has(name) || ext === '.json') names.set(name, ext);
+    }
+    return [...names.keys()].sort((a, b) => a.localeCompare(b, 'zh-CN'));
   } catch {
     return [];
   }
 }
 
 // ── 人格文件读写 ────────────────────────────────────────────────────────────
-// 人格提示词 = roles/<名称>.md，由桥接在每条消息前注入（热生效，无需重启 DSH）。
+// 人格提示词 = roles/<名称>.json（旧 .md 兼容），由桥接在每条消息前注入（热生效，无需重启 DSH）。
 const ROLES_DIR = path.join(ROOT, 'roles');
 const ROLE_NAME_MAX = 40;
 const ROLE_CONTENT_MAX_BYTES = 64 * 1024;
@@ -322,8 +328,28 @@ const WINDOWS_RESERVED_NAMES = new Set([
   ...Array.from({ length: 9 }, (_, i) => `LPT${i + 1}`),
 ]);
 
-function roleFilePath(name) {
-  return path.join(ROLES_DIR, name + '.md');
+const ROLE_FILE_EXTENSIONS = ['.json', '.md'];
+
+function roleFilePath(name, ext = '.json') {
+  return path.join(ROLES_DIR, name + ext);
+}
+
+/** 当前实际存在的人格卡文件：优先 .json，其次旧版 .md；都不存在返回 null。 */
+function resolveRoleFile(name) {
+  for (const ext of ROLE_FILE_EXTENSIONS) {
+    const file = roleFilePath(name, ext);
+    if (fs.existsSync(file)) return file;
+  }
+  return null;
+}
+
+/** 读取人格卡的可注入文本：.json 解析后渲染，.md 原样返回（旧卡兼容）。 */
+function readRoleCardText(name) {
+  const file = resolveRoleFile(name);
+  if (!file) return '';
+  const raw = fs.readFileSync(file, 'utf8');
+  if (file.endsWith('.json')) return roleCardToText(parseRoleCardJson(raw));
+  return raw;
 }
 
 function firstMeaningfulLine(content) {
@@ -358,13 +384,15 @@ function roleWarnings(content, mode = 'v2') {
 
 function roleSummaries() {
   return listRoles().map((name) => {
-    const file = roleFilePath(name);
+    const file = resolveRoleFile(name);
     try {
+      if (!file) throw new Error('人格卡不存在');
       const stat = fs.statSync(file);
-      const content = fs.readFileSync(file, 'utf8');
+      const content = readRoleCardText(name);
       const stats = roleCharStats(content);
       return {
         name,
+        format: file.endsWith('.json') ? 'json' : 'md',
         bytes: stat.size,
         chars: content.length,
         lines: content.split('\n').length,
@@ -380,7 +408,7 @@ function roleSummaries() {
         warnings: roleWarnings(content).length,
       };
     } catch {
-      return { name, bytes: 0, chars: 0, lines: 0, mtime: 0, excerpt: '', injectedV1: 0, injectedV2: 0, charsV1: 0, charsV2: 0, hasModeTags: false, truncated: false, warnings: 0 };
+      return { name, format: 'unknown', bytes: 0, chars: 0, lines: 0, mtime: 0, excerpt: '', injectedV1: 0, injectedV2: 0, charsV1: 0, charsV2: 0, hasModeTags: false, truncated: false, warnings: 0 };
     }
   });
 }
@@ -401,22 +429,31 @@ function validateRoleContent(raw) {
   if (bytes > ROLE_CONTENT_MAX_BYTES) {
     throw new Error(`人格内容过长（${(bytes / 1024).toFixed(1)} KB，上限 ${ROLE_CONTENT_MAX_BYTES / 1024} KB）`);
   }
-  return content;
+  // JSON 校验 + 渲染成文本（注入/统计/预览都基于渲染后的文本，与旧 .md 卡行为一致）
+  const card = parseRoleCardJson(content);
+  return { content, text: roleCardToText(card) };
 }
 
+/** 读取控制台编辑器内容：.json 原样返回；旧 .md 现场转成等价 JSON。 */
 function readRoleContent(name) {
-  return fs.readFileSync(roleFilePath(name), 'utf8');
+  const file = resolveRoleFile(name);
+  if (!file) throw new Error(`人格「${name}」不存在`);
+  const raw = fs.readFileSync(file, 'utf8');
+  if (file.endsWith('.json')) return { content: raw, format: 'json' };
+  return { content: roleCardToJson(roleCardFromText(raw)), format: 'legacy-md' };
 }
 
 function writeRoleContent(name, content) {
   fs.mkdirSync(ROLES_DIR, { recursive: true });
-  atomicWriteText(roleFilePath(name), content + (content.endsWith('\n') ? '' : '\n'));
+  atomicWriteText(roleFilePath(name, '.json'), content + (content.endsWith('\n') ? '' : '\n'));
+  // 同名旧 .md 已迁移成 JSON，删掉避免列表/读取出现两份
+  try { fs.rmSync(roleFilePath(name, '.md'), { force: true }); } catch {}
 }
 
 // ── 二代仿真预设提示词（「仿真」层）────────────────────────────────────────
 // 与「人格」层的边界：
 //   仿真提示词 = 预设内置，规定 AI 怎么调工具、怎么参与群聊（行为与协议）
-//   人格提示词 = roles/<名称>.md，规定 AI 是谁、什么性格（人设与语气）
+//   人格提示词 = roles/<名称>.json（旧 .md 兼容），规定 AI 是谁、什么性格（人设与语气）
 // 仿真层改完需要重启 DSH 才生效（preset 由 DSH 在会话创建时装配）；
 // 人格层由桥接按当前模式与注入节奏提供，保存后的下一次唤醒生效。
 // 两代仿真各自有独立的预设提示词：一代 qq-chat（空格分条 / [SILENT]），
@@ -4107,8 +4144,8 @@ async function main() {
           const rs = readRoleState();
           if (body.role && typeof body.role === 'string') {
             const name = sanitizeRoleName(body.role);
-            if (!fs.existsSync(path.join(ROOT, 'roles', name + '.md'))) {
-              sendJson({ ok: false, error: `角色「${name}」不存在（roles/${name}.md）` }, 400);
+            if (!resolveRoleFile(name)) {
+              sendJson({ ok: false, error: `角色「${name}」不存在（roles/${name}.json）` }, 400);
               return;
             }
             writeRoleState(name, rs.mode);
@@ -4147,19 +4184,23 @@ async function main() {
         if (req.method === 'GET' && url.pathname === '/api/roles/content') {
           let name;
           try { name = validateRoleName(url.searchParams.get('name')); } catch (error) { sendJson({ ok: false, error: error.message }, 400); return; }
-          if (!fs.existsSync(roleFilePath(name))) { sendJson({ ok: false, error: `人格「${name}」不存在` }, 404); return; }
-          const content = readRoleContent(name);
+          if (!resolveRoleFile(name)) { sendJson({ ok: false, error: `人格「${name}」不存在` }, 404); return; }
+          const { content, format } = readRoleContent(name);
+          let text;
+          try { text = roleCardToText(parseRoleCardJson(content)); }
+          catch (error) { sendJson({ ok: false, error: `人格卡 JSON 损坏：${error?.message ?? error}` }, 500); return; }
           sendJson({
             ok: true,
             name,
             content,
-            chars: content.length,
+            format,
+            chars: text.length,
             bytes: Buffer.byteLength(content, 'utf8'),
-            warnings: roleWarnings(content),
+            warnings: roleWarnings(text),
             limits: { injectMaxChars: roleInjectMaxChars },
-            stats: roleCharStats(content),
+            stats: roleCharStats(text),
             // 每个小节在各模式下是否会被注入，供控制台预览「这条规则到底生不生效」
-            sections: { v1: roleSectionReport(content, 'v1'), v2: roleSectionReport(content, 'v2') },
+            sections: { v1: roleSectionReport(text, 'v1'), v2: roleSectionReport(text, 'v2') },
           });
           return;
         }
@@ -4178,24 +4219,24 @@ async function main() {
         }
         if (req.method === 'POST' && url.pathname === '/api/roles/create') {
           const body = await readBody();
-          let name; let content;
-          try { name = validateRoleName(body.name); content = validateRoleContent(body.content); }
+          let name; let validated;
+          try { name = validateRoleName(body.name); validated = validateRoleContent(body.content); }
           catch (error) { sendJson({ ok: false, error: error.message }, 400); return; }
-          if (fs.existsSync(roleFilePath(name))) { sendJson({ ok: false, error: `人格「${name}」已存在` }, 400); return; }
-          writeRoleContent(name, content);
-          log(`控制台：创建人格「${name}」（${content.length} 字符）`);
-          sendJson({ ok: true, role: name, warnings: roleWarnings(content) });
+          if (resolveRoleFile(name)) { sendJson({ ok: false, error: `人格「${name}」已存在` }, 400); return; }
+          writeRoleContent(name, validated.content);
+          log(`控制台：创建人格「${name}」（${validated.content.length} 字节 JSON）`);
+          sendJson({ ok: true, role: name, format: 'json', warnings: roleWarnings(validated.text) });
           return;
         }
         if (req.method === 'POST' && url.pathname === '/api/roles/update') {
           const body = await readBody();
-          let name; let content;
-          try { name = validateRoleName(body.name); content = validateRoleContent(body.content); }
+          let name; let validated;
+          try { name = validateRoleName(body.name); validated = validateRoleContent(body.content); }
           catch (error) { sendJson({ ok: false, error: error.message }, 400); return; }
-          if (!fs.existsSync(roleFilePath(name))) { sendJson({ ok: false, error: `人格「${name}」不存在` }, 404); return; }
-          writeRoleContent(name, content);
-          log(`控制台：更新人格「${name}」（${content.length} 字符）`);
-          sendJson({ ok: true, role: name, chars: content.length, warnings: roleWarnings(content) });
+          if (!resolveRoleFile(name)) { sendJson({ ok: false, error: `人格「${name}」不存在` }, 404); return; }
+          writeRoleContent(name, validated.content);
+          log(`控制台：更新人格「${name}」（${validated.content.length} 字节 JSON）`);
+          sendJson({ ok: true, role: name, format: 'json', chars: validated.text.length, warnings: roleWarnings(validated.text) });
           return;
         }
         if (req.method === 'POST' && url.pathname === '/api/roles/rename') {
@@ -4204,9 +4245,11 @@ async function main() {
           try { from = validateRoleName(body.from); to = validateRoleName(body.to); }
           catch (error) { sendJson({ ok: false, error: error.message }, 400); return; }
           if (from === to) { sendJson({ ok: true, role: to, renamed: false }); return; }
-          if (!fs.existsSync(roleFilePath(from))) { sendJson({ ok: false, error: `人格「${from}」不存在` }, 404); return; }
-          if (fs.existsSync(roleFilePath(to))) { sendJson({ ok: false, error: `人格「${to}」已存在` }, 400); return; }
-          fs.renameSync(roleFilePath(from), roleFilePath(to));
+          const fromFile = resolveRoleFile(from);
+          if (!fromFile) { sendJson({ ok: false, error: `人格「${from}」不存在` }, 404); return; }
+          if (resolveRoleFile(to)) { sendJson({ ok: false, error: `人格「${to}」已存在` }, 400); return; }
+          // 旧 .md 重命名时顺带迁移成 .json
+          fs.renameSync(fromFile, roleFilePath(to, '.json'));
           const rs = readRoleState();
           const switched = rs.role === from;
           if (switched) writeRoleState(to, rs.mode);
@@ -4218,8 +4261,12 @@ async function main() {
           const body = await readBody();
           let name;
           try { name = validateRoleName(body.name); } catch (error) { sendJson({ ok: false, error: error.message }, 400); return; }
-          if (!fs.existsSync(roleFilePath(name))) { sendJson({ ok: false, error: `人格「${name}」不存在` }, 404); return; }
-          fs.rmSync(roleFilePath(name));
+          const file = resolveRoleFile(name);
+          if (!file) { sendJson({ ok: false, error: `人格「${name}」不存在` }, 404); return; }
+          // 迁移期可能同名 .json/.md 并存：一起删，避免旧卡“复活”
+          for (const ext of ROLE_FILE_EXTENSIONS) {
+            try { fs.rmSync(roleFilePath(name, ext), { force: true }); } catch {}
+          }
           const rs = readRoleState();
           const cleared = rs.role === name;
           if (cleared) writeRoleState(null, rs.mode);
@@ -10617,7 +10664,7 @@ async function main() {
     startSocialLoop();
   }
 
-  // 当前角色扮演提示：读 state/current-role.json + roles/<角色>.md，
+  // 当前角色扮演提示：读 state/current-role.json + roles/<角色>.json（旧 .md 兼容），
   // 由桥接注入到 QQ 群消息（群友无法通过对话修改，只能由管理端写该文件）。
   // 缓存 key 为两个文件的 mtime，mtime 未变时直接返回，避免每次同步读文件。
   let roleHintCache = { key: '', raw: '' };
@@ -10631,10 +10678,10 @@ async function main() {
       // {"role":"../../../../Users/Public/x"} 会让 roles/ 之外的文件被读进来并注入每一条提示词。
       const safeName = sanitizeRoleName(rs.role);
       if (!safeName || safeName.includes('..')) return '';
-      const roleFile = path.join(ROLES_DIR, safeName + '.md');
+      const roleFile = resolveRoleFile(safeName);
+      if (!roleFile) return '';
       const resolved = path.resolve(roleFile);
       if (!resolved.startsWith(path.resolve(ROLES_DIR) + path.sep)) return '';
-      if (!fs.existsSync(resolved)) return '';
       const stateStat = fs.statSync(ROLE_STATE_FILE);
       const roleStat = fs.statSync(roleFile);
       // 缓存 key 必须带上**文件名与文件大小**，不能只看 mtime：
@@ -10643,9 +10690,9 @@ async function main() {
       //    带上名字后，切换角色（例如 a.md → b.md）永远不会误命中。
       // ② 同名的原地重写若长度变了（大多数编辑都会变），size 变化也能击穿缓存。
       // 代价只是多几次 stat，比"热注入路径上一直发旧人格"划算得多。
-      const cacheKey = `${safeName}:${stateStat.mtimeMs}:${stateStat.size}:${roleStat.mtimeMs}:${roleStat.size}`;
+      const cacheKey = `${safeName}:${path.basename(roleFile)}:${stateStat.mtimeMs}:${stateStat.size}:${roleStat.mtimeMs}:${roleStat.size}`;
       if (roleHintCache.key === cacheKey) return roleHintCache.raw;
-      const raw = fs.readFileSync(roleFile, 'utf8');
+      const raw = readRoleCardText(safeName);
       roleHintCache = { key: cacheKey, raw };
       return raw;
     } catch {
@@ -12325,9 +12372,8 @@ async function main() {
           writeRoleState(null, roleState.mode);
           await sendToQQ(key, '已清除角色，恢复正常人格。');
         } else {
-          const roleFile = path.join(ROOT, 'roles', name + '.md');
-          if (!fs.existsSync(roleFile)) {
-            await sendToQQ(key, `角色「${name}」不存在。角色文件放 qq-bridge/roles/ 目录。`);
+          if (!resolveRoleFile(name)) {
+            await sendToQQ(key, `角色「${name}」不存在。角色文件放 qq-bridge/roles/ 目录（JSON 或旧版 .md）。`);
           } else {
             writeRoleState(name, roleState.mode);
             await sendToQQ(key, `已切换角色：${name}。`);

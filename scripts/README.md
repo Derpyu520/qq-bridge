@@ -136,6 +136,7 @@
 
 - `ops/bridge-launcher.mjs` — 跨平台桥接启动器（替代 start.bat / restart.bat）。（npm: start / restart）
 - `ops/check-onebot-status.mjs` — 查询 SnowLuma 网关与 QQ 会话状态：HTTP API + WebSocket
+- `ops/convert-role-cards.mjs` — 把旧版 roles/*.md 人格卡迁移成 roles/*.json（不修改 README.md）。
 - `ops/diagnose-acl.mjs` — 诊断：仓库里哪些路径的 ACL 被**切断了继承**，因而在 DSH 沙箱会话里不可写。（npm: diagnose:acl）
 - `ops/harden-state-acl.mjs` — state/ 目录权限收紧的「可提权」入口。（npm: harden-acl）
 - `ops/privacy-scan.mjs` — 发布前隐私与敏感信息扫描（**离线、只读、不联网**）。（npm: privacy-scan / privacy-scan:history）
