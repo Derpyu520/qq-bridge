@@ -360,12 +360,14 @@ const TOOL_CONFIG_FLAGS = {
   qq_get_group_members: 'getGroupMembers',
   qq_memory_append: 'memory',
   qq_memory_query: 'memory',
+  qq_memory_search: 'memory',
   qq_memory_remove: 'memory',
   qq_memory_clear: 'memory',
   qq_slang_query: 'slangQuery',
   qq_slang_submit: 'slangSubmit',
   qq_send_voice: 'sendVoice',
   qq_list_voices: 'sendVoice',
+  qq_say: 'sendVoice',
   // 下面这些曾经漏登记。漏一个不是"多注册一个工具"那么轻：桥接那边按 `v2ToolEnabled(flag)`
   // 在**调用期**一律 403，而这里不登记就等于"控制台显示已关闭、模型每次请求仍收到它的完整
   // 描述与参数 schema，然后调用它、再拿到 403"——既白烧 token（本文件开头 176 行起就是为省这份
@@ -1027,25 +1029,27 @@ server.tool(
 
 server.tool(
   'qq_memory_append',
-  '记录一条轻量记忆：activeTopic=进行中的话题；pendingThought=你想说但还没说的话；memberImpression=对某位群友的印象。记忆会持久化，并在后续唤醒/qq_get_prompt 中自动出现。',
+  '记录一条记忆。默认写本会话轻量记忆（activeTopic=进行中的话题；pendingThought=你想说但还没说的话；memberImpression=对某位群友的印象）；scope=people 时写入跨会话人物档案（需要 extra.qq 或已登记昵称），scope=room 时写入本房间背景。记忆会持久化，并在后续唤醒/qq_get_prompt 中自动出现。',
   {
     key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
     token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
-    category: z.enum(['activeTopic', 'pendingThought', 'memberImpression']).describe('记忆类别'),
+    scope: z.enum(['session', 'people', 'room']).optional().describe('写入作用域：session（默认）/ people（跨群人物档案）/ room（本房间背景）'),
+    category: z.enum(['activeTopic', 'pendingThought', 'memberImpression']).optional().describe('记忆类别（scope=session 时必填）'),
     content: z.string().describe('记忆内容，例如话题、想说的话、对某人的印象标签'),
     extra: z.object({
       target: z.string().optional().describe('memberImpression 时的群友名字/昵称'),
+      qq: z.string().optional().describe('scope=people 时的 QQ 号（优先于 target）'),
       participants: z.array(z.string()).optional().describe('activeTopic 的参与者列表'),
       pendingQuestion: z.string().optional().describe('activeTopic 里还没问出口的问题'),
       motivation: z.string().optional().describe('pendingThought 的动机，如 curiosity/sociability'),
       expiresAtMs: z.number().optional().describe('pendingThought 过期毫秒数，默认 2 小时')
     }).optional().describe('附加信息')
   },
-  async ({ key, token, category, content, extra }) => {
+  async ({ key, token, scope, category, content, extra }) => {
     try {
       const data = await agentApi('/api/socialV2/memory-append', {
         method: 'POST',
-        body: JSON.stringify({ key, category, content, extra: extra || {} }),
+        body: JSON.stringify({ key, scope: scope || 'session', category: category || '', content, extra: extra || {} }),
         headers: { 'x-agent-token': token }
       });
       return { content: [{ type: 'text', text: serializeModelData(data) }] };
@@ -1071,6 +1075,30 @@ server.tool(
       return { content: [{ type: 'text', text: serializeModelData(data) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `记忆读取失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_memory_search',
+  '在**本会话**的历史消息日志里检索（只查当前 key，不跨群/私聊）。用于「几天前说过什么」「谁答应过什么」这类超出最近消息窗口的问题。返回命中原文，引用时说明是查到以前的记录，不要改写成新事实。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    query: z.string().optional().describe('关键词，子串匹配；留空则返回最近的记录'),
+    days: z.number().optional().describe('回看天数，默认 7，最大 30'),
+    limit: z.number().optional().describe('最多返回几条，默认 8，最大 20')
+  },
+  async ({ key, token, query, days, limit }) => {
+    try {
+      const q = new URLSearchParams({ key });
+      if (query) q.set('query', query);
+      if (days) q.set('days', String(days));
+      if (limit) q.set('limit', String(limit));
+      const data = await agentApi(`/api/socialV2/memory-search?${q.toString()}`, { headers: { 'x-agent-token': token } });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `历史检索失败：${error?.message ?? error}` }], isError: true };
     }
   }
 );
@@ -1317,6 +1345,46 @@ if (cfg.socialV2?.sticker?.enabled !== false && cfg.socialV2?.tools?.collectStic
 }
 
 if (cfg.socialV2?.voice?.enabled !== false && cfg.socialV2?.tools?.sendVoice !== false) {
+  // qq_say 只有配了本地 TTS 引擎（socialV2.tts.enabled=true）才注册：
+  // 没引擎时注册它只会让模型调到一个必然报错的工具。
+  if (cfg.socialV2?.tts?.enabled === true) {
+    server.tool(
+      'qq_say',
+      '用你自己的声音（本地 TTS 克隆的音色）现合成一条语音，并发成 QQ 语音条。text 就是你要说的话，会**逐字念出来**：写成口语、短句、带语气词，不要 Markdown、表情符号、emoji、代码、链接，也不要写括号里的动作说明。⚠️ 这台机器 8G 显存跑 offload，合成 1 秒声音要算 11~14 秒。所以：① **10~20 字最理想**：10 字约 45 秒、20 字约 100 秒、30 字要 2~2.5 分钟，**上限 32 字**，超了会被直接拒绝（不会让你白等）；② 同一时间只能合成一条，第二条会被拒，别排队；③ 失败后冷却 45 秒，**失败就立刻改打字，不要反复重试**（重试只会把冷却刷新、把整个回合烧光）。只在「这句话用声音说更有分量」时才用（撒娇、道晚安、认真安慰、短句哼歌），日常闲聊还是打字。因为要等，最好先发一句文字占位（比如「等我一下，我录个语音」），再调这个工具。不要同一条内容既发文字又发语音。返回 verified=true 才算真的发出去了（已用 get_msg 回读到语音段）；verified=false 时不要对对方说「我发语音了」。',
+      {
+        key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+        token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+        text: z.string().describe('要念出来的话（口语、短句，不要 Markdown/表情/链接）'),
+        instruction: z.string().optional().describe('通常不要传：固定音色走严格克隆，带了指令反而会让音色漂移'),
+        cfgScale: z.number().optional().describe('可选：音色贴合强度（默认取配置，一般不用改）'),
+        seed: z.number().optional().describe('可选：随机种子（默认取配置，改它会换一点语气）'),
+        dryRun: z.boolean().optional().describe('只合成不发送（用于自检，不会打扰群里的人）')
+      },
+      async ({ key, token, text, instruction, cfgScale, seed, dryRun }) => {
+        try {
+          const data = await agentApi('/api/socialV2/say', {
+            method: 'POST',
+            body: JSON.stringify({
+              key,
+              text: String(text),
+              token,
+              ...(instruction ? { instruction: String(instruction) } : {}),
+              ...(cfgScale !== undefined ? { cfgScale } : {}),
+              ...(seed !== undefined ? { seed } : {}),
+              ...(dryRun === true ? { dryRun: true } : {})
+            }),
+            headers: { 'x-agent-token': token },
+            // 模型加载后的第一句可能要 40s+，合成 + 发送 + 回读给足预算
+            timeoutMs: 300000
+          });
+          return { content: [{ type: 'text', text: serializeModelData(data) }] };
+        } catch (error) {
+          return { content: [{ type: 'text', text: `发语音失败：${error?.message ?? error}` }], isError: true };
+        }
+      }
+    );
+  }
+
   server.tool(
     'qq_send_voice',
     '在指定会话发一条 QQ 语音（把语音库里准备好的音频当语音条发出去）。voice 传 qq_list_voices 返回的 name（文件名，可带子目录），也可以直接传语音库里的文件名（不带扩展名也能匹配）。注意：① 只能发语音库（qq-bridge/audio/）里的文件，不能发任意本地路径，也不能发 URL/base64；② 受时长与频率上限约束（见 qq_list_voices 的 limits），超限会被拒绝；③ 语音是「开口说话」的强表达，别滥用，闲聊里偶尔发一条即可；④ 返回的 verified=true 表示已经用 get_msg 回读到这条消息的 record 段（语音确实落地了）—— 只有 verified=true 才能对用户说你发了语音；⑤ readback 只对「收到的」语音有意义（QQ 会转写别人的语音），自己发的语音一般拿不到转写文本，默认关闭，别依赖它。',
