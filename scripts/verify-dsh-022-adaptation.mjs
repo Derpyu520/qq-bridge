@@ -52,7 +52,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { dshHome, dshModulesDir } from './dsh-modules.mjs';
+import { dshHome, dshModulesDir, dshProfileName } from './dsh-modules.mjs';
 import { discoverDshSessionCookie, NodeApiClient, unwrap } from '../src/dsh-client.js';
 import { cleanupProbeSession, createProbeDirectory, probeMux, probeTurn } from './adaptation-probe-helpers.mjs';
 
@@ -72,6 +72,17 @@ function check(label, cond, extra = '') {
 function skip(label, why) {
   results.push(`⏭ ${label} — ${why}`);
   return false;
+}
+
+/**
+ * 解析要检查的 profile 目录名。
+ *
+ * DSH 本身没有"当前 profile"的概念，这个脚本以前写死 `web`——但桌面版用的是 `desktop`，
+ * SDK 版还有 `sdk`，写死会让这些机器上的 `npm run verify:adaptation` 直接 ENOENT。
+ * 真正的解析逻辑在 dsh-modules.mjs（与 setup-dsh.mjs 等脚本共用同一套判断）。
+ */
+function resolveProfile(home) {
+  return dshProfileName(home);
 }
 
 // ── 1. 仓库侧：preset persona schema ────────────────────────────────────────
@@ -201,21 +212,30 @@ if (scanned.names.size === 0) {
   check('守卫名单无拼错的假名（restrict 不会静默失效）', fabricated.length === 0, fabricated.join(', ') || `扫过 ${scanned.packages.length} 个包`);
 }
 
-const patch = fs.readFileSync(path.join(DSH_HOME, 'profiles/web/cordis.patch.yml'), 'utf8');
-const patchDoc = yaml.load(patch);
-const mcpIds = patchDoc.filter((e) => e?.insert).flatMap((e) => e.insert.map((x) => x.id));
-check('profile patch 含 3 个 MCP 且无重复', mcpIds.length === 3 && new Set(mcpIds).size === 3, mcpIds.join(', '));
-const snowlumaEntry = patchDoc.filter((e) => e?.insert).flatMap((e) => e.insert).find((x) => x.id === 'mcp-snowluma');
-check('mcp-snowluma 带 toolCallTimeoutMs=725000', snowlumaEntry?.config?.toolCallTimeoutMs === 725000);
-check('mcp 路径指向本仓库', mcpIds.every((id) => {
-  const e = patchDoc.filter((x) => x?.insert).flatMap((x) => x.insert).find((y) => y.id === id);
-  return String(e.config.args[0]).includes('qq-bridge');
-}));
+const profile = resolveProfile(DSH_HOME);
+if (!profile.name) {
+  skip('profile 相关的 DSH 安装检查',
+    `无法确定 profile（现有：${profile.available.join(', ') || '无'}）；设 DSH_PROFILE=<名> 后重试`);
+} else {
+  results.push(`ℹ️ 目标 profile：${profile.name}（${profile.why}）`);
+  const profileDir = path.join(DSH_HOME, 'profiles', profile.name);
+  const patchPath = path.join(profileDir, 'cordis.patch.yml');
+  const patch = fs.readFileSync(patchPath, 'utf8');
+  const patchDoc = yaml.load(patch);
+  const mcpIds = patchDoc.filter((e) => e?.insert).flatMap((e) => e.insert.map((x) => x.id));
+  check('profile patch 含 3 个 MCP 且无重复', mcpIds.length === 3 && new Set(mcpIds).size === 3, mcpIds.join(', '));
+  const snowlumaEntry = patchDoc.filter((e) => e?.insert).flatMap((e) => e.insert).find((x) => x.id === 'mcp-snowluma');
+  check('mcp-snowluma 带 toolCallTimeoutMs=725000', snowlumaEntry?.config?.toolCallTimeoutMs === 725000);
+  check('mcp 路径指向本仓库', mcpIds.every((id) => {
+    const e = patchDoc.filter((x) => x?.insert).flatMap((x) => x.insert).find((y) => y.id === id);
+    return String(e.config.args[0]).includes('qq-bridge');
+  }));
 
-const pkg = JSON.parse(fs.readFileSync(path.join(DSH_HOME, 'profiles/web/package.json'), 'utf8'));
-check('profile bundles 含 qq-mode-console', pkg.dsh.profile.bundles.includes('qq-mode-console'));
-check('qq-mode-console link 依赖已注册', String(pkg.dependencies['qq-mode-console'] ?? '').startsWith('link:'));
-check('qq-mode-console 已 link 进 node_modules', fs.existsSync(path.join(DSH_HOME, 'profiles/web/node_modules/qq-mode-console')));
+  const pkg = JSON.parse(fs.readFileSync(path.join(profileDir, 'package.json'), 'utf8'));
+  check('profile bundles 含 qq-mode-console', pkg.dsh.profile.bundles.includes('qq-mode-console'));
+  check('qq-mode-console link 依赖已注册', String(pkg.dependencies['qq-mode-console'] ?? '').startsWith('link:'));
+  check('qq-mode-console 已 link 进 node_modules', fs.existsSync(path.join(profileDir, 'node_modules/qq-mode-console')));
+}
 
 // ── 3. 仓库配置：模型 ───────────────────────────────────────────────────────
 const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
