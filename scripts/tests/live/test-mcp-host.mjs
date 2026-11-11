@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
-const entry = fileURLToPath(new URL('../../../src/mcp-host-server.js', import.meta.url));
+const entry = fileURLToPath(new URL('../../../src/mcp/mcp-host-server.js', import.meta.url));
 
 const transport = new StdioClientTransport({ command: process.execPath, args: [entry] });
 const client = new Client({ name: 'bridge-test', version: '0.1.0' });

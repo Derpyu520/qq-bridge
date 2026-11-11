@@ -9,9 +9,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../.
 const NODE = process.execPath;
 
 const SERVERS = [
-  { serverName: 'snowluma', script: 'src/mcp-snowluma-safe.js' },
-  { serverName: 'snowluma-host', script: 'src/mcp-host-server.js' },
-  { serverName: 'web-search-safe', script: 'src/mcp-web-search-safe.js' },
+  { serverName: 'snowluma', script: 'src/mcp/mcp-snowluma-safe.js' },
+  { serverName: 'snowluma-host', script: 'src/mcp/mcp-host-server.js' },
+  { serverName: 'web-search-safe', script: 'src/mcp/mcp-web-search-safe.js' },
 ];
 
 let failures = 0;

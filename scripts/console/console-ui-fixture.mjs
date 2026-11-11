@@ -6,7 +6,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { roleCharStats, roleSectionReport } from '../../src/text/role-card.js';
 import { pickBucketMs } from '../../src/dsh/token-ledger.js';
-import { manualDirCommand } from '../../src/util/state-acl.mjs';
+import { manualDirCommand } from '../../src/util/state-acl.js';
 
 export const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const timestamp = '2026-09-20T08:30:00.000Z';
@@ -489,7 +489,7 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
           });
           case '/api/slang': return json({ ok: true, entries: state.slang, config: state.slangConfig });
           // state/ 的 ACL 收紧结果：用离线示例值演示「未收紧」的告警条（Windows 上未提权时的真实情况）
-          // 命令本身必须来自 `src/util/state-acl.mjs`，不能在这里另抄一份：这里曾经抄的是
+          // 命令本身必须来自 `src/util/state-acl.js`，不能在这里另抄一份：这里曾经抄的是
           // `icacls DIR /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F" /T /C` —— 正是那句
           // 会把子文件 DACL 清空、让桥接读不到自己令牌的破坏性命令。示例数据是给人照抄的，
           // 抄错的那一版和真的那一版看起来一模一样。

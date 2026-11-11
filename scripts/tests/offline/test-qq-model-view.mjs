@@ -203,7 +203,7 @@ test('MCP validates/forwards read watermarks and wait purposes against an isolat
     await fs.writeFile(path.join(fixture, 'config.json'), JSON.stringify({ consolePort: api.address().port }));
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [path.join(fixture, 'src', 'mcp-snowluma-safe.js')], cwd: fixture, stderr: 'pipe'
+      args: [path.join(fixture, 'src', 'mcp', 'mcp-snowluma-safe.js')], cwd: fixture, stderr: 'pipe'
     });
     client = new Client({ name: 'qq-model-view-test', version: '1.0.0' });
     await client.connect(transport);

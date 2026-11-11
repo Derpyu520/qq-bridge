@@ -27,7 +27,7 @@ import { safeFetchBuffer, looksLikeImageBuffer } from './util/safe-fetch.js';
 import { normalizeImageForModel } from './media/media-normalize.js';
 import { AUDIO_EXTS, cleanupTemp, describeAudio, formatBytes, formatDuration, inspectAudio, listAudioFiles, parseTargetKey, processAudioVolume, resolveAudioProcessing, resolveAudioSource, safeJoinLibrary } from './media/send-voice-lib.js';
 import { discoverSnowLumaConnection, persistSnowLumaEndpoint, persistToken } from './qq/snowluma-conn.js';
-import { hardenDir, manualDirCommand } from './util/state-acl.mjs';
+import { hardenDir, manualDirCommand } from './util/state-acl.js';
 import { extractForwardIds, forwardIdFromData, sanitizeForwardId, formatForwardResponse } from './qq/forward.js';
 import {
   DEFAULT_DOWNLOAD_DIR,
@@ -246,7 +246,7 @@ function loadOrCreateConsoleToken() {
  * 这台机器的用户都能读走控制台令牌、Snowluma accessToken、各会话 agentToken 和全部 QQ 聊天记录。
  * 这里用 icacls 切断 state/ 的继承链，只保留「当前用户 + SYSTEM + Administrators」。
  *
- * ⚠️ 具体实现已抽到 `src/state-acl.mjs`（与 scripts/ops/harden-state-acl.mjs 共用同一份）。
+ * ⚠️ 具体实现已抽到 `src/util/state-acl.js`（与 scripts/ops/harden-state-acl.mjs 共用同一份）。
  * 这里原本自带一份**会破坏数据**的实现：
  *   · `icacls DIR /inheritance:r /grant:r "u:(OI)(CI)F" /T` —— (OI)(CI) 是目录专用标志，
  *     套到 /T 展开的文件上会失败，而 /inheritance:r 已摘掉文件的继承 ACE，净结果是
@@ -3526,7 +3526,7 @@ async function main() {
   //      ⚠️ **不要用 `get_login_info` 取 good**：它只返回 `{ user_id, nickname }`。
   //      取错字段不会报错（SDK 只校验 status/retcode 信封，不校验 data 载荷），
   //      good 会永远停在 null —— 本文件第一版就是这么写的，等于权威信号整条是死代码。
-  //      `src/mcp-snowluma-safe.js` 的 snowluma_status 工具是对的取法（get_login_info
+  //      `src/mcp/mcp-snowluma-safe.js` 的 snowluma_status 工具是对的取法（get_login_info
   //      拿昵称 + get_status 拿 online/good），可对照。
   //
   //   ③ `bot_status`（账号会话上下线）—— SnowLuma 1.14.17 起才有，老运行时永不触发，

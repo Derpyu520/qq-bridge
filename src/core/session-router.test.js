@@ -5,7 +5,7 @@ import {
   createInitialConversationState,
   migrateLegacyMode,
   SessionRouter,
-} from './session-router.mjs';
+} from './session-router.js';
 
 const ownerQQ = 42; // Synthetic test identity.
 const ownerKey = `private:${ownerQQ}`;

@@ -132,7 +132,7 @@ test('credential redaction happens before result title and snippet truncation', 
 test('MCP web_fetch applies its web-port allowlist on the shared transport', async () => {
   const tools = new Map();
   const calls = [];
-  const source = fs.readFileSync(new URL('../../src/mcp-web-search-safe.js', import.meta.url), 'utf8')
+  const source = fs.readFileSync(new URL('../../src/mcp/mcp-web-search-safe.js', import.meta.url), 'utf8')
     .replace(/^import .*;\r?\n/gm, '')
     .replace('await server.connect(new StdioServerTransport());', 'server.connect(new StdioServerTransport());');
   class McpServer {

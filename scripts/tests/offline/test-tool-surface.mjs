@@ -171,7 +171,7 @@ await test('WS 挂了，群成员查询仍然可用（HTTP 兜底）', async () 
 
 // ── 3. 源码级断言：注册期按模式收敛 ────────────────────────────────────────
 await test('旧只读工具按启动模式注册，v2 群成员工具不依赖 closed-agent', async () => {
-  const src = fs.readFileSync(path.join(ROOT, 'src/mcp-snowluma-safe.js'), 'utf8');
+  const src = fs.readFileSync(path.join(ROOT, 'src/mcp/mcp-snowluma-safe.js'), 'utf8');
   assert.match(src, /registerLegacyReadTools/, '必须有按模式决定的注册开关');
   assert.match(src, /mode === '' \|\| bootBridgeMode === 'closed-agent'|bootBridgeMode === '' \|\| bootBridgeMode === 'closed-agent'/,
     '只在 closed-agent（或探测失败）时注册旧只读工具');

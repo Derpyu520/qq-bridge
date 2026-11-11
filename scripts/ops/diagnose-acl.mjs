@@ -7,7 +7,7 @@
 // 切断了继承链，沙箱进程就没有写权限 —— 表现为 EPERM / "Access to the path … is denied"，
 // 而从 `danger-full-access` 会话（或无沙箱的普通终端）跑同样的操作却完全正常。
 //
-// 本项目**故意**对 `state/` 与 `config.json` 这么做（见 src/util/state-acl.mjs：
+// 本项目**故意**对 `state/` 与 `config.json` 这么做（见 src/util/state-acl.js：
 // state/ 里有控制台令牌、SnowLuma OneBot 令牌与全部 QQ 聊天记录）。这是有意的安全取舍，
 // 不是 bug —— 但它有个必须知道的副作用：
 //
@@ -28,7 +28,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { icacls, hasInheritedPermissionAce } from '../../src/util/state-acl.mjs';
+import { icacls, hasInheritedPermissionAce } from '../../src/util/state-acl.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const STRICT = process.argv.includes('--strict');
@@ -114,7 +114,7 @@ const expected = severed.filter((s) => isIntentional(s.rel));
 const unexpected = severed.filter((s) => !isIntentional(s.rel));
 
 console.log(`\n=== 有意收紧（预期内） ===`);
-console.log(`共 ${expected.length} 项。${expected.length ? '来源：src/util/state-acl.mjs 的 hardenDir/hardenFile（state/ 与 config.json）。' : ''}`);
+console.log(`共 ${expected.length} 项。${expected.length ? '来源：src/util/state-acl.js 的 hardenDir/hardenFile（state/ 与 config.json）。' : ''}`);
 for (const s of expected.slice(0, 6)) console.log(`  ${s.rel}${s.isDir ? '/' : ''}`);
 if (expected.length > 6) console.log(`  … 其余 ${expected.length - 6} 项`);
 if (expected.length) {

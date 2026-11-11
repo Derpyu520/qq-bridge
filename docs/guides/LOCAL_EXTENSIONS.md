@@ -9,7 +9,7 @@
 | 功能 | 配置 | 代码入口 | 测试 |
 | --- | --- | --- | --- |
 | QQ 文件下载/落盘/进上下文 | `files.*` | `src/qq/qq-file.js`（服务）、`src/qq/qq-file-lib.js`（纯函数）、`src/bridge.js`（端点与投递） | `scripts/tests/offline/test-qq-file.mjs` |
-| 群文件列表与下载工具 | `socialV2.tools.listGroupFiles` | `src/mcp-snowluma-safe.js`、`src/bridge.js` | `scripts/tests/offline/test-qq-file.mjs` |
+| 群文件列表与下载工具 | `socialV2.tools.listGroupFiles` | `src/mcp/mcp-snowluma-safe.js`、`src/bridge.js` | `scripts/tests/offline/test-qq-file.mjs` |
 | 本地文件上传到 QQ | `files.upload` / `files.uploadRoots` / `files.uploadPresets` / `socialV2.tools.uploadFile` | `src/qq/qq-file.js`（`uploadLocalFileToQQ`）、`src/qq/qq-file-lib.js`（`resolveUploadPath`）、MCP `qq_upload_file` | `scripts/tests/offline/test-qq-file.mjs` |
 | 带工具的群聊预设 | `socialV2.agentPreset = "qq-chat-tools"` | `dsh/agent-presets/qq-chat-tools/` | `scripts/tests/offline/test-qq-agent-guard.mjs`、`scripts/tests/offline/test-agent-preset-patches.mjs` |
 | 路径/命令护栏 | `agentGuard.*` | `plugins/qq-agent-presets/qq-agent-guard.mjs` | `scripts/tests/offline/test-qq-agent-guard.mjs` |

@@ -89,7 +89,7 @@ const tests = [
   'tests/offline/test-agent-preset-patches.mjs', 'tests/offline/test-tool-restrict-guard.mjs', 'tests/offline/test-tool-surface.mjs',
   'tests/offline/test-media-normalize.mjs', 'tests/offline/test-stickers.mjs', 'tests/offline/test-forward.mjs',
   'tests/offline/test-v2-wait.mjs', 'tests/offline/test-time-awareness.mjs', 'tests/offline/test-wait-backlog.mjs',
-  '../src/core/session-router.test.mjs',
+  '../src/core/session-router.test.js',
 ];
 let failed = 0;
 for (const test of tests) {

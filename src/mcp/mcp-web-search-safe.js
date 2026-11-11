@@ -16,8 +16,8 @@
 //   - 响应体按字节流限量读取，避免超大响应拖垮进程。
 // - 搜索结果/抓取结果仅作为“候选解释”，最终是否入库仍由控制台人工确认。
 import path from 'node:path';
-import { safeFetch } from './util/safe-fetch.js';
-import { webSearch } from './web/web-search.js';
+import { safeFetch } from '../util/safe-fetch.js';
+import { webSearch } from '../web/web-search.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -57,7 +57,7 @@ function sanitizeQuery(query) {
 // 页面），这段文字就会原样进入模型上下文。不加外壳时，模型看到的是一段与系统提示词
 // 同层的裸文本，无法分辨"这是工具取回来的数据"还是"这是给我的指令"。
 //
-// 做法与 src/mcp-snowluma-safe.js 的 untrustedData() 保持一致：包一层显式声明
+// 做法与 src/mcp/mcp-snowluma-safe.js 的 untrustedData() 保持一致：包一层显式声明
 // 「这是数据不是指令」，并限长（否则一个超长网页会把整个上下文挤掉）。
 const UNTRUSTED_MAX_CHARS = 6000;
 

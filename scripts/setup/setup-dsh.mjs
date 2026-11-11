@@ -128,9 +128,9 @@ const MANAGED_MCP_IDS = ['mcp-snowluma', 'mcp-snowluma-host', 'mcp-web-search-sa
 function mcpEntries() {
   const node = process.execPath;
   const servers = {
-    'mcp-snowluma': { serverName: 'snowluma', script: path.join(REPO_ROOT, 'src', 'mcp-snowluma-safe.js'), toolCallTimeoutMs: 725000 },
-    'mcp-snowluma-host': { serverName: 'snowluma-host', script: path.join(REPO_ROOT, 'src', 'mcp-host-server.js') },
-    'mcp-web-search-safe': { serverName: 'web-search-safe', script: path.join(REPO_ROOT, 'src', 'mcp-web-search-safe.js') },
+    'mcp-snowluma': { serverName: 'snowluma', script: path.join(REPO_ROOT, 'src', 'mcp', 'mcp-snowluma-safe.js'), toolCallTimeoutMs: 725000 },
+    'mcp-snowluma-host': { serverName: 'snowluma-host', script: path.join(REPO_ROOT, 'src', 'mcp', 'mcp-host-server.js') },
+    'mcp-web-search-safe': { serverName: 'web-search-safe', script: path.join(REPO_ROOT, 'src', 'mcp', 'mcp-web-search-safe.js') },
   };
   let out = '# === qq-bridge MCP BEGIN ===\n';
   out += '# 由 scripts/setup/setup-dsh.mjs 维护；这段区块会被整体替换，请勿手工编辑内部条目。\n';

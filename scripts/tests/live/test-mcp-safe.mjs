@@ -17,7 +17,7 @@ function currentMode() {
 const MODE = currentMode();
 const RESERVED2 = MODE === 'reserved2';
 
-const entry = fileURLToPath(new URL('../../../src/mcp-snowluma-safe.js', import.meta.url));
+const entry = fileURLToPath(new URL('../../../src/mcp/mcp-snowluma-safe.js', import.meta.url));
 
 const transport = new StdioClientTransport({ command: process.execPath, args: [entry] });
 const client = new Client({ name: 'bridge-test', version: '0.1.0' });

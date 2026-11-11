@@ -90,7 +90,7 @@
 | --- | --- | --- |
 | 原子写 | `atomicWriteJson/Text()` | 唯一随机临时名 + rename（Windows EPERM 退避重试），不会写坏配置 |
 | Windows ACL 收紧 | `hardenStateDirAcl()` + `scripts/ops/harden-state-acl.mjs` | Windows 上 `mode: 0o600` 是**空操作**，因此启动时切断 `state/` 的继承链，只保留当前用户/SYSTEM/Administrators。改 ACL 需要 WRITE_DAC —— **目录属主通常本来就有，所以一般不弹 UAC**；失败时用 `Start-Process -Verb RunAs` 提权重试一次（`--elevated` 短路自身，杜绝递归），再失败就打印可复制命令并**以 0 退出、绝不阻断启动**。控制台「访问与安全」页显示告警条与「重新检测」按钮 |
-| ACL 防自锁 | `src/util/state-acl.mjs` | 先为现有条目显式授权，再断继承，最后移除宽松主体；命令失败即停止，每步回读验证，空 DACL 不作为成功 |
+| ACL 防自锁 | `src/util/state-acl.js` | 先为现有条目显式授权，再断继承，最后移除宽松主体；命令失败即停止，每步回读验证，空 DACL 不作为成功 |
 | 令牌不回显 | 日志/活动/工具日志 | 控制台及连接自愈日志只记已配置/已生成，不打印令牌前后缀；活动日志与工具调用参数过 `redactSensitiveText` / `redactSensitive`（递归处理 JSON 字符串叶子） |
 | 令牌只发回环 | `dsh-client.ensureAuth()` | DSH launch token 换 Cookie 时必须放进 URL，因此**默认拒绝非回环 baseUrl**；远程部署需显式 `dsh.allowRemote: true` |
 | 自动探测与重定向 | `dsh-endpoint.js` / `dsh-client.js` | 自动发现只为回环地址铸造本机 Cookie；拒绝 URL 内嵌凭据；探测不跟随重定向并关闭响应体，RPC 拒绝重定向，避免转交聊天主体 |

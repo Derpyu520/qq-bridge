@@ -30,7 +30,7 @@ const writeCredentials = () => fs.writeFileSync(credentialFile, JSON.stringify({
 }));
 const cookieAuthority = (cookie) => JSON.parse(Buffer.from(cookie.split('.')[1], 'base64url').toString()).authority;
 
-const aclSource = fs.readFileSync(new URL('../../../src/util/state-acl.mjs', import.meta.url), 'utf8')
+const aclSource = fs.readFileSync(new URL('../../../src/util/state-acl.js', import.meta.url), 'utf8')
   .replace(/^import .*;\r?$/gm, '').replace(/^export /gm, '');
 const allow = 'fixture BUILTIN\\Administrators:(F)\n        fixture-user:(F)\n';
 function fakeAcl(run) {

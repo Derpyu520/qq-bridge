@@ -53,7 +53,7 @@ qq-bridge 会接触本机 OneBot 接入令牌、DSH 会话 Cookie 与控制台�
 
 ## 部署侧的硬要求（这些不满足就不是"漏洞"，是误配）
 
-1. 控制台令牌、`config.json`、`state/` **不要**放到对 `BUILTIN\Users` 可读的位置（本程序启动时会尝试收紧 ACL，见 `src/util/state-acl.mjs`）。
+1. 控制台令牌、`config.json`、`state/` **不要**放到对 `BUILTIN\Users` 可读的位置（本程序启动时会尝试收紧 ACL，见 `src/util/state-acl.js`）。
 2. **白名单必配**。默认空白名单拒绝所有会话；只有显式设置 `allowAllWhenEmpty: true` 才会在空白名单时开放，该配置应谨慎使用。
 3. 不要把 DSH 的控制台或桥接端口暴露到公网。
 

@@ -16,7 +16,7 @@ function parseEnvelope(text) {
 
 function loadWebTools({ safeFetch, webSearch }) {
   const tools = new Map();
-  const source = fs.readFileSync(new URL('../../src/mcp-web-search-safe.js', import.meta.url), 'utf8')
+  const source = fs.readFileSync(new URL('../../src/mcp/mcp-web-search-safe.js', import.meta.url), 'utf8')
     .replace(/^import .*;\r?\n/gm, '')
     .replace('await server.connect(new StdioServerTransport());', 'server.connect(new StdioServerTransport());');
   class McpServer {
@@ -119,7 +119,7 @@ test('empty searches are rejected without calling the transport', async () => {
 function loadSnowlumaTools(fetchImpl, fixtureConfig = null, httpImpl = null, fixtureMode = 'closed-agent') {
   const tools = new Map();
   // vm 里没有 ESM 的 import.meta，把模块顶部的 __dirname 推导整段替换成固定值。
-  const source = fs.readFileSync(new URL('../../src/mcp-snowluma-safe.js', import.meta.url), 'utf8')
+  const source = fs.readFileSync(new URL('../../src/mcp/mcp-snowluma-safe.js', import.meta.url), 'utf8')
     .replace(/^import .*;\r?\n/gm, '')
     .replace("const __dirname = path.dirname(fileURLToPath(import.meta.url));", "const __dirname = '/fixture/src';")
     .replace('await server.connect(new StdioServerTransport());', 'server.connect(new StdioServerTransport());');

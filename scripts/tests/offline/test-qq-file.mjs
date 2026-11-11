@@ -238,7 +238,7 @@ console.log('## 配置/端点/工具描述一致性');
   ok(bridge.includes('/api/socialV2/group-files'), '群文件列表端点已注册');
   ok(bridge.includes('/api/socialV2/download-group-file'), '群文件下载端点已注册');
   ok(bridge.includes("v2ToolEnabled('listGroupFiles')"), '群文件列表受工具开关约束');
-  const mcp = fs.readFileSync(path.join(ROOT, 'src/mcp-snowluma-safe.js'), 'utf8');
+  const mcp = fs.readFileSync(path.join(ROOT, 'src/mcp/mcp-snowluma-safe.js'), 'utf8');
   ok(mcp.includes("'qq_list_group_files'"), 'MCP 暴露 qq_list_group_files');
   ok(mcp.includes("'qq_download_group_file'"), 'MCP 暴露 qq_download_group_file');
   ok(mcp.includes("'qq_download_file'"), 'MCP 暴露 qq_download_file');

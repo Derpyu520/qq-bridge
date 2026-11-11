@@ -80,9 +80,9 @@ DSH 0.2.2 起上游要求 Node.js **≥24.9**；桥接程序本身仍兼容 `>=2
 
    - 安装 agent preset：通过 `plugins/qq-agent-presets` 这个 DSH bundle 把 `qq-chat` / `qq-chat-v2` 两条 `@deepseek-ai/dsh-agent-preset` 行插入 profile（DSH 0.1.7 起 preset **不再是** `~/.dsh/.agent-presets/<名>/` 目录，该目录完全不被读取）。patch 由 `scripts/setup/build-agent-preset-patches.mjs` 从 `dsh/agent-presets/` 的权威源生成
    - 在 `~/.dsh/profiles/web/cordis.patch.yml` 挂载：
-     - `mcp-snowluma`（`src/mcp-snowluma-safe.js`，带 `toolCallTimeoutMs: 725000`）
-     - `mcp-snowluma-host`（`src/mcp-host-server.js`）
-     - `mcp-web-search-safe`（`src/mcp-web-search-safe.js`）
+     - `mcp-snowluma`（`src/mcp/mcp-snowluma-safe.js`，带 `toolCallTimeoutMs: 725000`）
+     - `mcp-snowluma-host`（`src/mcp/mcp-host-server.js`）
+     - `mcp-web-search-safe`（`src/mcp/mcp-web-search-safe.js`）
    - 在 `~/.dsh/profiles/web/package.json` 注册 `qq-mode-console` 与 `qq-agent-presets`（`dsh.profile.bundles` + `link:` 依赖），并维护 `node_modules` 下的 junction
    - 把 `qq-mode` 的默认模式设为 `reserved2`（二代仿真）
    - 创建本地 `state/mode.json`（`mode: reserved2`）作为 DSH settings 不可用时的兜底

@@ -10,7 +10,7 @@
 //   2) 不消费参数：桥接进程是 `node src/bridge.js`，这里绝不能碰 process.argv 的语义。
 //   3) 输出给人看：中文、直白、给出下一步。
 //
-// ⚠️ 具体的 icacls 逻辑**不在本文件**，而是与桥接进程共用 `src/util/state-acl.mjs`。
+// ⚠️ 具体的 icacls 逻辑**不在本文件**，而是与桥接进程共用 `src/util/state-acl.js`。
 // 这套逻辑曾经在这里和 src/bridge.js 里各写一份，两份带着同一个 bug：
 // `icacls DIR /inheritance:r /grant:r "u:(OI)(CI)F" /T` 会把子文件 DACL 清空
 // （(OI)(CI) 是目录专用标志，套到文件上失败，而 /inheritance:r 已经摘掉了继承 ACE），
@@ -25,7 +25,7 @@ import path from 'node:path';
 import { resolveConfigPath } from '../../src/util/config-path.js';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { hardenDir, hardenFile, isHardened, manualDirCommand } from '../../src/util/state-acl.mjs';
+import { hardenDir, hardenFile, isHardened, manualDirCommand } from '../../src/util/state-acl.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '../..');

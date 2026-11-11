@@ -19,7 +19,7 @@ DSH/                         ← 工作区根（不是仓库根）
 
 | 路径 | 作用 | 修改注意事项 |
 | --- | --- | --- |
-| `src/` | 桥接主程序与共享模块 | 入口 `bridge.js` / `self-test.js` / `mcp-*.js` 留在根目录（MCP server 由 DSH 按路径启动，不能随便挪）；按职责分目录：`dsh/`（客户端/端点/preset/账本/价目）、`qq/`（文件/转发/表情/连接/等待）、`media/`（图片归一/语音）、`text/`（Markdown/脱敏/人格/提示词/黑话）、`web/`（联网搜索）、`util/`（安全抓取/ACL/配置路径）；`core/` 是 session-router |
+| `src/` | 桥接主程序与共享模块 | 入口 `bridge.js` / `self-test.js` 留在根目录；`mcp/` 放三个 MCP server（由 DSH 按 setup-dsh 写入的绝对路径启动）；按职责分目录：`dsh/`（客户端/端点/preset/账本/价目）、`qq/`（文件/转发/表情/连接/等待）、`media/`（图片归一/语音）、`text/`（Markdown/脱敏/人格/提示词/黑话）、`web/`（联网搜索）、`util/`（安全抓取/ACL/配置路径）、`mcp/`（三个 MCP server）；`core/` 是 session-router |
 | `scripts/` | 离线回归、安装、诊断、探针和运维脚本 | 文件以 Git 跟踪清单为准；新增回归脚本应加入 `scripts/test-audit.mjs` |
 | `dsh/agent-presets/` | `qq-chat` / `qq-chat-v2` / `qq-chat-tools` 的权威 preset 源 | 修改后运行 `node scripts/setup/build-agent-preset-patches.mjs` 重新生成 bundle patch；`qq-*.mjs` 只是 re-export 壳，实现文件在 `plugins/qq-agent-presets/` |
 | `plugins/` | DSH bundle：`qq-agent-presets` 与 `qq-mode-console` | 修改后需重新同步安装并重启 DSH；`qq-mode-console` 目前只有 host 半 |

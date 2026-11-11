@@ -26,7 +26,7 @@ import { createQQFileService } from '../../src/qq/qq-file.js';
 import { resolveConfigExamplePath, resolveConfigPath } from '../../src/util/config-path.js';
 import * as presetPrompt from '../../src/text/preset-prompt.js';
 import * as roleCard from '../../src/text/role-card.js';
-import * as stateAcl from '../../src/util/state-acl.mjs';
+import * as stateAcl from '../../src/util/state-acl.js';
 import { persistSnowLumaEndpoint, persistToken } from '../../src/qq/snowluma-conn.js';
 import { unwrap, createTurnCollector } from '../../src/dsh/dsh-client.js';
 

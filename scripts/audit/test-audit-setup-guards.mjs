@@ -64,7 +64,7 @@ import fs from 'node:fs';
 // 2026-09-20：`start_snowluma` / `stop_snowluma` 与 `snowluma.allowProcessControl` 已整体移除。
 // 这条测试**防止它们（或同类能力）被无意加回来**——本项目唯一一条"删掉的功能不许复活"的约束。
 {
-  const host = fs.readFileSync(path.join(root, 'src/mcp-host-server.js'), 'utf8');
+  const host = fs.readFileSync(path.join(root, 'src/mcp/mcp-host-server.js'), 'utf8');
   // ① 代码里不得再出现进程启停原语（注释中为记录原因可以提，故先剔掉纯注释行）
   const code = host.split('\n')
     .filter((l) => !l.trim().startsWith('//') && !l.trim().startsWith('*'))

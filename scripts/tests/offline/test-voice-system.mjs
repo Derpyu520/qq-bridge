@@ -142,7 +142,7 @@ console.log('## qq-bridge 语音系统：路由与开关');
 
 console.log('## qq-bridge 语音系统：MCP 工具与开关映射');
 {
-  const mcp = read('src/mcp-snowluma-safe.js');
+  const mcp = read('src/mcp/mcp-snowluma-safe.js');
   ok(mcp.includes("'qq_send_voice'"), '注册 qq_send_voice');
   ok(mcp.includes("'qq_list_voices'"), '注册 qq_list_voices');
   ok(/qq_send_voice: 'sendVoice'/.test(mcp) && /qq_list_voices: 'sendVoice'/.test(mcp), '两个工具都受 sendVoice 开关控制');

@@ -22,7 +22,7 @@ function loadTools({ selfKey = 'group:123' } = {}) {
     constructor(options) { super(options); server = this; }
     async connect() {}
   }
-  const source = fs.readFileSync(new URL('../../../src/mcp-snowluma-safe.js', import.meta.url), 'utf8')
+  const source = fs.readFileSync(new URL('../../../src/mcp/mcp-snowluma-safe.js', import.meta.url), 'utf8')
     .replace(/^import .*;\r?\n/gm, '')
     .replace("const __dirname = path.dirname(fileURLToPath(import.meta.url));", "const __dirname = '/fixture/src';")
     .replace('await server.connect(new StdioServerTransport());', 'server.connect(new StdioServerTransport());');

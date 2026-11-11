@@ -517,7 +517,7 @@ await test('R26 会话绑定：sessionId 编解码往返 + 跨会话 key 被拒'
 
   const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
   const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js');
-  const entry = fileURLToPath(new URL('../../src/mcp-snowluma-safe.js', import.meta.url));
+  const entry = fileURLToPath(new URL('../../src/mcp/mcp-snowluma-safe.js', import.meta.url));
 
   const callWith = async (selfKeyValue, targetKey) => {
     const transport = new StdioClientTransport({

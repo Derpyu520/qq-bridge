@@ -5,7 +5,7 @@
 //
 // DSH 的 MCP 桥（dsh-mcp-client 的 syncTools → tools/call）**只传 name + arguments**，
 // 协议里没有任何「这次调用来自哪个会话」的字段。于是桥接的 MCP server 只能按
-// **模型给的 key** 去解析会话令牌（src/mcp-snowluma-safe.js 的 resolveAgentTokenFor(key)）——
+// **模型给的 key** 去解析会话令牌（src/mcp/mcp-snowluma-safe.js 的 resolveAgentTokenFor(key)）——
 // 模型（或被注入的群友文本）只要把 key 换成别的群号，就能读到那个群的会话状态。
 //
 // 但 DSH 的**插件侧**是知道身份的：工具执行记录 exec 上挂着 exec.agent，
