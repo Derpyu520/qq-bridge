@@ -29,6 +29,7 @@ QQ ↔ SnowLuma ↔ qq-bridge ↔ DeepSeek Harness ↔ 模型服务
 | 消息桥接 | 按群聊 / 私聊维护独立会话，支持文本、图片、表情与引用回复 |
 | 聊天与仿真 | 普通聊天（`chat`）、两代群友仿真（`reserved` / `reserved2`）、自定义角色 |
 | 个人助手 | `closed-agent` 仅限管理员私聊，可使用完整 DSH 工具；请谨慎开启 |
+| 拟人记忆 | AI 自己决定记什么、主动回忆、按重要度遗忘，睡眠时自动巩固；共享记忆跨会话可用。详见 [拟人记忆文档](docs/guides/MEMORY.md) |
 | 本地管理 | 控制台切换模式、管理白名单与审批、查看日志和模型用量 |
 
 ## 快速开始
@@ -91,6 +92,7 @@ Windows 也可双击 `start.bat` 以守护模式运行，关闭窗口即停止�
 | 安装、升级或排查连接 | [DSH 安装指南](docs/guides/DSH_SETUP.md) |
 | 了解模式、权限与管理命令 | [使用规则](RULES.md) |
 | 查看模型用量与费用口径 | [用量看板](docs/guides/TOKEN_USAGE_CONSOLE.md) |
+| 了解拟人记忆 | [拟人记忆文档](docs/guides/MEMORY.md) |
 | 参与开发 | [贡献指南](CONTRIBUTING.md) · [安全基线](docs/guides/SECURITY_BASELINE.md) |
 | 报告安全漏洞 | [安全报告](SECURITY.md) |
 | 查找其他说明 | [文档索引](docs/README.md) |
@@ -110,3 +112,6 @@ npm run test:audit
 - 本工具不实现 QQ 登录或底层协议，不安装、打包或启停 SnowLuma 后端；当前客户端仍依赖 `@snowluma/sdk` 等包，第三方组件适用各自条款。
 
 当前代码按 [PolyForm Noncommercial 1.0.0](LICENSE) 提供，限非商业用途；`v0.2.1-r1` 及更早已发布版本沿用其发布时的 MIT 许可。第三方组件、独立关系与使用风险见 [NOTICE](NOTICE.md)。
+
+
+

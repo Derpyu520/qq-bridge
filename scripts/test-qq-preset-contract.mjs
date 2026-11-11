@@ -90,8 +90,8 @@ test('autonomy limits and the observation escape hatch stay described', () => {
     '除非对方明确“不聊了/晚安/下了/拜拜”等结束语',
     // [SILENT] 是桥接的退出标记，误用会静默吞掉回复。
     '不要用 [SILENT]',
-    // 记忆面
-    '【记忆卫生】', 'qq_memory_append', 'qq_memory_query', 'qq_memory_remove', 'qq_memory_clear',
+    // 记忆面：先查再说的主入口 + 轻量便签三件套
+    '【记忆卫生】', 'qq_memory_recall', 'qq_memory_append', 'qq_memory_query', 'qq_memory_remove', 'qq_memory_clear',
     // 黑话面
     'qq_slang_query', 'qq_slang_submit', '不重复提交',
     // 频率上限

@@ -358,6 +358,11 @@ const TOOL_CONFIG_FLAGS = {
   qq_get_message_detail: 'getMessageDetail',
   qq_get_active_members: 'getActiveMembers',
   qq_get_group_members: 'getGroupMembers',
+  qq_memory_recall: 'memory',
+  qq_memory_save: 'memory',
+  qq_memory_candidates: 'memory',
+  qq_memory_review: 'memory',
+  qq_memory_forget: 'memory',
   qq_memory_append: 'memory',
   qq_memory_query: 'memory',
   qq_memory_remove: 'memory',
@@ -1056,6 +1061,126 @@ server.tool(
 );
 
 server.tool(
+  'qq_memory_recall',
+  '回忆：在自己的长期记忆里检索以前发生过的事（只读）。当话题可能牵扯到过去——某人提过的经历、约定、喜好、上次聊到一半的事——先用这个工具查，再开口，不要凭印象编。question 用自然语言或关键词都行（例如「摩天轮」「阿草说过她喜欢什么」）。返回的是带日期的记忆片段（含同一段对话的前后文），可直接引用细节。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    question: z.string().describe('你想回忆什么：一句话或几个关键词（如「摩天轮」「上次说的那家店」）'),
+    limit: z.number().optional().describe('最多返回几条，默认 8，最大 20')
+  },
+  async ({ key, token, question, limit }) => {
+    try {
+      const q = new URLSearchParams({ key, question });
+      if (limit) q.set('limit', String(limit));
+      const data = await agentApi(`/api/socialV2/memory-recall?${q.toString()}`, { headers: { 'x-agent-token': token } });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `回忆失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_memory_save',
+  '写一条记忆。**记不记、记多久、放哪一层、要不要合并——都由你判断**。layer="global" 写进**共享记忆**（跨群/私聊共享，关于某个人或某件事本身）；layer="session"（默认）只在本会话有效。scope="long" 用于约定/偏好/重要经历；scope="short" 用于一时的话题/对方当下状态（3 天后：够重要升为长期，否则遗忘）。importance 1~5 认真给。\n\n【先读后写】写之前如果这件事可能已经记过（同一个人/同一个话题），先 qq_memory_candidates(who=…) 或 qq_memory_recall 看一眼已有的；如果已经有相关条目，就传 replaceId 把那条改写成合并后的完整版本，**不要制造两条重复记忆**。合并措辞、取舍细节由你决定。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    text: z.string().describe('记忆内容，写成一句你自己看得懂的话（"阿草在学吉他，说手指疼"）。要合并时写合并后的完整版本'),
+    scope: z.enum(['long', 'short']).optional().describe('长期 long / 短期 short，默认 short'),
+    layer: z.enum(['global', 'session']).optional().describe('共享记忆 global（跨会话共享）/ 本会话 session，默认 session'),
+    importance: z.number().optional().describe('重要度 1~5，默认 3。★ 越高越不易被遗忘'),
+    who: z.string().optional().describe('和谁有关（群友昵称），便于以后按人回忆'),
+    replaceId: z.string().optional().describe('要合并/覆盖的记忆 id（来自 qq_memory_candidates / qq_memory_recall）。给了就把那条改写成 text，而不是新增')
+  },
+  async ({ key, token, text, scope, layer, importance, who, replaceId }) => {
+    try {
+      const data = await agentApi('/api/socialV2/memory-save', {
+        method: 'POST',
+        body: JSON.stringify({ key, text, scope: scope || 'short', layer: layer || 'session', importance: importance ?? 3, who: who || '', replaceId: replaceId || '' }),
+        headers: { 'x-agent-token': token }
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `写记忆失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_memory_candidates',
+  '写记忆前先看已有的候选条目（只读）：传 who 只列这个人的、layer 只列该层。返回 id / 文本 / 重要度 / 层。用它判断是新增，还是用 qq_memory_save 的 replaceId 把某条合并改写——避免写出重复记忆。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    who: z.string().optional().describe('只看和这个人有关的记忆'),
+    layer: z.enum(['global', 'session']).optional().describe('共享记忆 global / 本会话 session'),
+    limit: z.number().optional().describe('最多返回几条，默认 12')
+  },
+  async ({ key, token, who, layer, limit }) => {
+    try {
+      const q = new URLSearchParams({ key });
+      if (who) q.set('who', who);
+      if (layer) q.set('layer', layer);
+      if (limit) q.set('limit', String(limit));
+      const data = await agentApi(`/api/socialV2/memory-candidates?${q.toString()}`, { headers: { 'x-agent-token': token } });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `读取候选记忆失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_memory_review',
+  '整理记忆（遗忘机制的核心）。不带 id 时返回「待复核队列」：到期（短期满 3 天 / 长期 90 天没被想起）的记忆条目，含 id、文本、★、多久没被想起。**要不要留、压缩、升长期、还是忘掉，由你判断**——事实类内容（某人的身份、长期喜好）不该因为"旧"就被删，一时的话题/已过时的约定才该忘。带 id + action 时对某条执行决定。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    id: z.string().optional().describe('要处理的记忆 id：用队列返回的 ref（形如 session:m1 / shared:m1），可精确区分本会话与共享层。不传则只返回队列'),
+    action: z.enum(['keep', 'forget', 'compress', 'promote', 'update']).optional().describe('keep=保留并重新计时 / forget=遗忘 / compress=压缩 / promote=短期升长期 / update=改写（需 text）'),
+    text: z.string().optional().describe('action=update 时的新内容（也可用于把多条合并成一条后写入）'),
+    maxChars: z.number().optional().describe('action=compress 时保留多少字，默认 80'),
+    limit: z.number().optional().describe('队列最多返回几条，默认 20')
+  },
+  async ({ key, token, id, action, text, maxChars, limit }) => {
+    try {
+      const data = await agentApi('/api/socialV2/memory-review', {
+        method: 'POST',
+        body: JSON.stringify({ key, id: id || '', action: action || '', text: text || '', maxChars: maxChars || 80, limit: limit || 20 }),
+        headers: { 'x-agent-token': token }
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `记忆复核失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_memory_forget',
+  '删掉一条自己写错的/过时的记忆（按 qq_memory_recall 返回的 id）。聊天流水不会被删，只是不再当作"记得"。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    id: z.string().describe('记忆 id，例如 m12（qq_memory_recall 会返回）')
+  },
+  async ({ key, token, id }) => {
+    try {
+      const data = await agentApi('/api/socialV2/memory-forget', {
+        method: 'POST',
+        body: JSON.stringify({ key, id }),
+        headers: { 'x-agent-token': token }
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `删除记忆失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
   'qq_memory_query',
   '查看当前会话的轻量记忆：进行中的话题、你想说但还没说的话、对群友的印象（只读）。',
   {
@@ -1528,3 +1653,7 @@ if (cfg.socialV2?.tools?.getForwardMsg !== false) {
 }
 
 await server.connect(new StdioServerTransport());
+
+
+
+
