@@ -1,7 +1,7 @@
 # 仓库目录地图（FOLDER_MAP）
 
 > 说明顶层目录、主要脚本和公开 / 本地文档边界。本文描述当前结构，不作为删除文件的指令。
-> 文档索引见 [README.md](README.md)。最后核对：2026-11-09。
+> 文档索引见 [README.md](README.md)。最后核对：2026-11-10。
 
 ## 一、工作区与仓库布局
 
@@ -82,7 +82,7 @@ docs/
 公开文档不要给这些本地资料提供链接。`PROJECT_GUIDE.md` 是历史说明书，不是当前实现的唯一权威来源；
 当前行为以代码、入库指南和带日期的验证记录为准。
 
-根目录只保留 `README.md`、`README.en.md`、`LICENSE` 与 `work/`、`data/` 目录；`RULES.md`、`NOTICE.md`、
+根目录的文档只保留 `README.md`、`README.en.md`、`LICENSE`；`work/` 与 `data/` 是资源/数据目录；`RULES.md`、`NOTICE.md`、
 `SECURITY.md`、`CONTRIBUTING.md` 与各指南都在 `docs/`，`.github/` 只放社区健康文件与工作流。
 
 `.gitignore` 采用「根规则 + 目录规则」分层：根 `.gitignore` 只放全局项（依赖、运行时状态、

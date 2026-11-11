@@ -51,8 +51,8 @@ npm run privacy-scan:history
 
 ### 本地规则文件
 
-模板为 [`privacy-rules.example.json`](../../scripts/privacy-rules.example.json)。复制为
-`scripts/privacy-rules.json` 后填写本机真实标识；该文件必须保持被 `.gitignore` 排除。
+模板为 [`privacy-rules.example.json`](../../data/privacy-rules.example.json)。复制为
+`scripts/ops/privacy-rules.json` 后填写本机真实标识；该文件必须保持被 `.gitignore` 排除。
 本地规则会与内置默认规则一起使用。
 
 ```jsonc

@@ -41,7 +41,7 @@ Run in PowerShell:
 git clone https://github.com/Derpyu520/qq-bridge.git
 cd qq-bridge
 npm install
-# 首次安装会用 data/config.example.json 自动生成 work/config.json（已存在则跳过）
+# First install copies data/config.example.json to work/config.json if it does not exist yet.
 ```
 
 `main` is the release branch; `dev` is for development and testing.

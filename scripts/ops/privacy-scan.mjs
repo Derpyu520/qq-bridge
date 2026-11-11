@@ -132,7 +132,7 @@ function listFiles() {
   // git 不可用（沙箱禁止 spawn / 没装 git / 不是仓库）：退化为目录遍历 + 读 .gitignore。
   // 忽略规则**按目录分层读取**（根 .gitignore + 各子目录 .gitignore），与 git 的语义一致：
   // 子目录规则只作用于该目录下的相对路径。只读根 .gitignore 会在“规则分散到各目录”
-  // 的布局下漏掉本地私密文件（docs/.gitignore、config/.gitignore 等）。
+  // 的布局下漏掉本地私密文件（docs/.gitignore、work/.gitignore 等）。
   const out = [];
   const seen = new Set();
   const MAX_DEPTH = 24;
@@ -505,7 +505,7 @@ if (withHistory) scanHistory();
 if (asJson) {
   console.log(JSON.stringify({ rulesFromFile: rules.fromFile, source: listed.via, scanned: files.length, historyScanned: withHistory, findings }, null, 2));
 } else {
-  console.log(`[privacy-scan] 规则来源：${rules.fromFile ? 'scripts/privacy-rules.json + 内置默认' : '仅内置默认（建议补 privacy-rules.json）'}`);
+  console.log(`[privacy-scan] 规则来源：${rules.fromFile ? `${path.relative(ROOT, RULES_FILE)} + 内置默认` : `仅内置默认（建议补 ${path.relative(ROOT, RULES_FILE)}）`}`);
   console.log(`[privacy-scan] 扫描文件数：${files.length}（来源：${listed.via}${withHistory ? '；含 git 历史' : ''}）`);
   if (!findings.length) {
     console.log('[privacy-scan] ✅ 未发现敏感信息。');

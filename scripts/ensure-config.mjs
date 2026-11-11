@@ -24,6 +24,7 @@ if (!fs.existsSync(template)) {
   process.exit(0); // 不阻断安装，桥接启动时会给出同样的提示
 }
 try {
+  fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.copyFileSync(template, target);
   fs.chmodSync(target, 0o600);
   console.log('[ensure-config] 已从 data/config.example.json 生成 work/config.json（请填入本机配置）');

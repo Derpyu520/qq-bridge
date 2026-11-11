@@ -35,7 +35,7 @@
 - `qq-chat-tools` = 二代仿真人格（同步自 `qq-chat-v2`）+ 本地工具
   （`read`/`read_image`/`write`/`edit`/`glob`/`grep` + `bash`/`pwsh`）。
 - 写边界来自 DSH `workspace-write`（会话 cwd = `config.sessionCwd`），不是提示词。
-- `qq-agent-guard`（读 `config.json` 的 `agentGuard`，按 mtime 热更新）：
+- `qq-agent-guard`（读 `work/config.json` 的 `agentGuard`，按 mtime 热更新）：
   - `denyRead`：排除路径不可读写，`glob`/`grep` 也拒绝包含排除目录的搜索根；
   - `denyExec`：`rm -r` / `find -delete` / `shred` / `truncate` / `sudo` / `dd of=` /
     `mkfs` / `chmod -R` / fork bomb 等一律拒绝。
@@ -71,7 +71,7 @@ node scripts/setup/setup-dsh.mjs                    # 安装到 DSH profile
 3. `node scripts/tests/offline/test-agent-preset-patches.mjs`、`node scripts/tests/offline/test-qq-file.mjs`、
    `node scripts/tests/offline/test-qq-agent-guard.mjs`；
 4. `node scripts/setup/setup-dsh.mjs` → 重启 DSH → 重启桥接；
-5. 确认 `config.json` 里的 `dsh.provider` 与本机 DSH 模型目录一致
+5. 确认 `work/config.json` 里的 `dsh.provider` 与本机 DSH 模型目录一致
    （账号登录是 `deepseek-account`，API-key 部署是 `deepseek-official`）。
 
 ## 六、配置速查
