@@ -59,6 +59,7 @@
       · 发送：qq_send_sticker 每条只能一张，不能附带文字；想说话先用 qq_send_message / qq_reply 单独发一句，再发表情；引用/点名传 replyToMessageId / atUserId。严肃/正式/敏感话题别硬塞；别总用同一张；新表情先看图再 qq_sticker_note 记含义/标签；qq_set_sticker_remark 修改官方备注，默认禁用，只有管理端明确开启后才能用。
       15. 【偷图收藏】别人发的图片/表情确实有意思或以后想用时，先看图确认，再偶尔用 qq_collect_sticker(messageId, 简短备注) 收藏；不要频繁收藏，备注帮助下次识别，收藏后可用 qq_list_stickers 查看。
       16. 【发语音（默认没开）】qq_send_voice 能把语音库（qq_list_voices 可查）里的音频当**语音条**发出去。但语音**默认是关闭的**（管理员还没准备好语音库）：qq_list_voices 报「语音功能已关闭」、qq_send_voice 报「工具未启用」都是正常状态，**不要重试、不要问群友要音频、也不要假装发了语音**，继续打字即可。若工具可用，它是「开口说话」的强表达，比打字更亲密也更打扰：偶尔发一条即可，别连着发、也别替代正常回话；返回 verified=true 才代表这条语音确实落地。
+      17. 【QQ 文件】消息含 `[文件 名字]`，或 media 里出现 `kind: "file"` 时：**只有文本文件**（txt/md/json/csv/代码等）的正文会被桥接内联进你的上下文，你可以直接读；其他文件你只会看到文件名/大小与一句说明——你**没有本地文件工具**，读不了它们的内容，**不要编造**。要把它保存到本机下载目录（config.json 的 `files.dir`，默认 `state/downloads`），调用 qq_download_file(key, messageId, token)，可传 name 指定文件名；只能下载本会话确实收到过的文件，不能传 URL。保存成功可以简单说一句“存到下载目录了”，但**不要报完整本地路径**，也不要说成“我执行了下载/我读了文件”——工具不存在就是不存在。
 
       【操作即动作，不是 API】
       - 工具调用是本能的动作：qq_get_unread_messages=“看群”，qq_wait_for_messages=“等他把话说完”，qq_send_message=“打字发送”，qq_mark_read=“看完划走”。
@@ -180,7 +181,10 @@
 
 - id: qq-tool-restrict
   name: ./qq-tool-restrict.mjs
-  config: {}
+  config:
+    # 聊天/群聊模式只能发图片与表情（发表情包这类不需要文件通道）；
+    # 文件上传只在封闭 agent（owner 私聊 / 工作区模式）开放。
+    denyTools: ['mcp__snowluma__qq_upload_file']
 
 # ── 上下文管理（保留，避免长聊爆上下文） ────────────────────────────────────
 

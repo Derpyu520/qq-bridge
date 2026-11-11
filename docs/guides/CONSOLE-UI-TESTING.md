@@ -7,7 +7,7 @@
 在项目根目录执行：
 
 ```sh
-npm run preview:console          # 等价于 node scripts/console-ui-fixture.mjs
+npm run preview:console          # 等价于 node scripts/console/console-ui-fixture.mjs
 ```
 
 浏览器访问 `http://127.0.0.1:4173`。写请求会打印到终端，也可以访问 `/__fixture/requests` 查看记录。服务只监听 loopback 地址。按 `Ctrl+C` 退出，演示数据随之丢弃。
@@ -15,18 +15,18 @@ npm run preview:console          # 等价于 node scripts/console-ui-fixture.mjs
 可用选项：
 
 ```sh
-node scripts/console-ui-fixture.mjs --port=4174
-node scripts/console-ui-fixture.mjs --original --port=4174
-node scripts/console-ui-fixture.mjs --html=path/to/console.html
+node scripts/console/console-ui-fixture.mjs --port=4174
+node scripts/console/console-ui-fixture.mjs --original --port=4174
+node scripts/console/console-ui-fixture.mjs --html=path/to/console.html
 ```
 
-`--original` 读取 `scripts/fixtures/console.before.html`（改造前的原版，随仓库保留），仅用于对照预览；正常预览读取 `public/console.html`。
+`--original` 读取 `data/console.before.html`（改造前的原版，随仓库保留），仅用于对照预览；正常预览读取 `work/console.html`。
 
 ## 浏览器回归
 
 ```sh
-npm run test:console-ui          # 等价于 node scripts/test-console-ui.mjs
-node scripts/test-console-ui.mjs --artifacts=docs/ui-verification
+npm run test:console-ui          # 等价于 node scripts/tests/live/test-console-ui.mjs
+node scripts/tests/live/test-console-ui.mjs --artifacts=docs/ui-verification
 ```
 
 脚本需要 Playwright 模块，优先使用项目内安装的 `playwright`。Windows 上会优先使用已安装的 Chrome / Edge，省去额外下载浏览器；未找到本机浏览器时使用 Playwright 的 Chromium。可安装 Playwright 及其浏览器，或通过以下环境变量指定：
@@ -67,10 +67,10 @@ node scripts/test-console-ui.mjs --artifacts=docs/ui-verification
 新增的 `sendVoice` 在历史基线比较前断言为默认 `true`，比较时仅移除这一字段；
 随后另测 `false → true` 两次保存，并严格比较其余完整配置。ACL「重新检测」也在基线比较后独立验证。
 
-只有后端契约经过明确调整时才更新基线。`scripts/fixtures/console.before.html` 是改造前的原版控制台（通常无需改动），重录时运行：
+只有后端契约经过明确调整时才更新基线。`data/console.before.html` 是改造前的原版控制台（通常无需改动），重录时运行：
 
 ```sh
-node scripts/test-console-ui.mjs --original --record-baseline
+node scripts/tests/live/test-console-ui.mjs --original --record-baseline
 ```
 
 普通回归不依赖 `console.before.html`。不要用真实的 `test-console.mjs` 替代本脚本：那个脚本可能向真实 QQ 发送消息。

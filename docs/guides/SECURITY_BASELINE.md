@@ -1,7 +1,7 @@
 # 安全基线与威胁模型（qq-bridge）
 
 > 本文把项目里**已经实现的**安全边界、**已知的**残余风险、以及**每次发布必须回归**的
-> 检查项集中到一处。与之配套的承诺性文档是 [../../RULES.md](../../RULES.md)（面向使用者的
+> 检查项集中到一处。与之配套的承诺性文档是 [../RULES.md](../RULES.md)（面向使用者的
 > 权限说明）；本文偏工程实现，供改动代码前后对照。
 >
 > 维护规则：任何改动如果改变了下面任一条目，**必须在同一个 PR 里更新本文**。
@@ -44,7 +44,7 @@
 | 发送强制白名单 | 所有 `/api/send/*`、`/api/socialV2/send-*` | 目标必须命中 `allow.groups` / `allow.private`（每次都重新校验，不做缓存） |
 | 动态 ACL | `resolveVoicePathForV2()` / `voicePathInsideLibrary()` | 语音只能取语音库目录内的文件；贴纸只能发收藏库内的表情；图片只能读 SnowLuma home 内的本地文件（realpath 复核防符号链接逃逸） |
 | 工具参数 | MCP 注册与执行期会话守卫 | 未知键严格拒绝；支持的别名须显式声明、无冲突并归一化，目标别名同样接受可信会话绑定检查 |
-| **只探测、不部署**（L6 设计不变量） | `mcp-host-server.js` | 该 MCP server **只提供 `snowluma_status`（只读探活 `get_login_info`）**。⚠️ **v0.1.5 起删除了 `start_snowluma` / `stop_snowluma` 与 `snowluma.allowProcessControl`**：SnowLuma EULA §5.4 规定「将其并入第三方安装包或 Docker 镜像、**通过自动化脚本部署**」须事先书面授权，原生组件属**专有组件**。⇒ 本程序不安装、不复制、不打包、不程序化启停 SnowLuma；用户自行安装与启动。详见 [NOTICE](../../NOTICE.md) |
+| **只探测、不部署**（L6 设计不变量） | `mcp-host-server.js` | 该 MCP server **只提供 `snowluma_status`（只读探活 `get_login_info`）**。⚠️ **v0.1.5 起删除了 `start_snowluma` / `stop_snowluma` 与 `snowluma.allowProcessControl`**：SnowLuma EULA §5.4 规定「将其并入第三方安装包或 Docker 镜像、**通过自动化脚本部署**」须事先书面授权，原生组件属**专有组件**。⇒ 本程序不安装、不复制、不打包、不程序化启停 SnowLuma；用户自行安装与启动。详见 [NOTICE](../NOTICE.md) |
 
 ### 3. 出站内容（模型能说什么、能发什么）
 
@@ -89,8 +89,8 @@
 | 机制 | 位置 | 行为 |
 | --- | --- | --- |
 | 原子写 | `atomicWriteJson/Text()` | 唯一随机临时名 + rename（Windows EPERM 退避重试），不会写坏配置 |
-| Windows ACL 收紧 | `hardenStateDirAcl()` + `scripts/harden-state-acl.mjs` | Windows 上 `mode: 0o600` 是**空操作**，因此启动时切断 `state/` 的继承链，只保留当前用户/SYSTEM/Administrators。改 ACL 需要 WRITE_DAC —— **目录属主通常本来就有，所以一般不弹 UAC**；失败时用 `Start-Process -Verb RunAs` 提权重试一次（`--elevated` 短路自身，杜绝递归），再失败就打印可复制命令并**以 0 退出、绝不阻断启动**。控制台「访问与安全」页显示告警条与「重新检测」按钮 |
-| ACL 防自锁 | `src/state-acl.mjs` | 先为现有条目显式授权，再断继承，最后移除宽松主体；命令失败即停止，每步回读验证，空 DACL 不作为成功 |
+| Windows ACL 收紧 | `hardenStateDirAcl()` + `scripts/ops/harden-state-acl.mjs` | Windows 上 `mode: 0o600` 是**空操作**，因此启动时切断 `state/` 的继承链，只保留当前用户/SYSTEM/Administrators。改 ACL 需要 WRITE_DAC —— **目录属主通常本来就有，所以一般不弹 UAC**；失败时用 `Start-Process -Verb RunAs` 提权重试一次（`--elevated` 短路自身，杜绝递归），再失败就打印可复制命令并**以 0 退出、绝不阻断启动**。控制台「访问与安全」页显示告警条与「重新检测」按钮 |
+| ACL 防自锁 | `src/util/state-acl.js` | 先为现有条目显式授权，再断继承，最后移除宽松主体；命令失败即停止，每步回读验证，空 DACL 不作为成功 |
 | 令牌不回显 | 日志/活动/工具日志 | 控制台及连接自愈日志只记已配置/已生成，不打印令牌前后缀；活动日志与工具调用参数过 `redactSensitiveText` / `redactSensitive`（递归处理 JSON 字符串叶子） |
 | 令牌只发回环 | `dsh-client.ensureAuth()` | DSH launch token 换 Cookie 时必须放进 URL，因此**默认拒绝非回环 baseUrl**；远程部署需显式 `dsh.allowRemote: true` |
 | 自动探测与重定向 | `dsh-endpoint.js` / `dsh-client.js` | 自动发现只为回环地址铸造本机 Cookie；拒绝 URL 内嵌凭据；探测不跟随重定向并关闭响应体，RPC 拒绝重定向，避免转交聊天主体 |
@@ -114,7 +114,7 @@ DSH 的 Windows 文件沙箱按**能力 SID** 授权：SID 由 `sha256(规范化
 
 因此本项目的规矩是：**任何从沙箱里跑的东西都不得写 `state/`**。
 测试夹具、探针、self-test 的临时产物一律落在系统临时目录
-（见 `scripts/probe-auth.mjs` 的 `probeWorkspaceDir`）。
+（见 `scripts/probes/probe-auth.mjs` 的 `probeWorkspaceDir`）。
 
 诊断：`npm run diagnose:acl` —— 只读扫描，列出全部被切断继承的路径并分成
 「有意收紧（`state/`、`config.json`）」与「非预期收紧」两类。
@@ -133,7 +133,7 @@ DSH 的 Windows 文件沙箱按**能力 SID** 授权：SID 由 `sha256(规范化
 
 ### 7. 网络
 
-`src/safe-fetch.js`（仅暴露给 agent 的只读联网）：
+`src/util/safe-fetch.js`（仅暴露给 agent 的只读联网）：
 
 - 只允许 `http` / `https`；拒绝 URL 内嵌凭据；拒绝 `file:` / `gopher:` 等 scheme
 - 解析出的**每一个** DNS 结果都要过私有地址判定（含 IPv4-mapped IPv6、NAT64、6to4、ULA、link-local、zone-id、十进制/八进制/十六进制 IPv4）
@@ -160,7 +160,7 @@ DSH 的 Windows 文件沙箱按**能力 SID** 授权：SID 由 `sha256(规范化
 | R6 | **预设不变量检查是子串存在性** | 防误删，不防恶意 | 能改这个文件的人本来就是管理员，真正的硬边界在工具守卫与白名单 |
 | R7 | **`self-test.js` 只证明链路通** | 不做断言 | 它是连通性探针，不是回归套件（回归在 `npm run test:audit`） |
 | R8 | **单人维护、无外部安全审计** | 有离线回归 + 本文档 | 内部审查不能替代独立的外部或对抗式安全评估 |
-| R9 | **`state/` 的 ACL 收紧可能失败**（未提权且目录属主权限被策略收走时） | `scripts/harden-state-acl.mjs` 会自动提权重试一次；仍失败则明确告警 + 给出可复制命令 + 控制台告警条 | 改 ACL 属于需要特权的操作；**降级为"明确告警"而不是"阻断启动"**是刻意的取舍（否则用户会为了能启动而关掉整条安全链路）。其他凭据保护方案需在后续设计中单独评估，不能视为已经实现 |
+| R9 | **`state/` 的 ACL 收紧可能失败**（未提权且目录属主权限被策略收走时） | `scripts/ops/harden-state-acl.mjs` 会自动提权重试一次；仍失败则明确告警 + 给出可复制命令 + 控制台告警条 | 改 ACL 属于需要特权的操作；**降级为"明确告警"而不是"阻断启动"**是刻意的取舍（否则用户会为了能启动而关掉整条安全链路）。其他凭据保护方案需在后续设计中单独评估，不能视为已经实现 |
 | R10 | **收紧 `state/` 后，DSH 沙箱会话写不进 `state/`**（见 §2.6） | 有意取舍，非缺陷；诊断见 `npm run diagnose:acl` | 在当前 Windows 实现中，能力 SID 依赖继承下发，而切断继承是本项目阻止本机其他用户读取令牌的直接手段。**代价已被接受并写进文档**，项目自己的测试夹具/探针据此改用系统临时目录 |
 | R11 | **`plugins/**` 内容被意外切断继承，沙箱里改不动 L7 守卫** | 来源不明（本仓库无此脚本）；`npm run diagnose:acl` 会列出并打印恢复命令 | 该处不含凭据，恢复继承无泄密风险；但若不恢复，被沙箱约束的 DSH agent 就无法维护工具守卫 —— 需要人工在无沙箱终端改 |
 | R12 | **旧版本 AI 黑话可能已错误标成 `global`，或混入多群证据** | 新写入与所有读取路径已按 scope 隔离，但现有 `global` 条目继续按全局语义可见；升级后需管理员复核、删除或重新指定归属 | 错误保存时已丢失可靠归属，无法自动区分有意共享与历史污染，也不能可靠拆分混合解释 |
@@ -193,8 +193,8 @@ node --check src/bridge.js  # 语法门禁（大文件改动后必跑）
 - [x] SSRF：scheme、URL 凭据、私有 IP、重定向、超时、大小限制（11 项）
 - [x] 桥接 `200 + {ok:false}` 会被 MCP 当作失败上报（不产生静默假成功）
 - [x] 旧只读工具在非 `closed-agent` 模式下 fail-closed
-- [x] `state/` ACL 助手：非阻断、防递归、`start.bat` 纯 ASCII+CRLF 且先于桥接调用（**结构级断言**）
-- [ ] **`state/` ACL 的真实 icacls/UAC 行为**：需在普通终端手动复跑 `node scripts/harden-state-acl.mjs` 确认（沙箱/CI 里改 ACL 会被拒，无法自动化）
+- [x] `state/` ACL 助手：非阻断、防递归、启动器在 Windows 上先于桥接调用（**结构级断言**）
+- [ ] **`state/` ACL 的真实 icacls/UAC 行为**：需在普通终端手动复跑 `node scripts/ops/harden-state-acl.mjs` 确认（沙箱/CI 里改 ACL 会被拒，无法自动化）
 
 ---
 

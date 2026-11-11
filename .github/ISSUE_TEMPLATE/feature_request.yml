@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        建议先看一眼 [RULES.md](https://github.com/Derpyu520/qq-bridge/blob/main/RULES.md)
+        建议先看一眼 [RULES.md](docs/RULES.md)
         里的设计不变量（尤其是 L6「只探测不部署」和 L7「QQ 会话不得拥有本地执行能力」）——
         与这两条冲突的提议不会被接受。
 

@@ -16,7 +16,7 @@
 >
 > **脚本改名提示**：本文写于 0.2.1 适配期间，当时的验证脚本叫
 > `verify-dsh-021-adaptation.mjs`；0.2.2 适配时已改名为
-> [`verify-dsh-022-adaptation.mjs`](../../scripts/verify-dsh-022-adaptation.mjs)。
+> [`verify-dsh-022-adaptation.mjs`](../../scripts/probes/verify-dsh-022-adaptation.mjs)。
 > 文中出现的旧命令仅作历史记录，当前请用 `npm run verify:adaptation`。
 
 ---
@@ -57,7 +57,7 @@ Codex / Claude Code 改为按需安装，两个老工具名改判为「可选项
 | **preset 真跑一回合** | 文本 `"收到"`（本轮新增断言，见 §2） |
 | **preset 内 MCP 工具真调用** | `mcp__snowluma-host__snowluma_status` → `isError:false`，随后回复 `"完成"` |
 
-> 顺带记录：`src/dsh-client.js` 的传输层仍钉在 `@deepseek-ai/dsh-host-apiproxy@0.1.1-rc.2`
+> 顺带记录：`src/dsh/dsh-client.js` 的传输层仍钉在 `@deepseek-ai/dsh-host-apiproxy@0.1.1-rc.2`
 > （`NodeApiClient extends AbstractApiClient`）。它**仍然讲得通 DSH 0.2.1 的 API**——
 > 上面所有断言都是它的实测结果。这是唯一一个版本滞后的依赖，每次升级都要靠
 > `verify:adaptation` 盯住，不能假设它一直兼容。
@@ -103,7 +103,7 @@ QQ 侧的现象就是"发消息没反应"，而桥接日志里只有一行 `AI �
 - `dsh/agent-presets/qq-chat/agent.cordis.yml`
 - `dsh/agent-presets/qq-chat-v2/agent.cordis.yml`
 
-然后 `node scripts/build-agent-preset-patches.mjs` 重新生成
+然后 `node scripts/setup/build-agent-preset-patches.mjs` 重新生成
 `plugins/qq-agent-presets/presets/*.patch.yml`（产物是纯生成物，不许手改）。
 
 > **好消息**：preset 文本的改动**不需要重启 DSH**——新建/恢复会话时按当前 patch 解析，
@@ -118,7 +118,7 @@ QQ 侧的现象就是"发消息没反应"，而桥接日志里只有一行 `AI �
    `verify:adaptation` §5g 真建一个 `qq-chat-v2` 会话、发一句 prompt、等 `turn/end`，
    断言 `reason.kind === 'completed'` 且文本非空。静态断言只能看出"写了什么变量"，
    只有真跑一回合才能证明它**可解析**。
-3. 端到端：`node scripts/probe-tools.mjs qq-chat-v2` → MCP 工具可调用、未调用本地工具。
+3. 端到端：`node scripts/probes/probe-tools.mjs qq-chat-v2` → MCP 工具可调用、未调用本地工具。
 
 ---
 
@@ -165,15 +165,15 @@ L7 要求仿真会话的 preset **注册期**就不得含本地能力。`tools.g
 1. `plugins/qq-agent-presets/qq-tool-restrict.mjs`：`LOCAL_EXECUTION_TOOLS` 增 13 个名字；
    新增导出 `OPTIONAL_BUNDLE_TOOL_NAMES = ['subagent_codex','subagent_claude_code']`
    （0.2.1 把 Codex / Claude Code 改成按需安装，默认扫不到；仍进名单，装上就挡）。
-2. `scripts/scan-dsh-tool-names.mjs`：假名判定排除可选组，并在输出里点名说明。
+2. `scripts/ops/scan-dsh-tool-names.mjs`：假名判定排除可选组，并在输出里点名说明。
 3. `scripts/verify-dsh-021-adaptation.mjs`：新增 `GUARD_021_NAMES` 断言。
-4. `scripts/test-preset-local-tools.mjs`：本地执行工具清单同步补齐（restrict 覆盖 + 执行期拒绝两条断言）。
+4. `scripts/tests/offline/test-preset-local-tools.mjs`：本地执行工具清单同步补齐（restrict 覆盖 + 执行期拒绝两条断言）。
 
 ### 3.5 怎么验证
 
 ```powershell
-node scripts/scan-dsh-tool-names.mjs --missing   # 悬空 0，未覆盖危险名 0
-node scripts/test-preset-local-tools.mjs         # 7/7
+node scripts/ops/scan-dsh-tool-names.mjs --missing   # 悬空 0，未覆盖危险名 0
+node scripts/tests/offline/test-preset-local-tools.mjs         # 7/7
 node scripts/verify-dsh-021-adaptation.mjs       # 75 通过 0 失败
 ```
 
@@ -234,5 +234,5 @@ node scripts/verify-dsh-021-adaptation.mjs       # 75 通过 0 失败
 2. **先看 `state/tool-restrict.log` 的 `known global tools`**——它是"全局层到底有什么"的第一手证据，
    新增名字基本等于 1 个必须补的守卫条目。别只看 `restrict ok=` 的分子：大部分名字是 scoped 工具，
    restrict 对它们本来就抛错，要看的是**失败样例里有没有全局工具**。
-3. **升级后立刻跑一次 `node scripts/probe-tools.mjs qq-chat-v2`**：它同时覆盖
+3. **升级后立刻跑一次 `node scripts/probes/probe-tools.mjs qq-chat-v2`**：它同时覆盖
    persona 装配、工具面、MCP 调用三条链路，是全仓库最便宜的一次端到端体检。

@@ -11,7 +11,7 @@ body:
         2. 翻一下 [docs/README.md](https://github.com/Derpyu520/qq-bridge/blob/main/docs/README.md) 里的排障文档。
 
         ⚠️ **这个表单是公开的。** 请删掉 token、Cookie、真实 QQ 号/群号、本机绝对路径再提交。
-        安全漏洞不要走这里，见 [SECURITY.md](https://github.com/Derpyu520/qq-bridge/blob/main/SECURITY.md)。
+        安全漏洞不要走这里，见 [SECURITY.md](docs/SECURITY.md)。
 
   - type: checkboxes
     id: preflight
