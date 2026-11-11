@@ -1,5 +1,6 @@
-// setup-dsh.mjs 幂等性测试：在一个临时 DSH_HOME 里连跑两次，
-// 断言不会产生重复的 MCP 条目 id（DSH 遇到重复 loader entry id 会启动崩溃）。
+// setup-dsh.mjs 幂等性测试：在一个临时 DSH_HOME 里连跑两次，断言
+// **profile 的 cordis.patch.yml 一个字节都没变**（MCP 行现在由 bundle 提供，
+// 安装器只做只读检查）。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -16,9 +17,16 @@ fs.rmSync(tmpHome, { recursive: true, force: true });
 fs.mkdirSync(path.join(tmpHome, 'profiles', 'web'), { recursive: true });
 fs.mkdirSync(path.join(tmpHome, 'plugins'), { recursive: true });
 
-// 预置一个「历史版本」patch：无 BEGIN/END 标记、含空的 [] 根节点、只挂了 2 个 MCP
+// 预置一个「历史版本」patch：含旧版安装器留下的 BEGIN/END 区块 + 用户自己的行。
+// 新脚本不应改写它，只应在输出里提示手工处理。
 const legacyPatch = `# legacy profile patch
-[]
+- id: user-setting
+  name: '@example/user-setting'
+  config:
+    keep: true
+
+# === qq-bridge MCP BEGIN ===
+# 由 scripts/setup-dsh.mjs 维护；这段区块会被整体替换，请勿手工编辑内部条目。
 - insert:
     - id: mcp-snowluma
       name: '@deepseek-ai/dsh-mcp-client'
@@ -28,7 +36,6 @@ const legacyPatch = `# legacy profile patch
         command: node
         args:
           - 'old/path/mcp-snowluma-safe.js'
-
 - insert:
     - id: mcp-snowluma-host
       name: '@deepseek-ai/dsh-mcp-client'
@@ -38,8 +45,19 @@ const legacyPatch = `# legacy profile patch
         command: node
         args:
           - 'old/path/mcp-host-server.js'
+- insert:
+    - id: mcp-web-search-safe
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: web-search-safe
+        transport: stdio
+        command: node
+        args:
+          - 'old/path/mcp-web-search-safe.js'
+# === qq-bridge MCP END ===
 `;
-fs.writeFileSync(path.join(tmpHome, 'profiles', 'web', 'cordis.patch.yml'), legacyPatch, 'utf8');
+const patchPath = path.join(tmpHome, 'profiles', 'web', 'cordis.patch.yml');
+fs.writeFileSync(patchPath, legacyPatch, 'utf8');
 fs.writeFileSync(path.join(tmpHome, 'profiles', 'web', 'package.json'), JSON.stringify({
   name: 'dsh-profile-web', private: true,
   dependencies: { 'dsh-approval-toast': 'file:C:/x/dsh-approval-toast' },
@@ -50,8 +68,19 @@ fs.writeFileSync(path.join(tmpHome, 'profiles', 'web', 'package.json'), JSON.str
 // 这样脚本会走「已存在且指向本仓库 → 跳过」的正常分支。
 fs.symlinkSync(path.join(ROOT, 'plugins', 'qq-mode-console'), path.join(tmpHome, 'plugins', 'qq-mode-console'), 'junction');
 
-function runSetup(label) {
-  const r = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'setup-dsh.mjs'), 'web'], {
+// js-yaml 优先从 DSH 安装目录取；拿不到就退回本仓库的 node_modules
+// （package.json 已声明该依赖，正常 npm install 后一定可解析）。
+async function loadYaml() {
+  try {
+    const mod = await import(pathToFileURL(path.join(dshModulesDir(), 'js-yaml/index.js')).href);
+    return mod.default ?? mod;
+  } catch {
+    const mod = await import('js-yaml');
+    return mod.default ?? mod;
+  }
+}
+
+function runSetup(label) {  const r = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'setup-dsh.mjs'), 'web'], {
     // 保留最小 PATH（进程启动需要），但把 dsh CLI 排除在外 → 跳过自动 pnpm 安装那一步
     env: { ...process.env, DSH_HOME: tmpHome, PATH: path.dirname(process.execPath) },
     encoding: 'utf8',
@@ -63,68 +92,67 @@ function runSetup(label) {
   return r;
 }
 
-runSetup('第 1 次运行');
-runSetup('第 2 次运行');
+const first = runSetup('第 1 次运行');
+const second = runSetup('第 2 次运行');
 
-const finalPatch = fs.readFileSync(path.join(tmpHome, 'profiles', 'web', 'cordis.patch.yml'), 'utf8');
+const finalPatch = fs.readFileSync(patchPath, 'utf8');
 
-// 断言 1：每个托管 id 恰好出现一次
 let failed = 0;
+const check = (ok, message) => {
+  console.log(`${ok ? '✅' : '❌'} ${message}`);
+  if (!ok) failed += 1;
+};
+
+// 断言 1：两次运行都成功
+check(first.status === 0 && second.status === 0, '两次运行都成功退出');
+
+// 断言 2：profile patch 一个字节都没变（这是本次改动的核心）
+check(finalPatch === legacyPatch, 'cordis.patch.yml 两次运行后逐字节不变');
+
+// 断言 3：脚本提示了遗留区块，并且明确说不会代改
+const warned = /注入区块/.test(first.stdout || '') && /不会替你改/.test(first.stdout || '');
+check(warned, '检测到遗留区块并提示手工处理');
+
+// 断言 4：没有产生重复 id（文件没被改写，自然也不会多出来）
 for (const id of ['mcp-snowluma', 'mcp-snowluma-host', 'mcp-web-search-safe']) {
-  const n = finalPatch.split('\n').filter((l) => new RegExp(`^\\s*-\\s*id:\\s*${id}\\s*$`).test(l)).length;
-  const ok = n === 1;
-  if (!ok) failed += 1;
-  console.log(`${ok ? '✅' : '❌'} id ${id} 出现 ${n} 次（期望 1）`);
+  const n = finalPatch.split('\n').filter((line) => new RegExp(`^\\s*-\\s*id:\\s*${id}\\s*$`).test(line)).length;
+  check(n === 1, `id ${id} 出现 ${n} 次（期望 1）`);
 }
 
-// 断言 2：旧路径已被替换为本仓库路径
-const hasOldPath = finalPatch.includes('old/path/');
-console.log(`${hasOldPath ? '❌' : '✅'} 旧脚本路径已清除（old/path 出现=${hasOldPath}）`);
-if (hasOldPath) failed += 1;
-
-// 断言 3：独立成行的 [] 已被剥离
-const hasBareArray = /^[ \t]*\[\][ \t]*$/m.test(finalPatch);
-console.log(`${hasBareArray ? '❌' : '✅'} 无独立成行的空数组 []`);
-if (hasBareArray) failed += 1;
-
-// 断言 4：YAML 可解析且顶层是数组
-const YAML = await import(pathToFileURL(path.join(dshModulesDir(), 'js-yaml/index.js')).href);
-const yaml = YAML.default ?? YAML;
-let doc;
-try { doc = yaml.load(finalPatch); } catch (e) {
-  console.log(`❌ YAML 解析失败: ${e.message}`); failed += 1;
-}
-if (doc) {
-  const ok = Array.isArray(doc);
-  console.log(`${ok ? '✅' : '❌'} YAML 顶层为数组（${Array.isArray(doc) ? doc.length + ' 项' : typeof doc}）`);
-  if (!ok) failed += 1;
-  const ids = doc.filter((e) => e?.insert).flatMap((e) => e.insert.map((x) => x.id));
-  console.log(`   解析出的 MCP id: ${ids.join(', ')}`);
+// 断言 5：MCP 行改由 bundle 提供，且 bundle 的清单文件都存在
+const bundleDir = path.join(ROOT, 'dsh', 'qq-bridge-mcp');
+const bundlePatch = path.join(bundleDir, 'cordis.patch.yml');
+check(fs.existsSync(bundlePatch), 'dsh/qq-bridge-mcp/cordis.patch.yml 存在');
+const yaml = await loadYaml();
+const bundleDoc = yaml.load(fs.readFileSync(bundlePatch, 'utf8'));
+const bundleIds = bundleDoc.flatMap((op) => op.insert || []).map((entry) => entry.id);
+check(JSON.stringify(bundleIds) === JSON.stringify(['mcp-snowluma', 'mcp-snowluma-host', 'mcp-web-search-safe']),
+  `bundle 里正好三条 MCP 行（${bundleIds.join(', ')}）`);
+const bundlePkg = JSON.parse(fs.readFileSync(path.join(bundleDir, 'package.json'), 'utf8'));
+check(bundlePkg.dsh?.bundle?.patch === './cordis.patch.yml', 'bundle package.json 指向自己的 patch');
+for (const entry of bundlePkg.files ?? []) {
+  if (entry.includes('*')) continue;
+  check(fs.existsSync(path.join(bundleDir, entry)), `bundle files 里的 ${entry} 存在`);
 }
 
-// 断言 5：profile package.json 含两个 bundle（qq-mode-console + qq-agent-presets），且未破坏其他 bundle
+// 断言 6：profile package.json 含两个 bundle，且未破坏其他 bundle
 const pkg = JSON.parse(fs.readFileSync(path.join(tmpHome, 'profiles', 'web', 'package.json'), 'utf8'));
 const bundles = pkg.dsh.profile.bundles;
-const okBundle = bundles.includes('qq-mode-console') && bundles.includes('qq-agent-presets') && bundles.includes('dsh-approval-toast');
-console.log(`${okBundle ? '✅' : '❌'} profile bundles 正确: ${bundles.join(', ')}`);
-if (!okBundle) failed += 1;
-const depOk = String(pkg.dependencies['qq-agent-presets'] ?? '').startsWith('link:')
-  && String(pkg.dependencies['qq-mode-console'] ?? '').startsWith('link:');
-console.log(`${depOk ? '✅' : '❌'} link: 依赖已登记（preset 子行的裸说明符靠它解析）`);
-if (!depOk) failed += 1;
+check(bundles.includes('qq-mode-console') && bundles.includes('qq-agent-presets') && bundles.includes('dsh-approval-toast'),
+  `profile bundles 正确: ${bundles.join(', ')}`);
+check(String(pkg.dependencies['qq-agent-presets'] ?? '').startsWith('link:')
+  && String(pkg.dependencies['qq-mode-console'] ?? '').startsWith('link:'),
+  'link: 依赖已登记（preset 子行的裸说明符靠它解析）');
 
-// 断言 6：DSH 0.1.7 机制 —— preset 由 qq-agent-presets bundle 的 patch 层装配，
+// 断言 7：DSH 0.1.7 机制 —— preset 由 qq-agent-presets bundle 的 patch 层装配，
 // 旧目录 ~/.dsh/.agent-presets 不再写入（也不删除用户数据）。
 for (const p of ['qq-chat', 'qq-chat-v2']) {
   const patchFile = path.join(ROOT, 'plugins', 'qq-agent-presets', 'presets', `${p}.patch.yml`);
   const text = fs.existsSync(patchFile) ? fs.readFileSync(patchFile, 'utf8') : '';
-  const ok = text.includes('@deepseek-ai/dsh-agent-preset') && new RegExp(`^\\s+id: ${p}$`, 'm').test(text);
-  console.log(`${ok ? '✅' : '❌'} preset ${p} 的 patch 层就绪（含 @deepseek-ai/dsh-agent-preset 行 + config.id）`);
-  if (!ok) failed += 1;
+  check(text.includes('@deepseek-ai/dsh-agent-preset') && new RegExp(`^\\s+id: ${p}$`, 'm').test(text),
+    `preset ${p} 的 patch 层就绪（含 @deepseek-ai/dsh-agent-preset 行 + config.id）`);
 }
-const legacyDir = path.join(tmpHome, '.agent-presets');
-console.log(`${legacyDir && !fs.existsSync(legacyDir) ? '✅' : '❌'} 未创建 0.1.7 已废弃的 ~/.dsh/.agent-presets`);
-if (fs.existsSync(legacyDir)) failed += 1;
+check(!fs.existsSync(path.join(tmpHome, '.agent-presets')), '未创建 0.1.7 已废弃的 ~/.dsh/.agent-presets');
 
 console.log(failed === 0 ? '\n✅ setup-dsh.mjs 幂等性测试通过' : `\n❌ ${failed} 项失败`);
 process.exit(failed === 0 ? 0 : 1);

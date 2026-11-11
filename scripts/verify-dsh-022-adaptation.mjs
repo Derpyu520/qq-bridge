@@ -201,19 +201,23 @@ if (scanned.names.size === 0) {
   check('守卫名单无拼错的假名（restrict 不会静默失效）', fabricated.length === 0, fabricated.join(', ') || `扫过 ${scanned.packages.length} 个包`);
 }
 
-const patch = fs.readFileSync(path.join(DSH_HOME, 'profiles/web/cordis.patch.yml'), 'utf8');
-const patchDoc = yaml.load(patch);
-const mcpIds = patchDoc.filter((e) => e?.insert).flatMap((e) => e.insert.map((x) => x.id));
-check('profile patch 含 3 个 MCP 且无重复', mcpIds.length === 3 && new Set(mcpIds).size === 3, mcpIds.join(', '));
-const snowlumaEntry = patchDoc.filter((e) => e?.insert).flatMap((e) => e.insert).find((x) => x.id === 'mcp-snowluma');
+// MCP 行不在 profile patch 里：它们由 dsh/qq-bridge-mcp 这个 bundle 提供，
+// 安装器不再写 profile 覆盖层（见 docs/guides/DSH_MCP_BUNDLE_MIGRATION.md）。
+const bundleDoc = yaml.load(fs.readFileSync(path.join(ROOT, 'dsh/qq-bridge-mcp/cordis.patch.yml'), 'utf8'));
+const mcpIds = bundleDoc.filter((e) => e?.insert).flatMap((e) => e.insert.map((x) => x.id));
+check('bundle patch 含 3 个 MCP 且无重复', mcpIds.length === 3 && new Set(mcpIds).size === 3, mcpIds.join(', '));
+const snowlumaEntry = bundleDoc.filter((e) => e?.insert).flatMap((e) => e.insert).find((x) => x.id === 'mcp-snowluma');
 check('mcp-snowluma 带 toolCallTimeoutMs=725000', snowlumaEntry?.config?.toolCallTimeoutMs === 725000);
 check('mcp 路径指向本仓库', mcpIds.every((id) => {
-  const e = patchDoc.filter((x) => x?.insert).flatMap((x) => x.insert).find((y) => y.id === id);
+  const e = bundleDoc.filter((x) => x?.insert).flatMap((x) => x.insert).find((y) => y.id === id);
   return String(e.config.args[0]).includes('qq-bridge');
 }));
+const patch = fs.readFileSync(path.join(DSH_HOME, 'profiles/web/cordis.patch.yml'), 'utf8');
+check('profile patch 不含 qq-bridge 注入区块', !patch.includes('# === qq-bridge MCP BEGIN ==='));
 
 const pkg = JSON.parse(fs.readFileSync(path.join(DSH_HOME, 'profiles/web/package.json'), 'utf8'));
 check('profile bundles 含 qq-mode-console', pkg.dsh.profile.bundles.includes('qq-mode-console'));
+check('profile bundles 含 qq-bridge-mcp（MCP 行由它提供）', pkg.dsh.profile.bundles.includes('@local/qq-bridge-mcp'));
 check('qq-mode-console link 依赖已注册', String(pkg.dependencies['qq-mode-console'] ?? '').startsWith('link:'));
 check('qq-mode-console 已 link 进 node_modules', fs.existsSync(path.join(DSH_HOME, 'profiles/web/node_modules/qq-mode-console')));
 
