@@ -211,7 +211,7 @@ console.log('## preset 人设已描述语音能力（否则 AI 不知道自己�
 
 console.log('## 控制台契约');
 {
-  const html = fs.readFileSync(path.join(ROOT, 'public', 'console.html'), 'utf8');
+  const html = fs.readFileSync(path.join(ROOT, 'work', 'console.html'), 'utf8');
   const bridgeSrc = fs.readFileSync(path.join(ROOT, 'src', 'bridge.js'), 'utf8');
   ok(html.includes('data-v2-tool="sendVoice"'), '控制台有 sendVoice 工具开关');
   // 断言改成「toolFlags 数组里包含该开关」而不是「数组以 'sendVoice'] 结尾」：

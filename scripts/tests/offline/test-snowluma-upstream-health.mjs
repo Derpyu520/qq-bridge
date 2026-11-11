@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const bridge = fs.readFileSync(path.join(ROOT, 'src', 'bridge.js'), 'utf8');
-const consoleHtml = fs.readFileSync(path.join(ROOT, 'public', 'console.html'), 'utf8');
+const consoleHtml = fs.readFileSync(path.join(ROOT, 'work', 'console.html'), 'utf8');
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const example = JSON.parse(fs.readFileSync(resolveConfigExamplePath(ROOT), 'utf8'));
 

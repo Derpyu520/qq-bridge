@@ -51,13 +51,13 @@ const DEFAULT_RULES = {
     { name: '带凭据的 URL', pattern: 'https?://[^/\\s:@]+:[^/\\s:@]+@', flags: 'i' },
   ],
   // 这些文件本来就不该进公开仓库；出现即失败（无论内容）。
-  denyFiles: ['config.json', 'config/config.json', 'state/', 'audio/', '*.log', '*.bak', '*.bak-*', 'roles/*.md.bak*'],
+  denyFiles: ['config.json', 'work/config.json', 'config/config.json', 'state/', 'audio/', '*.log', '*.bak', '*.bak-*', 'roles/*.md.bak*'],
   // 路径/整行匹配到这些就跳过（脱敏模板、示例、测试夹具、已声明含占位符的文档）。
   // 注意：这是**误报白名单**，不是"这些文件不用检查"——加入前先确认里面确实只有占位数据。
   allowPaths: [
-    'scripts/ops/privacy-', 'config.example.json', 'config/config.example.json', 'package-lock.json', 'src/text/sensitive.js',
+    'scripts/ops/privacy-', 'config.example.json', 'data/config.example.json', 'package-lock.json', 'src/text/sensitive.js',
     // 测试夹具/回归脚本：里面是刻意构造的假 ID 与假凭据
-    'scripts/tests/', 'scripts/console/', 'scripts/fixtures/', 'scripts/audit/audit-bridge-harness.mjs',
+    'scripts/tests/', 'scripts/console/', 'scripts/audit/audit-bridge-harness.mjs',
     'scripts/ops/check-onebot-status.mjs', 'scripts/send/send-test-group.mjs', 'scripts/send/send-voice.mjs',
     'scripts/setup/', 'scripts/probes/',
     'scripts/audit/', 'scripts/lib/', 'scripts/ops/',
@@ -269,7 +269,7 @@ for (const rel of files) {
     // 必须带 `g`：默认规则里有 `flags: ''` 的条目，而非全局正则的 `exec()` 不推进
     // `lastIndex` —— 同一个位置会被反复命中，表现为「同一条命中报 3 次」以及
     // 「匹配过多/过慢」的假截断（实测：src/media/media-normalize.js 的 3 条误报、
-    // public/console.html 的假截断都是这个原因）。
+    // work/console.html 的假截断都是这个原因）。
     const flags = new Set((rule.flags ?? '').split(''));
     flags.add('g');
     try { re = new RegExp(rule.pattern, [...flags].join('')); }

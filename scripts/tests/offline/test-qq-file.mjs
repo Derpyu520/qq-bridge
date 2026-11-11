@@ -244,7 +244,7 @@ console.log('## 配置/端点/工具描述一致性');
   ok(mcp.includes("'qq_download_file'"), 'MCP 暴露 qq_download_file');
   ok(mcp.includes("qq_download_file: 'downloadFile'"), 'MCP 注册期按开关过滤');
 
-  const consoleHtml = fs.readFileSync(path.join(ROOT, 'public/console.html'), 'utf8');
+  const consoleHtml = fs.readFileSync(path.join(ROOT, 'work/console.html'), 'utf8');
   ok(consoleHtml.includes('data-v2-tool="downloadFile"'), '控制台有下载工具开关');
   ok(consoleHtml.includes('data-v2-tool="listGroupFiles"'), '控制台有群文件列表开关');
   ok(bridge.includes('/api/socialV2/upload-file') && bridge.includes('uploadLocalFileToQQ'), '桥接注册了上传端点');

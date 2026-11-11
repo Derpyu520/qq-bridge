@@ -58,14 +58,16 @@
     "probe:settings": "node scripts/probes/probe-020-settings.mjs",
     "probe:heartbeat": "node scripts/probes/probe-snowluma-heartbeat.mjs",
     "scan:tool-names": "node scripts/ops/scan-dsh-tool-names.mjs",
-    "postinstall": "node scripts/setup/patch-snowluma-sdk.mjs",
+    "postinstall": "node scripts/setup/patch-snowluma-sdk.mjs && node scripts/ensure-config.mjs",
     "privacy-scan": "node scripts/ops/privacy-scan.mjs",
     "privacy-scan:history": "node scripts/ops/privacy-scan.mjs --tracked-only --history",
     "diagnose:acl": "node scripts/ops/diagnose-acl.mjs",
     "harden-acl": "node scripts/ops/harden-state-acl.mjs",
     "test:role-inject": "node scripts/tests/offline/test-role-injection-cadence.mjs",
     "scripts:index": "node scripts/setup/gen-scripts-index.mjs",
-    "scripts:index:check": "node scripts/setup/gen-scripts-index.mjs --check"
+    "scripts:index:check": "node scripts/setup/gen-scripts-index.mjs --check",
+    "prestart": "node scripts/ensure-config.mjs",
+    "ensure:config": "node scripts/ensure-config.mjs"
   },
   "dependencies": {
     "@deepseek-ai/dsh-host-apiproxy": "0.1.1-rc.2",

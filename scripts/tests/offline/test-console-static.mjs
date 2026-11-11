@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { hasVoiceTool, skipVoiceTool, voiceToolPath } from '../../lib/voice-tool-locator.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-const html = fs.readFileSync(path.join(ROOT, 'public', 'console.html'), 'utf8');
+const html = fs.readFileSync(path.join(ROOT, 'work', 'console.html'), 'utf8');
 
 let bad = 0;
 const ok = (cond, name, extra = '') => {

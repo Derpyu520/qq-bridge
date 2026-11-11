@@ -51,12 +51,12 @@ DSH 0.2.2 起上游要求 Node.js **≥24.9**；桥接程序本身仍兼容 `>=2
 3. **创建配置文件**：
 
    ```bash
-   cp config/config.example.json config/config.json
+   cp data/config.example.json work/config.json   # 也可省略：npm install 会自动生成
    ```
 
-   > Windows CMD 用户请用：`copy config\config.example.json config\config.json`
+   > Windows CMD 用户请用：`copy data\config.example.json work\config.json`
 
-   然后编辑 `config.json`，填写：
+   然后编辑 `work/config.json`，填写：
 
    - `snowluma.wsUrl` / `httpUrl`（例如 `ws://127.0.0.1:3001` / `http://127.0.0.1:3000`，分别对应 OneBot WebSocket 与 HTTP API 端口）
    - `snowluma.accessToken`

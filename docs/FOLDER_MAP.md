@@ -23,14 +23,14 @@ DSH/                         ← 工作区根（不是仓库根）
 | `scripts/` | 离线回归、安装、诊断、探针和运维脚本 | 文件以 Git 跟踪清单为准；新增回归脚本应加入 `scripts/test-audit.mjs` |
 | `dsh/agent-presets/` | `qq-chat` / `qq-chat-v2` / `qq-chat-tools` 的权威 preset 源 | 修改后运行 `node scripts/setup/build-agent-preset-patches.mjs` 重新生成 bundle patch；`qq-*.mjs` 只是 re-export 壳，实现文件在 `plugins/qq-agent-presets/` |
 | `plugins/` | DSH bundle：`qq-agent-presets` 与 `qq-mode-console` | 修改后需重新同步安装并重启 DSH；`qq-mode-console` 目前只有 host 半 |
-| `public/console.html` | 桥接自带本地控制台 | 修改前端契约时同步 fixture、基线和离线回归 |
+| `work/` | **经常编辑、运行中**的文件：`console.html` 本地控制台前端、`console-ui-contracts.json` 契约基线、`config.json` 本机配置（`.gitignore` 排除，由 scripts/ensure-config.mjs 在 npm 生命周期生成） | 桥接/测试读取这里的最新版本；改完跑 preview/test-console-ui/test:audit；旧布局 `config/config.json` 与根 `config.json` 仍兼容 |
+| `data/` | 很少改动的**静态基线/模板**：`console.before.html` 旧版快照、`console-ui-legacy-ids.json` 旧 ID、`config.example.json` 配置模板、`privacy-rules.example.json` 隐私规则模板 | 运行时不写；只有重录基线/改模板时才动 |
 | `roles/` | 人格卡与人格写作说明 | 属于用户可编辑内容；权限和注入规则见 `docs/RULES.md`、`roles/README.md` |
 | `assets/` | 仓库用图片等资源 | 当前仅跟踪 `deepseek娘.png`；演示视频作为 Release 附件管理，不入库 |
 | `audio/` | 本地语音库，默认被 `.gitignore` 排除 | 用户音频不应提交或随意删除 |
 | `state/` | 会话、模式、日志、锁、令牌等运行时数据 | 被 `.gitignore` 排除；不要提交，也不要在测试中使用生产副本 |
 | `docs/` | 公开指南、历史记录、规则/许可/安全/贡献文档 | 本地扩展清单见 [LOCAL_EXTENSIONS](guides/LOCAL_EXTENSIONS.md)；公开 / 本地边界见第三节 |
 | `node_modules/`、`.npm-cache/` | 依赖与缓存 | 不入库 |
-| `config/` | 配置目录：`config.example.json` 模板（入库）、`config.json` 用户真实配置（`.gitignore`） | 修改配置结构时同步代码、文档和相关测试；旧布局的根目录 `config.json` 仍兼容 |
 
 ## 二、`scripts/` 命名与用途
 
@@ -46,7 +46,7 @@ DSH/                         ← 工作区根（不是仓库根）
 | `tests/live/` | 需要 DSH / SnowLuma / QQ 的实时测试（`test-dsh-*`、`test-mcp-*`、`test-onebot-connection` 等），环境要求见各文件头 |
 | `probes/` | 探针与适配校验（`probe-*`、`verify-*`、`probe-auth`/`adaptation-probe-helpers`）。可能连接真实本机服务，不属于纯离线套件；`probe-snowluma-heartbeat` 只读，`probe-020-settings` 会写回原值，`probe-020-protocol` 会建测试会话/工作区并自清理 |
 | `setup/` | 安装、生成与修补：`setup-dsh`、`build-agent-preset-patches`、`patch-snowluma-sdk`（postinstall 依赖，不能删）、`gen-scripts-index` |
-| `ops/` | 运维、诊断与扫描：`privacy-scan`（规则模板 `privacy-rules.example.json`）、`check-onebot-status`、`diagnose-acl`、`harden-state-acl`、`scan-dsh-tool-names`、`stop-bridge-instance`（供 `npm run stop` / `npm run restart` 使用） |
+| `ops/` | 运维、诊断与扫描：`privacy-scan`（规则模板 `data/privacy-rules.example.json`）、`check-onebot-status`、`diagnose-acl`、`harden-state-acl`、`scan-dsh-tool-names`、`stop-bridge-instance`（供 `npm run stop` / `npm run restart` 使用） |
 | `console/` | 控制台离线预览、fixture 与 API 基线；说明见 [CONSOLE-UI-TESTING](guides/CONSOLE-UI-TESTING.md) |
 | `send/` | 可能向真实 QQ 发送内容的小工具，运行前必须核对目标和环境 |
 | `lib/` | 共享实现：`dsh-modules`、`dsh-tool-names`、`voice-tool-locator` |
@@ -61,7 +61,7 @@ DSH/                         ← 工作区根（不是仓库根）
 - `scripts/audit/audit-bridge-harness.mjs`、`scripts/lib/dsh-modules.mjs` 等共享实现；
 - `scripts/console/` 的 fixture 与基线；
 - `scripts/setup/patch-snowluma-sdk.mjs`；
-- `scripts/ops/privacy-rules.example.json`。
+- `data/privacy-rules.example.json`。
 
 ## 三、公开与本地文档边界
 
@@ -82,12 +82,12 @@ docs/
 公开文档不要给这些本地资料提供链接。`PROJECT_GUIDE.md` 是历史说明书，不是当前实现的唯一权威来源；
 当前行为以代码、入库指南和带日期的验证记录为准。
 
-根目录只保留 `README.md`、`README.en.md`、`LICENSE` 与 `config/` 目录；`RULES.md`、`NOTICE.md`、
+根目录只保留 `README.md`、`README.en.md`、`LICENSE` 与 `work/`、`data/` 目录；`RULES.md`、`NOTICE.md`、
 `SECURITY.md`、`CONTRIBUTING.md` 与各指南都在 `docs/`，`.github/` 只放社区健康文件与工作流。
 
 `.gitignore` 采用「根规则 + 目录规则」分层：根 `.gitignore` 只放全局项（依赖、运行时状态、
 日志、`audio/`），各目录用各自的 `.gitignore` 管本目录的本地文件
-（`config/.gitignore`、`docs/.gitignore`、`docs/guides/.gitignore`、`scripts/.gitignore`、`assets/.gitignore`）。
+（`work/.gitignore`、`docs/.gitignore`、`docs/guides/.gitignore`、`scripts/.gitignore`、`assets/.gitignore`）。
 新增本机私密文件时，把规则加到**它所在目录**的 `.gitignore`，不要堆回根文件；
 `scripts/ops/privacy-scan.mjs` 在 git 不可用时会逐目录读取这些规则做回退扫描。
 

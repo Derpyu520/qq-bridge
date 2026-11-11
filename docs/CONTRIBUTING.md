@@ -17,12 +17,12 @@
 git clone https://github.com/Derpyu520/qq-bridge.git
 cd qq-bridge
 npm install
-cp config/config.example.json config/config.json   # 本机配置（config/.gitignore 已排除）
+# work/config.json 由 npm install 的 postinstall 自动生成（已存在则跳过）
 npm run test:audit
 ```
 
 本地私密文件（真实配置、日志、内部笔记、一次性调试脚本）按目录归类：根 `.gitignore` 只放全局规则，
-具体文件加到它所在目录的 `.gitignore`（如 `config/.gitignore`、`docs/.gitignore`、
+具体文件加到它所在目录的 `.gitignore`（如 `work/.gitignore`、`docs/.gitignore`、
 `scripts/.gitignore`），不要堆回根文件。
 
 ⚠️ **不要用 `npm ci --ignore-scripts`**。`postinstall` 会跑 `scripts/setup/patch-snowluma-sdk.mjs`，

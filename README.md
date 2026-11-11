@@ -41,14 +41,14 @@ QQ ↔ SnowLuma ↔ qq-bridge ↔ DeepSeek Harness ↔ 模型服务
 git clone https://github.com/Derpyu520/qq-bridge.git
 cd qq-bridge
 npm install
-Copy-Item config/config.example.json config/config.json
+# 首次安装会用 data/config.example.json 自动生成 work/config.json（已存在则跳过）
 ```
 
 默认分支 `main` 为正式发布线；`dev` 用于开发与测试。
 
 ### 2. 填写配置
 
-编辑 `config.json`，至少核对这些字段：
+编辑 `work/config.json`，至少核对这些字段：
 
 | 字段 | 填写内容 |
 | --- | --- |
@@ -75,7 +75,7 @@ node scripts/setup/setup-dsh.mjs
 npm start
 ```
 
-打开 [本地控制台](http://127.0.0.1:3100) 并输入控制台令牌。自动生成的令牌保存在 `state/console-token`；如果已在 `config.json` 配置 `consoleToken`，则使用该值。启动日志不会打印令牌。新装默认使用二代仿真模式（`reserved2`），会选择性发言；测试收发时可先切到 `chat`，再从白名单会话发送消息。
+打开 [本地控制台](http://127.0.0.1:3100) 并输入控制台令牌。自动生成的令牌保存在 `state/console-token`；如果已在 `work/config.json` 配置 `consoleToken`，则使用该值。启动日志不会打印令牌。新装默认使用二代仿真模式（`reserved2`），会选择性发言；测试收发时可先切到 `chat`，再从白名单会话发送消息。
 
 `npm start` 是守护模式（桥接崩溃后 5 秒自动重启）；`npm run start:once` 只跑一次；`npm run restart` 会先验证停止本仓库实例再启动；Ctrl+C 或关闭终端即停止。
 
@@ -98,7 +98,7 @@ npm run test:audit
 
 ## 本地扩展：QQ 文件与工具护栏
 
-> 以下是在上游基础上保留的本地功能，尚未合并进上游；配置字段都在 `config.json`，模板见 `config/config.example.json`。完整的代码位置、测试与升级检查清单见 [本地扩展说明](docs/guides/LOCAL_EXTENSIONS.md)。
+> 以下是在上游基础上保留的本地功能，尚未合并进上游；配置字段都在 `work/config.json`，模板见 `data/config.example.json`。完整的代码位置、测试与升级检查清单见 [本地扩展说明](docs/guides/LOCAL_EXTENSIONS.md)。
 
 ### QQ 文件（`files.*`）
 
@@ -121,7 +121,7 @@ npm run test:audit
 ### 工具护栏（`agentGuard.*` + `qq-chat-tools` preset）
 
 - 新增 `qq-chat-tools` preset（二代仿真 + 本地工具）：`read` / `read_image` / `write` / `edit` / `glob` / `grep` + `bash`（Windows 上 `pwsh`）。写边界靠 DSH 的 `workspace-write`（会话 cwd = `sessionCwd`），工作区外内核级写不了。
-- `qq-agent-guard` 插件读 `config.json` 的 `agentGuard`（按 mtime，改完即生效）：
+- `qq-agent-guard` 插件读 `work/config.json` 的 `agentGuard`（按 mtime，改完即生效）：
   - `denyRead`：排除路径（目录含子树，支持 `~`/绝对/相对仓库根）不可读写；`glob`/`grep` 还会拒绝包含排除目录的搜索根与绝对/`..` pattern。
   - `denyExec`：正则拒绝 `rm -r`/`sudo`/`dd of=`/`mkfs`/`find -delete` 等。
 - 诚实边界：fs 工具的路径检查可靠（结构化参数 + realpath）；bash 的命令检查是**字符串级尽力而为**，脚本可绕过；真正的写边界仍是 DSH 沙盒。群聊输入不可信，开这套前请确认 `denyRead` 覆盖了敏感目录。
@@ -130,7 +130,7 @@ npm run test:audit
 
 - 仅在知情并获准的会话中使用，遵守平台规则；使用非官方 QQ 后端可能导致账号受限。
 - 聊天内容会经 DSH 发送给所配置的模型服务；黑话自动研究默认开启，可能将提取的关键词发送给搜索服务。数据流与关闭方式见 [NOTICE](docs/NOTICE.md#四数据传输)。
-- 保护 `config.json`、`state/` 与控制台令牌，保持服务仅在本机可访问。
+- 保护 `work/config.json`、`state/` 与控制台令牌，保持服务仅在本机可访问。
 - DSH 离线期间的消息队列仅保存在内存中，每个会话最多 50 条；桥接进程退出后队列丢失，不保证送达。
 - 本工具不实现 QQ 登录或底层协议，不安装、打包或启停 SnowLuma 后端；当前客户端仍依赖 `@snowluma/sdk` 等包，第三方组件适用各自条款。
 

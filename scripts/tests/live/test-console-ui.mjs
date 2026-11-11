@@ -15,8 +15,10 @@ const original = args.includes('--original');
 const record = args.includes('--record-baseline');
 const artifacts = args.find(x => x.startsWith('--artifacts='))?.slice('--artifacts='.length);
 const views = ['overview', 'sessions', 'persona', 'social-v2', 'social-v1', 'slang', 'usage', 'access', 'operations', 'reference'];
-const legacyIds = JSON.parse((await readFile(join(here, '..', '..', 'console', 'console-ui-legacy-ids.json'), 'utf8')).replace(/^\uFEFF/, ''));
-const baselinePath = join(here, '..', '..', 'console', 'console-ui-contracts.json');
+const dataDir = join(here, '..', '..', '..', 'data');
+const workDir = join(here, '..', '..', '..', 'work');
+const legacyIds = JSON.parse((await readFile(join(dataDir, 'console-ui-legacy-ids.json'), 'utf8')).replace(/^\uFEFF/, ''));
+const baselinePath = join(workDir, 'console-ui-contracts.json');
 if (record && !original) throw new Error('--record-baseline requires --original; only the pre-redesign console can define the baseline.');
 
 async function loadPlaywright() {

@@ -20,7 +20,7 @@ node scripts/console/console-ui-fixture.mjs --original --port=4174
 node scripts/console/console-ui-fixture.mjs --html=path/to/console.html
 ```
 
-`--original` 读取 `scripts/fixtures/console.before.html`（改造前的原版，随仓库保留），仅用于对照预览；正常预览读取 `public/console.html`。
+`--original` 读取 `data/console.before.html`（改造前的原版，随仓库保留），仅用于对照预览；正常预览读取 `work/console.html`。
 
 ## 浏览器回归
 
@@ -67,7 +67,7 @@ node scripts/tests/live/test-console-ui.mjs --artifacts=docs/ui-verification
 新增的 `sendVoice` 在历史基线比较前断言为默认 `true`，比较时仅移除这一字段；
 随后另测 `false → true` 两次保存，并严格比较其余完整配置。ACL「重新检测」也在基线比较后独立验证。
 
-只有后端契约经过明确调整时才更新基线。`scripts/fixtures/console.before.html` 是改造前的原版控制台（通常无需改动），重录时运行：
+只有后端契约经过明确调整时才更新基线。`data/console.before.html` 是改造前的原版控制台（通常无需改动），重录时运行：
 
 ```sh
 node scripts/tests/live/test-console-ui.mjs --original --record-baseline

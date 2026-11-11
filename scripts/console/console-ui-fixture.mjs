@@ -341,7 +341,7 @@ export function makeFixtureState() {
 
 /** Bind only to loopback. Mutations affect this server's disposable in-memory state. */
 export async function startConsoleFixture({ port = 0, original = false, htmlPath, logWrites = false } = {}) {
-  const file = htmlPath || resolve(projectRoot, original ? 'scripts/fixtures/console.before.html' : 'public/console.html');
+  const file = htmlPath || resolve(projectRoot, original ? 'data/console.before.html' : 'work/console.html');
   await readFile(file); // Fail early rather than displaying a broken preview.
   const state = makeFixtureState();
   const requests = [];

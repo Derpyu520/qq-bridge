@@ -10,6 +10,8 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SCRIPTS = path.join(ROOT, 'scripts');
+const DATA = path.join(ROOT, 'data');
+const WORK = path.join(ROOT, 'work');
 const README = path.join(SCRIPTS, 'README.md');
 const BEGIN = '<!-- scripts-index:begin -->';
 const END = '<!-- scripts-index:end -->';
@@ -85,6 +87,11 @@ function buildIndex() {
   const all = walk(SCRIPTS);
   const mjs = all.filter((f) => f.endsWith('.mjs') && f !== 'README.md');
   const assets = all.filter((f) => !f.endsWith('.mjs') && f !== 'README.md' && f !== '.gitignore');
+  const dataFiles = fs.existsSync(DATA) ? walk(DATA) : [];
+  // 排除说明文件、忽略规则与本机配置（work/config.json 不入库，不能出现在索引里）。
+  const workFiles = fs.existsSync(WORK)
+    ? walk(WORK).filter((f) => !['README.md', '.gitignore', 'config.json'].includes(f))
+    : [];
   const audit = readAuditList();
   const npm = readNpmCommands();
   const buckets = new Map(SECTION_ORDER.map((s) => [s, []]));
@@ -102,8 +109,18 @@ function buildIndex() {
     lines.push(`### ${section}`, '', ...items, '');
   }
   if (assets.length) {
-    lines.push('### 资源文件与夹具', '');
+    lines.push('### scripts/ 内的资源文件', '');
     for (const f of assets) lines.push(`- \`${f}\``);
+    lines.push('');
+  }
+  if (workFiles.length) {
+    lines.push('### 工作文件（work/，经常编辑）', '');
+    for (const f of workFiles) lines.push(`- \`work/${f}\``);
+    lines.push('');
+  }
+  if (dataFiles.length) {
+    lines.push('### 仓库数据文件（data/，静态只读）', '');
+    for (const f of dataFiles) lines.push(`- \`data/${f}\``);
     lines.push('');
   }
   lines.push(END);

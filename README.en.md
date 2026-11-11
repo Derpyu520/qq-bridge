@@ -41,14 +41,14 @@ Run in PowerShell:
 git clone https://github.com/Derpyu520/qq-bridge.git
 cd qq-bridge
 npm install
-Copy-Item config/config.example.json config/config.json
+# 首次安装会用 data/config.example.json 自动生成 work/config.json（已存在则跳过）
 ```
 
 `main` is the release branch; `dev` is for development and testing.
 
 ### 2. Configure
 
-Edit `config.json` and check at least these fields:
+Edit `work/config.json` and check at least these fields:
 
 | Field | Value |
 | --- | --- |
@@ -75,7 +75,7 @@ This installs the chat presets and MCP tools into DSH. **It is required for a fr
 npm start
 ```
 
-Open the [local console](http://127.0.0.1:3100) and enter the console token. Automatically generated tokens are stored in `state/console-token`; if `consoleToken` is set in `config.json`, use that value instead. Startup logs do not print the token. New installations default to second-generation simulation (`reserved2`), which speaks selectively; switch to `chat` for an initial message test from an allowed conversation.
+Open the [local console](http://127.0.0.1:3100) and enter the console token. Automatically generated tokens are stored in `state/console-token`; if `consoleToken` is set in `work/config.json`, use that value instead. Startup logs do not print the token. New installations default to second-generation simulation (`reserved2`), which speaks selectively; switch to `chat` for an initial message test from an allowed conversation.
 
 `npm start` runs the bridge in watch mode (auto-restart 5 s after a crash); `npm run start:once` runs once; `npm run restart` verifies and stops this checkout's instance first; Ctrl+C or closing the terminal stops it.
 
@@ -102,7 +102,7 @@ npm run test:audit
 
 - Use only in conversations where participants are informed and use is permitted. Follow platform rules; using an unofficial QQ backend may lead to account restrictions.
 - DSH sends chat content to your configured model provider. Automatic slang research is enabled by default and may send extracted keywords to search services. See [NOTICE](docs/NOTICE.md#四数据传输) for data flows and controls.
-- Protect `config.json`, `state/`, and console tokens. Keep services accessible only locally.
+- Protect `work/config.json`, `state/`, and console tokens. Keep services accessible only locally.
 - While DSH is offline, messages are queued only in memory, up to 50 per conversation. The queue is lost when the bridge exits and delivery is not guaranteed.
 - The bridge does not implement QQ login or its underlying protocol, or install, bundle, start, or stop the SnowLuma backend. It currently uses client packages including `@snowluma/sdk`; third-party terms apply separately.
 

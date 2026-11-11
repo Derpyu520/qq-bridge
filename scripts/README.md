@@ -153,11 +153,20 @@
 - `lib/dsh-tool-names.mjs` — DSH 工具名抽取：**唯一实现**，供
 - `lib/voice-tool-locator.mjs` — 「发语音」独立工具的位置解析 + 「它不在本仓库」时的统一跳过口径。
 
-### 资源文件与夹具
+### 其它
 
-- `console/console-ui-contracts.json`
-- `console/console-ui-legacy-ids.json`
-- `fixtures/console.before.html`
-- `ops/privacy-rules.example.json`
+- `ensure-config.mjs` — 首次安装/启动前自动生成 work/config.json（由 npm postinstall / prestart 调用）。（npm: postinstall / prestart / ensure:config）
+
+### 工作文件（work/，经常编辑）
+
+- `work/console-ui-contracts.json`
+- `work/console.html`
+
+### 仓库数据文件（data/，静态只读）
+
+- `data/config.example.json`
+- `data/console-ui-legacy-ids.json`
+- `data/console.before.html`
+- `data/privacy-rules.example.json`
 
 <!-- scripts-index:end -->

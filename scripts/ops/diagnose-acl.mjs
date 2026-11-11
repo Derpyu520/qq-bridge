@@ -35,7 +35,7 @@ const STRICT = process.argv.includes('--strict');
 const SKIP_DIRS = new Set(['node_modules', '.git', '.npm-cache']);
 
 /** 项目**有意**收紧的路径（前缀匹配，相对仓库根的 posix 风格路径）。 */
-const INTENTIONAL = ['state', 'config.json', 'config/config.json'];
+const INTENTIONAL = ['state', 'config.json', 'work/config.json', 'config/config.json'];
 
 if (process.platform !== 'win32') {
   console.log('[diagnose-acl] 非 Windows：DSH 的 ACL 沙箱不适用，无需诊断。');

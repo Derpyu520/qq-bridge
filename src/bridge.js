@@ -6,7 +6,7 @@ import { renderPatch } from '../scripts/setup/build-agent-preset-patches.mjs';
 //   QQ 消息 → SnowLuma (OneBot v11 WS) → 本进程 → DSH Web API session.prompt
 //   DSH agent 回复/提问/审批 → events.mux 事件流 → 本进程 → send_msg → QQ
 //
-// 用法：node src/bridge.js （先编辑 config/config.json，模板见 config/config.example.json）
+// 用法：node src/bridge.js （先编辑 work/config.json；首次 npm install 会自动从 data/config.example.json 生成）
 import fs from 'node:fs';
 import os from 'node:os';
 import http from 'node:http';
@@ -3994,9 +3994,9 @@ async function main() {
         if (req.method === 'GET' && url.pathname === '/') {
           res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', ...SECURITY_HEADERS });
           try {
-            res.end(fs.readFileSync(path.join(ROOT, 'public', 'console.html'), 'utf8'));
+            res.end(fs.readFileSync(path.join(ROOT, 'work', 'console.html'), 'utf8'));
           } catch {
-            res.end('控制台页面缺失：qq-bridge/public/console.html');
+            res.end('控制台页面缺失：qq-bridge/work/console.html');
           }
           return;
         }

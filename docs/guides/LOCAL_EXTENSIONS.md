@@ -102,4 +102,4 @@ node scripts/setup/setup-dsh.mjs                    # 安装到 DSH profile
 }
 ```
 
-完整模板见 `config/config.example.json`；`config/config.json` 不入库。
+完整模板见 `data/config.example.json`；`work/config.json` 不入库（npm install 自动生成）。
