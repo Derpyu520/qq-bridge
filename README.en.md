@@ -1,3 +1,5 @@
+[![](https://img.shields.io/badge/powered_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://github.com/deepseek-ai/deepseek-harness)
+
 # qq-bridge
 
 [中文](README.md) · [Setup guide](docs/guides/DSH_SETUP.md) · [Issues](https://github.com/Derpyu520/qq-bridge/issues)
