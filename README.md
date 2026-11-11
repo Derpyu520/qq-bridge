@@ -1,5 +1,10 @@
 # qq-bridge
 
+> [!IMPORTANT]
+> **本项目已停止维护，并预计于 2026-11-18 归档。**
+>
+> 上游 SnowLuma 已停止公开服务，相关运行时不再提供；本项目无法继续维护。现有部署可能继续运行至不兼容为止，但不再提供新安装支持、兼容性适配或安全更新。详见 [SUNSET.md](SUNSET.md) 与 [归档公告](https://github.com/Derpyu520/qq-bridge/issues/180)。
+
 [English](README.en.md) · [安装指南](docs/guides/DSH_SETUP.md) · [问题反馈](https://github.com/Derpyu520/qq-bridge/issues)
 
 qq-bridge 是一个本地消息桥接工具，在 SnowLuma 提供的 **OneBot v11 接口**与 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/deepseek-harness) 之间转发消息事件和 AI 回复。

@@ -1,5 +1,10 @@
 # qq-bridge
 
+> [!IMPORTANT]
+> **This project is no longer maintained and is expected to be archived on 2026-11-18.**
+>
+> The upstream SnowLuma project has stopped public distribution, and its runtime is no longer available. Existing deployments may keep running until they become incompatible, but there will be no new-install support, compatibility updates, or security fixes. See [SUNSET.md](SUNSET.md) and the [archive announcement](https://github.com/Derpyu520/qq-bridge/issues/180).
+
 [中文](README.md) · [Setup guide](docs/guides/DSH_SETUP.md) · [Issues](https://github.com/Derpyu520/qq-bridge/issues)
 
 A local message bridge that forwards message events and AI replies between the **OneBot v11 interfaces provided by SnowLuma** and [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness).
