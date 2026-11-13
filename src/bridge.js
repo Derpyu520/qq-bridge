@@ -2257,6 +2257,20 @@ async function main() {
     try { fs.unlinkSync(SLANG_SESSION_FILE); } catch {}
   }
 
+  // 向黑话学习会话发 prompt。DSH 里的会话可能已被删除/清理，而 slang-session.json
+  // 仍记着旧 id；遇到 session/not-found 时作废旧会话、重建一次再发。
+  async function promptSlangLearner(scope, promptText) {
+    let sessionId = await ensureSlangLearnerSession(scope);
+    let accepted = await api.sessions.prompt({ sessionId, mode: 'queue', content: [{ type: 'text', text: promptText }] });
+    if (!accepted.result.ok && accepted.result.error?.code === 'session/not-found') {
+      log(`黑话学习会话 ${sessionId} 在 DSH 中已不存在，重新创建`);
+      invalidateSlangLearnerSession();
+      sessionId = await ensureSlangLearnerSession(scope);
+      accepted = await api.sessions.prompt({ sessionId, mode: 'queue', content: [{ type: 'text', text: promptText }] });
+    }
+    return { sessionId, accepted };
+  }
+
   function waitLearnerTurn(sessionId, timeoutMs = 120000) {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -2280,17 +2294,16 @@ async function main() {
     const min = Math.max(1, Number(cfg.slang?.extractMinMessages ?? 10));
     if (messages.length < min) return;
 
+    const promptText = buildExtractionPrompt(messages);
     let sessionId;
+    let accepted;
     try {
-      sessionId = await ensureSlangLearnerSession(key);
+      ({ sessionId, accepted } = await promptSlangLearner(key, promptText));
     } catch (error) {
       log(`黑话学习会话创建失败 (${key}):`, error?.message ?? error);
       return;
     }
-
-    const promptText = buildExtractionPrompt(messages);
     try {
-      const accepted = await api.sessions.prompt({ sessionId, mode: 'queue', content: [{ type: 'text', text: promptText }] });
       if (!accepted.result.ok) {
         log(`黑话提取被拒 (${key}): ${accepted.result.error.code}: ${accepted.result.error.message}`);
         return;
@@ -2356,17 +2369,17 @@ async function main() {
     const targets = candidates.filter((e) => e && !slangResearchingIds.has(e.id));
     if (!targets.length) return;
     for (const e of targets) slangResearchingIds.add(e.id);
+    const promptText = buildResearchPrompt(targets);
     let sessionId;
+    let accepted;
     try {
-      sessionId = await ensureSlangLearnerSession(targets[0].scope);
+      ({ sessionId, accepted } = await promptSlangLearner(targets[0].scope, promptText));
     } catch (error) {
       for (const e of targets) slangResearchingIds.delete(e.id);
       log('黑话研究会话创建失败:', error?.message ?? error);
       return;
     }
-    const promptText = buildResearchPrompt(targets);
     try {
-      const accepted = await api.sessions.prompt({ sessionId, mode: 'queue', content: [{ type: 'text', text: promptText }] });
       if (!accepted.result.ok) {
         log(`黑话研究被拒: ${accepted.result.error.code}: ${accepted.result.error.message}`);
         return;
