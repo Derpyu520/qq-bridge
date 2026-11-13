@@ -57,6 +57,10 @@ const tests = [
   'test-voice-gui.mjs',
   // 控制台静态契约（跑不了 Playwright 的环境下的替代回归）
   'test-console-static.mjs',
+  // 控制台「对外访问地址」（config.consoleHost）：默认只监听回环；配置了具体 IP 才多开
+  //   一个监听器并放行该 IP 的 Host（外来 Host 依旧 403，DNS rebinding 硬化不能因此失效）；
+  //   管理端点 /api/console/access 只接受具体 IP、落盘、且 agent 令牌碰不到它。
+  'test-console-access.mjs',
   // 语音系统整体结构检查（入口/依赖/端点/开关/文档一致性）
   'test-voice-system.mjs',
   // SnowLuma 账号/token 自发现（换 QQ 账号后 token 会变，写死的工具会 401）
