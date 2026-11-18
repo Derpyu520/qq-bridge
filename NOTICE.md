@@ -176,6 +176,7 @@ SnowLuma 采用源码可见的非商业许可（[LICENSE](https://github.com/Sno
 | `web_search` → DeepSeek 搜索接口（默认）／Bing（回退）；也支持自定义 `webSearch.baseURL` | 搜索关键词，以及 DeepSeek / 自定义搜索端点所需的 API key 请求头。黑话自学习默认启用（`slang.autoResearch: true`），会将自群聊提取的词条作为关键词发出；自定义 `baseURL` 时 API key 也发往该端点 | 启用 | 不挂载 `mcp-web-search-safe`，或关闭黑话自动研究 |
 | `web_fetch` → 公网 URL | 被抓取的页面地址（由模型决定，可能来自聊天内容中的线索） | 启用 | 不挂载 `mcp-web-search-safe`；`safe-fetch.js` 拦截内网、私有及保留地址 |
 | 图片与表情等媒体 URL → QQ CDN 或其他公网地址 | 媒体地址及下载请求；地址可来自聊天消息或 OneBot 返回数据 | 启用 | 不发送含媒体的会话，或不接入 QQ |
+| 使用者配置的 TTS 服务（默认地址 `127.0.0.1:9880`） | 待合成文本、音色引用；可能包含聊天上下文中的内容 | 关闭 | 保持 `socialV2.tts.enabled: false`；AI 另有 `tools.synthesizeVoice` 开关 |
 
 搜索、网页与媒体请求的目标和内容可能由模型、聊天消息或自定义配置决定，可能包含群聊中出现的
 词条或线索。部署方可通过搜索服务配置、关闭黑话自动研究及限制媒体输入控制这些出口。

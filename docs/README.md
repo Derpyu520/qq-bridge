@@ -15,6 +15,7 @@
 | --- | --- | --- |
 | [DSH 安装指南](guides/DSH_SETUP.md) | 兼容范围、依赖安装、DSH 插件与 preset、启动验证和常见故障排查 | ✅ |
 | [权限与安全规则](../RULES.md) | 四种模式、权限分层、人格与仿真提示词、黑话学习和管理命令 | ✅ |
+| [TTS 语音合成](guides/TTS.md) | 外部 TTS 服务、指定／克隆音色、工具配置、缓存与队列、dryRun 验证 | ✅ |
 | [控制台「令牌与花费」看板](guides/TOKEN_USAGE_CONSOLE.md) | 用量来源、计价口径、API、配置和存储 | ✅ |
 | [控制台离线预览与回归](guides/CONSOLE-UI-TESTING.md) | `npm run preview:console`、`npm run test:console-ui` 与基线维护 | ✅ |
 | [发布前隐私检查](guides/PRIVACY.md) | 工作树与历史扫描、命中判读、CI 用法及历史扫描存档 | ✅ |
