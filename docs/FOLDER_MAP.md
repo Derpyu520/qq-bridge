@@ -25,7 +25,7 @@ DSH/                         ← 工作区根（不是仓库根）
 | `plugins/` | DSH bundle：`qq-agent-presets` 与 `qq-mode-console` | 修改后需重新同步安装并重启 DSH；`qq-mode-console` 目前只有 host 半 |
 | `public/console.html` | 桥接自带本地控制台 | 修改前端契约时同步 fixture、基线和离线回归 |
 | `roles/` | 人格卡与人格写作说明 | 属于用户可编辑内容；权限和注入规则见 `RULES.md`、`roles/README.md` |
-| `assets/` | 仓库用图片等资源 | 当前仅跟踪 `deepseek娘.png`；演示视频作为 Release 附件管理，不入库 |
+| `assets/` | 仓库用图片等资源 | 角色形象图按 `assets/<角色名>.png` 命名（`qq_get_self_image` 取当前角色那张，缺失则如实回「没有配图」，不回退到别家形象）；演示视频作为 Release 附件管理，不入库 |
 | `audio/` | 本地语音库，默认被 `.gitignore` 排除 | 用户音频不应提交或随意删除 |
 | `state/` | 会话、模式、日志、锁、令牌等运行时数据 | 被 `.gitignore` 排除；不要提交，也不要在测试中使用生产副本 |
 | `docs/` | 公开指南、历史记录和本地文档目录约定 | 公开 / 本地边界见第三节 |
