@@ -12,10 +12,12 @@ import os from 'node:os';
 import http from 'node:http';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { lookup as dnsLookup } from 'node:dns/promises';
 import { execFileSync } from 'node:child_process';
 import yaml from 'js-yaml';
 import { extractPresetPrefix, presetPromptBlockers, presetPromptWarnings, renderPresetPromptYaml } from './preset-prompt.js';
 import { GEN1_ROLE_LINE_RE, parseRoleSections, roleCharStats, roleSectionReport, selectRoleText } from './role-card.js';
+import { createMemoryWorld, dayKey as memoryDayKey, buildDiaryTranscript, buildDiaryPrompt, cleanDiaryText } from './memory-world.mjs';
 import { fileURLToPath } from 'node:url';
 import { SnowLumaWebSocketClient, text } from '@snowluma/sdk';
 import { NodeApiClient, unwrap, createTurnCollector, discoverDshLaunchToken } from './dsh-client.js';
@@ -27,6 +29,7 @@ import { compactModelMessage, describeAge, sanitizeUntrustedText } from './qq-mo
 import { safeFetchBuffer, looksLikeImageBuffer } from './safe-fetch.js';
 import { normalizeImageForModel } from './media-normalize.js';
 import { AUDIO_EXTS, cleanupTemp, describeAudio, formatBytes, formatDuration, inspectAudio, listAudioFiles, parseTargetKey, processAudioVolume, resolveAudioProcessing, resolveAudioSource, safeJoinLibrary } from './send-voice-lib.js';
+import { breezeTtsToWav } from './tts-breeze.js';
 import { discoverSnowLumaConnection, persistSnowLumaEndpoint, persistToken } from './snowluma-conn.js';
 import { hardenDir, manualDirCommand } from './state-acl.mjs';
 import { extractForwardIds, forwardIdFromData, sanitizeForwardId, formatForwardResponse } from './forward.js';
@@ -920,6 +923,23 @@ function loadConfig() {
         maxPixels: 64_000_000,
         maxCount: 5
       },
+      // 跨会话世界记忆（soul/people/rooms/日记）：数据在 state/memory/ 下。
+      // 它和人格卡（roles/）是两层：人格决定「怎么说话」，这里决定「记得什么」。
+      memory: {
+        enabled: true,
+        // 每段注入的字数预算；超了从低优先级截断，不会把 prompt 撑爆。
+        budget: { soul: 600, people: 520, room: 260, diary: 300 },
+        diary: {
+          enabled: true,
+          at: '23:30',          // 本地时区，每天写一篇 ~100 字日记
+          maxChars: 140,
+          injectDays: 3,        // 注入最近几天的日记
+          inject: 'owner',      // owner（仅主人私聊）| private（所有私聊）| all（所有会话）| off
+          catchUpDays: 2,       // 启动时补写前几天漏掉的日记
+          preset: 'minimal',    // 日记会话用最小 preset（无 QQ 工具）
+          timeoutMs: 180000
+        }
+      },
       ...(file.socialV2 ?? {})
     }
   };
@@ -959,6 +979,25 @@ function loadConfig() {
     sendVoice: false,
     ...(cfg.socialV2.tools ?? {})
   };
+
+  // socialV2.memory 的 diary/budget 需要深度合并：旧 config.json 只写一半时不能丢默认。
+  {
+    const defaults = {
+      enabled: true,
+      budget: { soul: 600, people: 520, room: 260, diary: 300 },
+      diary: {
+        enabled: true, at: '23:30', maxChars: 140, injectDays: 3, inject: 'owner',
+        catchUpDays: 2, preset: 'minimal', timeoutMs: 180000
+      }
+    };
+    const user = cfg.socialV2?.memory ?? {};
+    cfg.socialV2.memory = {
+      ...defaults,
+      ...user,
+      budget: { ...defaults.budget, ...(user.budget ?? {}) },
+      diary: { ...defaults.diary, ...(user.diary ?? {}) }
+    };
+  }
 
   // socialV2.voice：语音发送（把准备好的音频文件当 QQ 语音发出去）。
   // dir 为相对仓库根目录的语音库路径；AI 的 qq_send_voice 默认只能从这个目录取文件，
@@ -1481,6 +1520,29 @@ async function main() {
   acquireLock();
   loadState();
 
+  // ── 跨会话世界记忆（soul / people / rooms / 日记）────────────────────────
+  // 数据落在 state/memory/。它不替代 social-v2.json 里的会话级记忆（activeTopic 等），
+  // 而是把「人物事实」和「房间背景」提升为全局层：同一个人在 A 群和私聊里是同一份档案，
+  // 换个会话不会突然不认识了。隐私过滤在 compose() 里做（私聊来源永不进群）。
+  const memoryWorld = createMemoryWorld({
+    dir: path.join(STATE_DIR, 'memory'),
+    log: (...args) => log('[memory]', ...args)
+  });
+  const memoryEnabled = cfg.socialV2?.memory?.enabled !== false;
+  if (memoryEnabled && !fs.existsSync(memoryWorld.paths.people)) {
+    // 首次启用：把旧版按会话存的 memberImpressions 迁进全局 people（只跑一次）。
+    try {
+      const raw = readJsonSafe(SOCIAL_V2_FILE, null);
+      let merged = 0;
+      for (const [legacyKey, val] of Object.entries(raw?.conversations ?? {})) {
+        merged += memoryWorld.mergeLegacyImpressions({ key: legacyKey, impressions: val?.memberImpressions ?? {} });
+      }
+      if (merged) log(`世界记忆：已迁移 ${merged} 条旧版群友印象到 people.json`);
+    } catch (error) {
+      log(`世界记忆迁移失败（忽略，不阻塞启动）：${error?.message ?? error}`);
+    }
+  }
+
   // ── 群聊黑话/网络用语学习（slang） ──────────────────────────────────────
   let slangEntries = [];
   // 读失败时（被占用 / 权限 / JSON 损坏）必须**暂停写入**：否则内存里的空数组
@@ -1670,6 +1732,224 @@ async function main() {
       try { stat = fs.statSync(f); } catch {}
       return { name: path.relative(dir, f).split(path.sep).join('/'), bytes: stat?.size ?? 0, mtimeMs: stat?.mtimeMs ?? 0 };
     });
+  }
+
+  // ── 本地 TTS（Breeze TTS 2） → 语音库 ─────────────────────────────────────
+  //
+  // 为什么合成结果必须落进语音库：AI 通道的 qq_send_voice 只允许发语音库内的文件
+  // （防 prompt injection 拿任意本机文件当语音外发）。现合成的 wav 写进
+  // `voice.dir/tts/`，发送时走同一个 resolveVoicePathForV2 —— 那条边界不用为 TTS 开洞。
+  let ttsCfgCache = { mtimeMs: 0, value: null };
+
+  /**
+   * socialV2.tts 的现行配置。
+   *
+   * 每次调用都按 mtime 重读 config.json：调音台（voice-studio.mjs）「保存为默认音色」
+   * 是直接写盘的，而桥接的 cfg 只在启动时读一次；不重读的话必须重启桥接才生效。
+   */
+  function ttsCfg() {
+    let raw;
+    try {
+      const file = path.join(ROOT, 'config.json');
+      const st = fs.statSync(file);
+      if (!ttsCfgCache.value || ttsCfgCache.mtimeMs !== st.mtimeMs) {
+        const disk = JSON.parse(fs.readFileSync(file, 'utf8'));
+        ttsCfgCache = { mtimeMs: st.mtimeMs, value: disk?.socialV2?.tts ?? {} };
+      }
+      raw = ttsCfgCache.value ?? {};
+    } catch {
+      raw = cfg.socialV2?.tts ?? {};
+    }
+    const refRaw = String(raw.refAudio ?? '').trim();
+    return {
+      // 显式 opt-in：没有 tts 段（老配置）时默认不注册合成工具，免得白白多出一个会报错的工具
+      enabled: raw.enabled === true,
+      baseUrl: String(raw.baseUrl || 'http://127.0.0.1:7860').replace(/\/+$/, ''),
+      instruction: String(raw.instruction ?? ''),
+      refAudio: refRaw ? path.resolve(ROOT, refRaw) : '',
+      refText: String(raw.refText ?? ''),
+      cfgScale: Number(raw.cfgScale) > 0 ? Number(raw.cfgScale) : 1,
+      seed: Number.isFinite(Number(raw.seed)) ? Number(raw.seed) : 42,
+      maxChars: Number(raw.maxChars) > 0 ? Math.min(Number(raw.maxChars), 400) : 160,
+      timeoutMs: Number(raw.timeoutMs) > 0 ? Number(raw.timeoutMs) : 180000,
+      subdir: String(raw.subdir || 'tts').replace(/^[\\/]+|[\\/]+$/g, ''),
+      keepFiles: Number(raw.keepFiles) >= 0 ? Number(raw.keepFiles) : 40,
+      allowAgentInstruction: raw.allowAgentInstruction === true,
+      // 关键开关：带参考音频时是否仍允许发 instruction（默认 false = 严格克隆）
+      useInstructionWithRef: raw.useInstructionWithRef === true
+    };
+  }
+
+  /** 合成产物只留最近 N 个（按 mtime），否则语音库会被每次 qq_say 撑爆。 */
+  function pruneTtsFiles(dir, keep) {
+    try {
+      const files = fs.readdirSync(dir)
+        .filter((n) => n.toLowerCase().endsWith('.wav'))
+        .map((n) => {
+          const p = path.join(dir, n);
+          let mtimeMs = 0;
+          try { mtimeMs = fs.statSync(p).mtimeMs; } catch {}
+          return { p, mtimeMs };
+        })
+        .sort((a, b) => b.mtimeMs - a.mtimeMs);
+      for (const f of files.slice(Math.max(0, keep))) {
+        try { fs.unlinkSync(f.p); } catch {}
+      }
+    } catch { /* 目录还不存在/没权限：不影响本次合成 */ }
+  }
+
+  // 上游 Breeze 是单并发（并发会 HTTP 409），所以合成必须串行。
+  //
+  // 这台机器（8GB 显存 + offload 到 CPU）实测 RTF 11~14：合成 1 秒音频要 11~14 秒。
+  // 于是 180s 的握手超时只够合成约 40 字，更长的句子必然超时；而**客户端 abort 并不会让上游停下**，
+  // 它还在算、还占着唯一的并发位，所以紧接着的重试会撞 409 —— 这就是 23:30 那三次失败的完整链条：
+  //   文本太长 → 180s 超时 → 上游继续算 → 重试 409 → 再超时。
+  //
+  // 现在的策略：
+  //   ① **提前拒绝**：按实测 RTF 估算，超预算就不发请求（秒级失败，AI 能立刻改短或改打字）；
+  //   ② **不中途 abort**：给足超时，让请求正常跑完，并发位才干净地释放；
+  //   ③ **409 退避重试**：等那个占位的请求自己算完；
+  //   ④ **失败后冷却**：防止 AI 连续重试把一整个回合烧在 3 分钟的等待上。
+  let ttsQueue = Promise.resolve();
+  const ttsState = {
+    inflight: 0,          // 正在跑 + 排队的合成数（上游单并发，>0 时不再接受新请求）
+    lastFailAt: 0,
+    failStreak: 0,
+    // RTF = 合成耗时 ÷ 音频时长；初始 13 是本机实测中位数，之后按每次成功的结果做 EWMA
+    rtfEwma: 13,
+    lastOkAt: 0,
+    lastError: ''
+  };
+  const TTS_COOLDOWN_MS = 45_000;
+
+  /** 按实测 RTF 估"这句话要算多久"。用 21 字≈7.6s、10 字≈2.7s 拟合：1.0 + 0.35×字数 秒音频。 */
+  function ttsEstimateMs(chars) {
+    const audioSec = 1.0 + 0.35 * Math.max(1, Number(chars) || 1);
+    return audioSec * ttsState.rtfEwma * 1000;
+  }
+
+  /** 在当前超时预算下最多能说几个字（给错误信息用）。 */
+  function ttsMaxCharsForBudget(t) {
+    const audioSec = (t.timeoutMs * 0.9) / 1000 / ttsState.rtfEwma;
+    return Math.max(6, Math.floor((audioSec - 1.0) / 0.35));
+  }
+
+  /**
+   * 合成一句话到语音库，返回 { path, relPath, seconds, bytes, elapsedMs, rtf, mode, instructionSent }。
+   *
+   * mode 三态（与上游 templates.select_template_name() 对齐）：
+   *   clone  = 有 ref_audio 且**不发** instruction → ref_clone，音色固定（默认路径）
+   *   edit   = 有 ref_audio 但发了 instruction   → ref_edit，音色会漂（需要显式开 useInstructionWithRef）
+   *   design = 没有参考音频，纯 instruction 引导
+   */
+  async function synthesizeVoiceV2(text, { instruction = '', cfgScale, seed } = {}) {
+    const t = ttsCfg();
+    if (!t.enabled) throw new Error('语音合成未启用（socialV2.tts.enabled=false）');
+    const clean = String(text ?? '').trim();
+    if (!clean) throw new Error('text 不能为空');
+    const budgetChars = Math.min(t.maxChars, ttsMaxCharsForBudget(t));
+    if (clean.length > budgetChars) {
+      throw new Error(`语音文本太长（${clean.length} 字）：这台机器 8GB 显存只能跑 offload，一句话最多 ${budgetChars} 字，太多会等好几分钟然后超时。请压短，或者直接用文字说`);
+    }
+    // 估算闸门：宁可立刻失败，也不要让调用方干等几分钟再超时（超时还会把上游并发位卡住）
+    const estMs = ttsEstimateMs(clean.length);
+    if (estMs > t.timeoutMs * 0.9) {
+      throw new Error(`这句话估计要合成 ${Math.round(estMs / 1000)} 秒，超过 ${Math.round(t.timeoutMs / 1000)} 秒预算，没有发出去。请再短一点（${budgetChars} 字以内）`);
+    }
+    if (ttsState.inflight >= 1) {
+      throw new Error('上一条语音还在合成（这台机器一次只能合成一条）——别排队，过一会儿再试，或者先用文字说');
+    }
+    const sinceFail = Date.now() - ttsState.lastFailAt;
+    if (ttsState.lastFailAt && sinceFail < TTS_COOLDOWN_MS) {
+      throw new Error(`语音刚刚失败过，冷却中还剩 ${Math.ceil((TTS_COOLDOWN_MS - sinceFail) / 1000)} 秒——这段时间请用文字，别反复重试`);
+    }
+    const vc = voiceCfg();
+    const outDir = path.join(vc.dir, t.subdir);
+    const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+    const outPath = path.join(outDir, `tts-${stamp}-${crypto.randomBytes(3).toString('hex')}.wav`);
+    const hasRef = Boolean(t.refAudio && t.refText && fs.existsSync(t.refAudio));
+    const strictClone = hasRef && !t.useInstructionWithRef;
+    const wanted = String(instruction || '').trim();
+    // 默认策略：strict clone 下绝不带 instruction；允许 AI 传指令时用 AI 的，否则用配置里的固定音色描述。
+    const effectiveInstruction = strictClone
+      ? ''
+      : (t.allowAgentInstruction && wanted ? wanted : t.instruction);
+    const effCfg = Number(cfgScale) > 0 ? Number(cfgScale) : t.cfgScale;
+    const effSeed = Number.isFinite(Number(seed)) ? Number(seed) : t.seed;
+
+    ttsState.inflight += 1;
+    const job = ttsQueue.then(async () => {
+      const startedAt = Date.now();
+      try {
+        let lastError = null;
+        for (let attempt = 1; attempt <= 4; attempt += 1) {
+          try {
+            const res = await breezeTtsToWav({
+              baseUrl: t.baseUrl,
+              text: clean,
+              instruction: effectiveInstruction,
+              refAudio: hasRef ? t.refAudio : '',
+              refText: hasRef ? t.refText : '',
+              cfgScale: effCfg,
+              seed: effSeed,
+              timeoutMs: t.timeoutMs,
+              outPath
+            });
+            const rtf = res.seconds > 0 ? (res.elapsedMs / 1000) / res.seconds : null;
+            if (rtf) ttsState.rtfEwma = ttsState.rtfEwma * 0.6 + rtf * 0.4;
+            ttsState.lastOkAt = Date.now();
+            ttsState.failStreak = 0;
+            ttsState.lastFailAt = 0;
+            ttsState.lastError = '';
+            return res;
+          } catch (error) {
+            lastError = error;
+            const msg = String(error?.message ?? error);
+            // 409 = 上游并发位还被占着（很可能是上一次被 abort、但它自己还在算的请求）
+            if (!/HTTP 409/.test(msg) || attempt >= 4) break;
+            const waitMs = 5000 * attempt;
+            log(`[tts] 引擎忙（409），${waitMs / 1000} 秒后重试（第 ${attempt}/3 次）`);
+            await new Promise((resolve) => setTimeout(resolve, waitMs));
+          }
+        }
+        throw lastError ?? new Error('合成失败');
+      } catch (error) {
+        ttsState.lastFailAt = Date.now();
+        ttsState.failStreak += 1;
+        ttsState.lastError = String(error?.message ?? error).slice(0, 200);
+        // 失败也要学：等 T 秒还没出来，说明 RTF 至少是 T ÷ 估计音频时长。
+        // 不这样做的话 rtfEwma 会永远停在乐观值，下一次还会把同样长的文本放进去再超时一遍。
+        const elapsedSec = (Date.now() - startedAt) / 1000;
+        const estAudioSec = 1.0 + 0.35 * clean.length;
+        if (elapsedSec > 5) {
+          const impliedRtf = elapsedSec / estAudioSec;
+          if (impliedRtf > ttsState.rtfEwma) {
+            ttsState.rtfEwma = ttsState.rtfEwma * 0.5 + impliedRtf * 0.5;
+            log(`[tts] 实测太慢（${elapsedSec.toFixed(0)}s 没出结果，RTF≥${impliedRtf.toFixed(1)}），估算修正为 RTF=${ttsState.rtfEwma.toFixed(1)}；此后单条最长约 ${Math.min(t.maxChars, ttsMaxCharsForBudget(t))} 字`);
+          }
+        }
+        log(`[tts] 合成失败（连续第 ${ttsState.failStreak} 次）：${ttsState.lastError}`);
+        throw error;
+      } finally {
+        ttsState.inflight -= 1;
+      }
+    });
+    ttsQueue = job.catch(() => {});
+    const res = await job;
+    const mode = strictClone ? 'clone' : (hasRef ? 'edit' : 'design');
+    log(`[tts] 模式=${mode} instruction=${effectiveInstruction ? '有' : '(空)'} ref=${hasRef ? path.basename(t.refAudio) : '-'} cfg=${effCfg} seed=${effSeed} ${res.seconds.toFixed(1)}s/${res.elapsedMs}ms rtf=${((res.elapsedMs / 1000) / res.seconds).toFixed(1)}`);
+    if (mode === 'edit') log('[tts] ⚠️ 带参考音频又发了 instruction：上游会走 ref_edit，音色可能每次都不一样');
+    pruneTtsFiles(outDir, t.keepFiles);
+    return {
+      path: res.path,
+      relPath: path.relative(vc.dir, res.path).split(path.sep).join('/'),
+      seconds: res.seconds,
+      bytes: res.bytes,
+      elapsedMs: res.elapsedMs,
+      rtf: res.rtf,
+      mode,
+      instructionSent: effectiveInstruction
+    };
   }
 
   /**
@@ -2509,7 +2789,37 @@ async function main() {
   }
 
   // DSH 侧
-  const api = new NodeApiClient(cfg.dsh.baseUrl, undefined, {
+  //
+  // 桌面版每次启动都会换一个随机 loopback 端口（实测出现过 58557 / 61122 / 52180），
+  // 配置里的 `dsh.baseUrl` 一旦过期，控制台就一直显示「DSH 未连接」。
+  // 这里只枚举 **DeepSeek Harness.exe** 自己监听的端口，再用一次轻量 RPC 验证，
+  // 不会去扫别的本地服务，也不会把凭据发给非本机地址。
+  function dshOwnedListenPorts() {
+    if (process.platform !== 'win32') return [];
+    try {
+      const pids = new Set();
+      const table = execFileSync('tasklist', ['/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true });
+      for (const line of table.split(/\r?\n/)) {
+        if (!/deepseek harness\.exe/i.test(line)) continue;
+        const m = /^"[^"]*","(\d+)"/.exec(line.trim());
+        if (m) pids.add(m[1]);
+      }
+      if (!pids.size) return [];
+      const net = execFileSync('netstat', ['-ano'], { encoding: 'utf8', windowsHide: true });
+      const ports = new Set();
+      for (const line of net.split(/\r?\n/)) {
+        const m = /^\s*TCP\s+127\.0\.0\.1:(\d+)\s+\S+\s+\S+\s+(\d+)\s*$/.exec(line);
+        if (!m) continue;
+        if (!pids.has(m[2])) continue;
+        ports.add(Number(m[1]));
+      }
+      return [...ports];
+    } catch {
+      return [];
+    }
+  }
+
+  const dshAuthOptions = {
     token: cfg.dsh.authToken,
     // true=用户在 config.json 里显式填的；false=从日志猜的。猜来的不优先于离线铸造。
     tokenExplicit: cfg.dsh.authTokenExplicit === true,
@@ -2517,7 +2827,39 @@ async function main() {
     prefix: cfg.dsh.authPrefix,
     // 默认只允许把 launch token 交给回环地址；远程 DSH 需要显式 opt-in（见 dsh-client.ensureAuth）。
     allowRemote: cfg.dsh.allowRemote === true
-  });
+  };
+
+  async function probeDshBase(baseUrl, timeoutMs = 1500) {
+    try {
+      const probe = new NodeApiClient(baseUrl, timeoutMs, dshAuthOptions);
+      const value = unwrap(await probe.callUnary('agentPresets/list', {}), 'agentPresets/list');
+      return !!(value && Array.isArray(value.presets));
+    } catch {
+      return false;
+    }
+  }
+
+  let dshDiscoveryAt = 0;
+  async function resolveDshBaseUrl({ force = false } = {}) {
+    if (!force && await probeDshBase(cfg.dsh.baseUrl)) return cfg.dsh.baseUrl;
+    // 15 秒内不重复扫：checkDsh 每 5 秒一跳，别每跳都 spawn tasklist/netstat。
+    if (!force && Date.now() - dshDiscoveryAt < 15000) return '';
+    dshDiscoveryAt = Date.now();
+    for (const port of dshOwnedListenPorts()) {
+      const base = `http://127.0.0.1:${port}`;
+      if (base === cfg.dsh.baseUrl) continue;
+      if (await probeDshBase(base)) return base;
+    }
+    return '';
+  }
+
+  const configuredDshBase = cfg.dsh.baseUrl;
+  const discoveredDshBase = await resolveDshBaseUrl({ force: true });
+  if (discoveredDshBase && discoveredDshBase !== configuredDshBase) {
+    cfg.dsh.baseUrl = discoveredDshBase;
+    log(`DSH 端口已变化：${configuredDshBase} → ${discoveredDshBase}（自动发现）`);
+  }
+  const api = new NodeApiClient(cfg.dsh.baseUrl, undefined, dshAuthOptions);
   // DSH 的模型目录 RPC：0.1.5 是 `session/modelCatalog`。**不能走基类门面**
   // `api.sessions.modelCatalog` —— 桥接钉住的 `@deepseek-ai/dsh-host-apiproxy@0.1.1-rc.2`
   // 的 sessions 门面里根本没有这个方法（只有 `models` → 已下线的 `session/models`），
@@ -2562,6 +2904,32 @@ async function main() {
   // 会话在每次桥接重启后卡 15 分钟，所有 @ 只能排队 —— 那才是真正的延迟来源（#93）。
   const RESTORED_TURN_GRACE_MS = 45 * 1000;
   const turnLeaseNoted = new Set(); // 租约过期的日志去重（每个 session 只记一次）
+  // 网络类失败（TRANSPORT/TIMEOUT/…）不是模型或逻辑出错，而且 DSH 自己已经重试过 5 次。
+  // 这类失败以前会把英文技术原文直接甩进群里，一个回合一条，看起来就像「机器人一直报错」
+  // （2026-10-30：本机 DNS 每次冷解析要 11.1s，超过 HTTP 建连超时 10s，于是成片 TRANSPORT）。
+  // 现在改成小鲸鱼口吻的中文短句 + 每会话 30 分钟冷却，完整错误只进 bridge.log。
+  const TRANSIENT_ERROR_CODES = new Set(['TRANSPORT', 'TIMEOUT', 'SERVER', 'RATE_LIMIT', 'EMPTY_RESPONSE']);
+  const TRANSIENT_NOTICE_COOLDOWN_MS = 30 * 60 * 1000;
+  const transientNoticeAt = new Map(); // key -> 上次网络失败提示的时间戳
+  // 短句轮换：不像客服模板，也别每回都同一句。口吻按角色卡（小鲸鱼：短、嘴硬、偶尔干饭梗），
+  // 不解释 DNS/模型/重试次数这类内部细节。
+  const TRANSIENT_NOTICES = [
+    '网抽了一下，没连上，等下再叫我',
+    '不是不理你，是网断了',
+    '卡了，等我缓过来',
+    '刚掉线了，你再说一遍嘛',
+    '草，网又抽风',
+    '……信号不好，等我一下',
+    '白饭还没吃上，网先没了'
+  ];
+  let lastTransientNoticeIdx = -1;
+  function pickTransientNotice() {
+    if (TRANSIENT_NOTICES.length === 1) return TRANSIENT_NOTICES[0];
+    let idx = lastTransientNoticeIdx;
+    while (idx === lastTransientNoticeIdx) idx = Math.floor(Math.random() * TRANSIENT_NOTICES.length);
+    lastTransientNoticeIdx = idx;
+    return TRANSIENT_NOTICES[idx];
+  }
   const pendingWakeLeaseTimers = new Map(); // key -> timeout：防止 accepted 但无 turn/end 的唤醒把 key 永久标记为 busy
   const wakeConfigUpdatedKeys = new Set();
   const markReadCalledKeys = new Set();
@@ -3414,9 +3782,23 @@ async function main() {
       }
       // 启动早期到达的快照在模式未知时只暂存；模式/会话策略确定后再决定是否补发。
       void replayDeferredDeliveries();
-    } else if (dshReady) {
-      dshReady = false;
-      log('⚠️ DSH 不可用（重启中？），QQ 消息将入队等待');
+    } else {
+      if (dshReady) {
+        dshReady = false;
+        log('⚠️ DSH 不可用（重启中？），QQ 消息将入队等待');
+      }
+      // DSH 桌面版重启会换端口：这里顺手重新发现一次（15 秒节流在 resolveDshBaseUrl 里）。
+      try {
+        const found = await resolveDshBaseUrl();
+        if (found && found !== cfg.dsh.baseUrl) {
+          log(`DSH 端口变化，自动切换：${cfg.dsh.baseUrl} → ${found}`);
+          cfg.dsh.baseUrl = found;
+          api.baseUrl = found;
+          api.invalidateAuth();
+        }
+      } catch (error) {
+        log(`DSH 端口发现失败（忽略，下轮再试）：${error?.message ?? error}`);
+      }
     }
   };
   function startDshWatch() {
@@ -5209,7 +5591,7 @@ async function main() {
             getActiveMembers: 'qq_get_active_members',
             setWakeConfig: 'qq_set_wake_config',
             markRead: 'qq_mark_read',
-            memory: 'qq_memory_append / qq_memory_query / qq_memory_remove / qq_memory_clear',
+            memory: 'qq_memory_append（scope=session/people/room）/ qq_memory_query / qq_memory_search（仅本会话日志）/ qq_memory_remove / qq_memory_clear',
             slangQuery: 'qq_slang_query',
             slangSubmit: 'qq_slang_submit',
             getImages: 'qq_get_message_images',
@@ -5222,7 +5604,7 @@ async function main() {
             stickerNote: 'qq_sticker_note',
             collectSticker: 'qq_collect_sticker',
             getSelfImage: 'qq_get_self_image',
-            sendVoice: 'qq_send_voice / qq_list_voices'
+            sendVoice: ttsCfg().enabled ? 'qq_say / qq_send_voice / qq_list_voices' : 'qq_send_voice / qq_list_voices'
           };
           const tools = cfg.socialV2?.tools ?? {};
           const stickerToolFlags = new Set(['listStickers', 'getStickerImage', 'sendSticker', 'setStickerRemark', 'stickerNote', 'collectSticker']);
@@ -6218,6 +6600,80 @@ async function main() {
           return;
         }
 
+        // ── 语音合成 + 发送（AI 通道：qq_say） ────────────────────────────────
+        //
+        // 与 /api/socialV2/send-voice 的唯一区别：音频不是从语音库里挑，而是现合成。
+        // 出站闸门完全复用那一套（模式 / agent token / 工具开关 / 白名单 / 静默 / 限流），
+        // 合成结果落在语音库的 tts 子目录里，再用同样的 sendVoiceForV2 发出去。
+        if (req.method === 'POST' && url.pathname === '/api/socialV2/say') {
+          const body = await readBody();
+          const token = String(body.token ?? req.headers['x-agent-token'] ?? '').trim();
+          const key = String(body.key ?? '').trim();
+          const tts = ttsCfg();
+          const voice = voiceCfg();
+          if (!voice.enabled) { sendJson({ ok: false, error: '语音功能已关闭' }, 403); return; }
+          if (!tts.enabled) { sendJson({ ok: false, error: '语音合成未启用（socialV2.tts.enabled=false）' }, 403); return; }
+          if (!key) { sendJson({ ok: false, error: 'key 不能为空（格式 group:群号 或 private:QQ号）' }, 400); return; }
+          if (currentMode !== 'reserved2') { sendJson({ ok: false, error: '该接口仅 reserved2 模式可用' }, 403); return; }
+          if (!token) { sendJson({ ok: false, error: 'reserved2 模式发送必须携带 agent token' }, 403); return; }
+          if (!agentTokenOk(key, token)) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          if (!v2ToolEnabled('sendVoice')) { sendJson({ ok: false, error: '工具未启用：qq_say' }, 403); return; }
+          if (!v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
+          if (shouldBlockSilentReply(key)) { sendJson({ ok: false, error: '静默模式已开启，当前不允许发送' }, 403); return; }
+          const keyMatch = /^(group|private):(\d+)$/.exec(key);
+          if (!keyMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
+          const kind = keyMatch[1];
+          const id = Number(keyMatch[2]);
+          if (!Number.isFinite(id) || id <= 0 || !modeAllowed(key, kind, id, cfg, currentMode)) {
+            sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403);
+            return;
+          }
+          const said = String(body.text ?? '').trim();
+          try {
+            const synth = await synthesizeVoiceV2(said, {
+              instruction: body.instruction,
+              cfgScale: body.cfgScale,
+              seed: body.seed
+            });
+            const synthesis = {
+              seconds: Number(synth.seconds.toFixed(2)),
+              elapsedMs: synth.elapsedMs,
+              rtf: synth.rtf != null ? Number(Number(synth.rtf).toFixed(2)) : null,
+              mode: synth.mode
+            };
+            if (body.dryRun === true) {
+              // 只合成不发送：用来单独验证引擎/音色，不惊动群里的人
+              sendJson({
+                ok: true,
+                dryRun: true,
+                key,
+                file: path.basename(synth.path),
+                detail: `${synth.seconds.toFixed(2)}s · ${formatBytes(synth.bytes)}`,
+                text: said,
+                synthesis
+              });
+              return;
+            }
+            // 语音条自带"说了什么"，写进二代会话的 recentMessages，AI 之后才知道自己刚说过这句话。
+            const sent = await sendVoiceForV2(key, synth.relPath, { label: said.slice(0, 100) });
+            sendJson({
+              ok: true,
+              key,
+              messageId: sent.messageId,
+              // verified=true：已用 get_msg 回读到 record 段（真的发出去的唯一硬证据）
+              verified: sent.verification?.confirmed === true,
+              file: path.basename(synth.path),
+              detail: sent.detail,
+              text: said,
+              synthesis,
+              warnings: sent.warnings
+            });
+          } catch (error) {
+            sendJson({ ok: false, error: error?.message ?? String(error) }, 500);
+          }
+          return;
+        }
+
         // ── 语音发送（AI 通道：reserved2 + agent token，只能发自己那个会话） ────
         if (req.method === 'POST' && url.pathname === '/api/socialV2/send-voice') {
           const body = await readBody();
@@ -6442,6 +6898,28 @@ async function main() {
         //   - 带 agent token（AI 的 qq_list_voices）→ 必须带 key，校验会话白名单/工具开关；
         //   - 不带 agent token（控制台调试面板 / CLI）→ 只需控制台令牌，不需要 key。
         // 返回一律只有文件名/大小/时长，**不含绝对路径**（AI 侧防路径外泄，控制台侧由试发接口解析）。
+        // 语音合成运行状态（诊断用：卡没卡、慢不慢、上次为什么失败）
+        if (req.method === 'GET' && url.pathname === '/api/socialV2/tts-status') {
+          const t = ttsCfg();
+          sendJson({
+            ok: true,
+            enabled: t.enabled,
+            baseUrl: t.baseUrl,
+            maxChars: t.maxChars,
+            effectiveMaxChars: Math.min(t.maxChars, ttsMaxCharsForBudget(t)),
+            timeoutMs: t.timeoutMs,
+            rtfEwma: Number(ttsState.rtfEwma.toFixed(2)),
+            estMsPerChar: Math.round(ttsEstimateMs(1)), // 单字估算（含 ~1s 固定开销）
+            inflight: ttsState.inflight,
+            failStreak: ttsState.failStreak,
+            lastOkAt: ttsState.lastOkAt || null,
+            lastFailAt: ttsState.lastFailAt || null,
+            lastError: ttsState.lastError || null,
+            cooldownRemainingMs: ttsState.lastFailAt ? Math.max(0, TTS_COOLDOWN_MS - (Date.now() - ttsState.lastFailAt)) : 0
+          });
+          return;
+        }
+
         if (req.method === 'GET' && (url.pathname === '/api/socialV2/voices' || url.pathname === '/api/voice/list')) {
           const key = String(url.searchParams.get('key') ?? '').trim();
           const voice = voiceCfg();
@@ -7235,13 +7713,42 @@ async function main() {
           const key = String(body.key ?? '').trim();
           const category = String(body.category ?? '').trim();
           const content = String(body.content ?? '').trim();
+          const scope = String(body.scope ?? 'session').trim();
           const extra = body.extra && typeof body.extra === 'object' ? body.extra : {};
-          if (!key || !category || !content) { sendJson({ ok: false, error: 'key/category/content 不能为空' }, 400); return; }
-          if (!['activeTopic', 'pendingThought', 'memberImpression'].includes(category)) { sendJson({ ok: false, error: 'category 必须是 activeTopic / pendingThought / memberImpression' }, 400); return; }
-          if (category === 'memberImpression' && !String(extra.target || '').trim()) { sendJson({ ok: false, error: 'memberImpression 需要 extra.target 指定群友名字' }, 400); return; }
+          if (!key || !content) { sendJson({ ok: false, error: 'key/content 不能为空' }, 400); return; }
           if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
           if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
           if (req.headers['x-agent-token'] && !v2ToolEnabled('memory')) { sendJson({ ok: false, error: '工具未启用：qq_memory_append' }, 403); return; }
+          // 世界记忆（跨会话）：people / room 两种作用域；默认 session 保持旧行为。
+          if (scope === 'people' || scope === 'room') {
+            if (memoryEnabled) {
+              if (scope === 'people') {
+                const qq = String(extra.qq ?? '').trim();
+                const targetName = String(extra.target ?? '').trim();
+                let person = qq ? memoryWorld.getPerson(qq) : null;
+                if (!person && targetName) {
+                  for (const p of Object.values(memoryWorld.getPeople())) {
+                    if (p?.names && Object.prototype.hasOwnProperty.call(p.names, targetName)) { person = p; break; }
+                  }
+                }
+                if (!person) {
+                  sendJson({ ok: false, error: 'people 作用域需要 extra.qq（QQ 号，优先）或 extra.target（已登记过的昵称）' }, 400);
+                  return;
+                }
+                const r = memoryWorld.addFact({ qq: person.qq, name: targetName || '', text: content, kind: String(extra.kind || 'fact'), origin: key });
+                sendJson({ ok: true, key, scope, target: person.qq, duplicate: !!r.duplicate });
+                return;
+              }
+              const r = memoryWorld.addRoomNote({ key, text: content });
+              sendJson({ ok: true, key, scope, duplicate: !!r.duplicate });
+              return;
+            }
+            sendJson({ ok: false, error: '世界记忆未启用（socialV2.memory.enabled=false）' }, 400);
+            return;
+          }
+          if (!category) { sendJson({ ok: false, error: 'category 不能为空' }, 400); return; }
+          if (!['activeTopic', 'pendingThought', 'memberImpression'].includes(category)) { sendJson({ ok: false, error: 'category 必须是 activeTopic / pendingThought / memberImpression' }, 400); return; }
+          if (category === 'memberImpression' && !String(extra.target || '').trim()) { sendJson({ ok: false, error: 'memberImpression 需要 extra.target 指定群友名字' }, 400); return; }
           const st = getSocialV2State(key);
           appendMemoryV2(st, category, content, extra);
           sendJson({ ok: true, key, category, content, memory: formatMemoryV2(st) });
@@ -7338,6 +7845,32 @@ async function main() {
             raw.pendingThoughts = [];
           }
           sendJson({ ok: true, key, category, formatted: formatMemoryV2({ ...st, ...raw }), raw });
+          return;
+        }
+        // 跨会话消息日志的「本房间」检索：只允许搜当前 key，不跨房间（隐私）。
+        if (req.method === 'GET' && url.pathname === '/api/socialV2/memory-search') {
+          const key = String(url.searchParams.get('key') ?? '').trim();
+          const query = String(url.searchParams.get('query') ?? '').trim();
+          const days = Math.max(1, Math.min(30, Number(url.searchParams.get('days')) || 7));
+          const limit = Math.max(1, Math.min(20, Number(url.searchParams.get('limit')) || 8));
+          if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
+          if (req.headers['x-agent-token'] && !agentTokenOk(key, req.headers['x-agent-token'])) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
+          if (req.headers['x-agent-token'] && !v2ToolEnabled('memory')) { sendJson({ ok: false, error: '工具未启用：qq_memory_search' }, 403); return; }
+          if (!memoryEnabled) { sendJson({ ok: false, error: '世界记忆未启用' }, 400); return; }
+          const needle = query.toLowerCase();
+          const now = Date.now();
+          const hits = [];
+          for (let i = 0; i < days && hits.length < limit * 5; i += 1) {
+            const day = memoryDayKey(now - i * 86400000);
+            for (const it of memoryWorld.readMessages(day)) {
+              if (it.k !== key) continue;
+              if (needle && !String(it.x || '').toLowerCase().includes(needle)) continue;
+              hits.push({ time: it.t, sender: it.me ? '我' : (it.s || '某人'), self: !!it.me, text: String(it.x || '').slice(0, 200) });
+            }
+          }
+          hits.sort((a, b) => b.time - a.time);
+          sendJson({ ok: true, key, query, days, count: Math.min(hits.length, limit), items: hits.slice(0, limit) });
           return;
         }
         if (req.method === 'POST' && url.pathname === '/api/socialV2/memory-remove') {
@@ -8712,15 +9245,28 @@ async function main() {
   }
 
   async function reportTurnFailure(key, kind, error, notify = true) {
+    const failureCode = typeof error?.code === 'string' ? error.code : '';
     if (kind === 'error') {
       const detail = redactSensitiveText(redactKnownTokensOnly(String(error?.message ?? error ?? '未知错误'))).slice(0, 500);
-      log(`⚠️ agent 处理出错 (${key})：${detail}`);
-      appendActivity(`${key} agent 处理出错：${detail.slice(0, 80)}`);
+      // code 一并记进日志：TRANSPORT/TIMEOUT 这类是网络层失败，和「模型答错」不是一回事。
+      log(`⚠️ agent 处理出错${failureCode ? ` (${failureCode})` : ''} (${key})：${detail}`);
+      appendActivity(`${key} agent 处理出错${failureCode ? ` (${failureCode})` : ''}：${detail.slice(0, 80)}`);
     } else {
       log(`⏹️ 回合被中止 (${key})`);
     }
     // 二代内部回合不自动转发；其他模式只发固定提示，原始 provider 错误留在管理端。
     if (!notify || currentMode === 'reserved2' || shouldBlockSilentReply(key)) return false;
+    // 网络抖动（DNS 慢 / 建连超时 / 上游 5xx）：DSH 已经自动重试过，这里只给一句小鲸鱼口吻的短句，
+    // 并按会话冷却 30 分钟，避免每个失败回合都往群里刷一条。
+    if (TRANSIENT_ERROR_CODES.has(failureCode)) {
+      const now = Date.now();
+      if (now - (transientNoticeAt.get(key) ?? 0) < TRANSIENT_NOTICE_COOLDOWN_MS) return false;
+      transientNoticeAt.set(key, now);
+      const notice = pickTransientNotice();
+      log(`网络抖动提示 (${key})：${notice}`);
+      await sendToQQ(key, notice);
+      return true;
+    }
     const now = Date.now();
     if (now - (turnNoticeTimes.get(key) ?? 0) < 5 * 60 * 1000) return false;
     turnNoticeTimes.set(key, now);
@@ -9595,6 +10141,50 @@ async function main() {
     return lines.join('\n');
   }
 
+  // 本会话里「最近说过话的人」：用于只注入和他们相关的人物事实（而不是全量人物库）。
+  function collectSpeakersV2(st) {
+    const out = [];
+    const seen = new Set();
+    const list = [
+      ...(Array.isArray(st?.unread) ? st.unread : []),
+      ...(Array.isArray(st?.recentMessages) ? st.recentMessages : [])
+    ];
+    for (let i = list.length - 1; i >= 0 && out.length < 8; i -= 1) {
+      const m = list[i];
+      if (!m || m.isSelf || !m.userId) continue;
+      const qq = String(m.userId);
+      if (seen.has(qq)) continue;
+      seen.add(qq);
+      out.push({ qq, name: String(m.sender || '') });
+    }
+    return out;
+  }
+
+  // 把「世界记忆」（soul/people/rooms/日记）+ 本会话记忆拼成一段。
+  // 隐私过滤在 memory-world.compose() 里：私聊来源的事实/日记绝不会出现在群聊注入里。
+  function composeWorldMemoryText(key, st, sessionText) {
+    const session = String(sessionText || '').trim();
+    if (!memoryEnabled) return session;
+    const memCfg = cfg.socialV2?.memory || {};
+    try {
+      const block = memoryWorld.compose({
+        key,
+        speakers: collectSpeakersV2(st),
+        sessionText: session,
+        ownerQQ: cfg.ownerQQ,
+        diaryInject: String(memCfg.diary?.inject || 'owner'),
+        diaryDays: Number(memCfg.diary?.injectDays) || 3,
+        budget: memCfg.budget || {}
+      });
+      if (!block) return session;
+      const note = '【记忆用法】本会话的话题/想法用 qq_memory_append（默认）；某人的长期事实用 scope=people（尽量带 extra.qq）；本群背景用 scope=room；翻很久以前的消息用 qq_memory_search。私聊内容不要在群里提，提到别的群的事要说明来源。';
+      return block === session ? `${session}\n\n${note}` : `${block}\n\n${note}`;
+    } catch (error) {
+      log(`世界记忆组装失败 ${key}：${error?.message ?? error}`);
+      return session;
+    }
+  }
+
   function appendMemoryV2(st, category, content, extra = {}) {
     if (!st) return;
     const text = redactKnownTokensOnly(String(content ?? '')).trim();
@@ -9871,6 +10461,27 @@ async function main() {
     return p;
   }
 
+  // ── LLM 域名 DNS 预热 ───────────────────────────────────────────────────────
+  // 2026-10-30 排查：这台机器的 Radmin VPN 虚拟网卡排在接口第一位（跃点 1），它配的
+  // DNS 223.5.5.5 / 114.114.114.114 在当前网络下不通 —— 每次「冷」解析
+  // api.deepseek.com 都要先等 ~11s 超时，才回退到正常网卡（0.2s）拿到地址。
+  // 而 DSH 的 HTTP 建连超时正好是 10s，于是每次新建连接都卡死在 DNS 上：
+  // TRANSPORT → DSH 自己重试 5 次（每次 ~10.1s）→ 整轮失败，QQ 上就是
+  // 「⚠️ agent 处理出错：DeepSeek Messages transport failed」。
+  // 这里在投递 prompt 时顺手在后台解析一次：第一次 attempt 仍可能超时，但这次
+  // 没有被 abort 的解析会在 ~11s 后完成并把系统 DNS 缓存热起来，DSH 的第 2~5 次
+  // 重试多半就能秒过 —— 把「整轮失败」降级成「慢一两秒」。这不需要改系统网络设置；
+  // 想彻底消除根因，还是要把那块网卡的 DNS 清掉（或把它的跃点调高）。
+  const DNS_WARM_HOST = 'api.deepseek.com';
+  const DNS_WARM_MIN_INTERVAL_MS = 60_000;
+  let dnsWarmAt = 0;
+  function warmLlmDns() {
+    if (Date.now() - dnsWarmAt < DNS_WARM_MIN_INTERVAL_MS) return;
+    dnsWarmAt = Date.now();
+    // 故意不 await：预热是旁路，不能拖慢或拖挂 prompt 投递。
+    dnsLookup(DNS_WARM_HOST).catch(() => {});
+  }
+
   // 实际的 DSH prompt 投递（不再直接对外暴露，统一走 promptQueues 串行队列）。
   async function deliverPromptNow(key, promptText, opts = {}) {
     if (!isSessionAllowedInCurrentMode(key)) throw new Error(`当前模式不允许会话 ${key}`);
@@ -9883,6 +10494,8 @@ async function main() {
       return { ok: true, skipped: true };
     };
     if (wakeBlocked()) return skipWake();
+    // 旁路预热 LLM 域名的 DNS：见 warmLlmDns 的注释（本机 DNS 冷解析 11s > DSH 建连超时 10s）。
+    warmLlmDns();
     if (!dshReady) {
       const items = queued.get(key) ?? [];
       if (items.length >= QUEUE_MAX) {
@@ -10187,6 +10800,9 @@ async function main() {
   if (cfg.social?.enabled !== false) {
     startSocialLoop();
   }
+
+  // 每日日记的定时器（启动后 15 秒先跑一次，用于补写今天/昨天漏掉的）。
+  startDiaryScheduler();
 
   // 当前角色扮演提示：读 state/current-role.json + roles/<角色>.md，
   // 由桥接注入到 QQ 群消息（群友无法通过对话修改，只能由管理端写该文件）。
@@ -10740,6 +11356,17 @@ async function main() {
       const participantHit = Array.isArray(t.participants) && t.participants.some((p) => p && lowerPlain.includes(String(p)));
       if (topicHit || participantHit) t.lastMentionAt = Date.now();
     }
+    // 世界记忆：跨会话消息日志 + 人物/房间活跃度。失败不能影响主链路。
+    if (memoryEnabled) {
+      try {
+        const at = msg.time;
+        memoryWorld.recordMessage({ key, sender, qq: userId, text: plainContent ?? textContent, isSelf: false, ts: at });
+        if (userId) memoryWorld.touchPerson({ qq: userId, name: sender, key, ts: at });
+        memoryWorld.touchRoom({ key, ts: at });
+      } catch (error) {
+        log(`世界记忆写入失败 ${key}：${error?.message ?? error}`);
+      }
+    }
     saveSocialV2State();
   }
 
@@ -10805,11 +11432,153 @@ async function main() {
       });
     }
     if (st.recentMessages.length > recentLimit) st.recentMessages.splice(0, st.recentMessages.length - recentLimit);
+    // 世界记忆：AI 自己说过的话也进跨会话日志（日记/检索时需要「我说了什么」）。
+    if (memoryEnabled) {
+      try {
+        for (let i = 0; i < list.length; i++) {
+          memoryWorld.recordMessage({ key, sender: '我', text: list[i], isSelf: true, ts: now + i * 1000 });
+        }
+        memoryWorld.touchRoom({ key, ts: now });
+      } catch (error) {
+        log(`世界记忆写入失败（发言）${key}：${error?.message ?? error}`);
+      }
+    }
     // AI 实际发言/参与了，说明这轮选择“继续回复”，沉睡前观察状态作废；下次想睡需重新走 5 分钟等待。
     st.preSleepWaitSatisfiedAt = 0;
     st.preSleepWaitObservedAt = 0;
     st.preSleepWaitAccumMs = 0;
     saveSocialV2State();
+  }
+
+  // ── 每日日记（默认 23:30，约 100 字）──────────────────────────────────────
+  // 做法：把当天的跨会话消息日志按房间整理成一份摘要，交给一个独立的 DSH 会话
+  // （minimal preset，不挂 QQ 工具）写成第一人称日记，落到 state/memory/diary/。
+  // 日记默认只在与主人的私聊里注入，避免把私聊细节带进群（socialV2.memory.diary.inject）。
+  let diaryRunning = false;
+  let diaryRetryAfter = 0;
+
+  function diaryConfig() {
+    const d = cfg.socialV2?.memory?.diary || {};
+    const [hh, mm] = String(d.at || '23:30').split(':').map((x) => Number(x));
+    return {
+      enabled: memoryEnabled && d.enabled !== false,
+      hour: Number.isFinite(hh) ? Math.min(23, Math.max(0, Math.trunc(hh))) : 23,
+      minute: Number.isFinite(mm) ? Math.min(59, Math.max(0, Math.trunc(mm))) : 30,
+      maxChars: Math.max(60, Math.min(400, Number(d.maxChars) || 140)),
+      catchUpDays: Math.max(0, Math.min(7, Number(d.catchUpDays) ?? 2)),
+      preset: String(d.preset || 'minimal'),
+      timeoutMs: Math.max(30000, Number(d.timeoutMs) || 180000)
+    };
+  }
+
+  function diaryDueAt(day) {
+    const [y, m, d] = String(day).split('-').map(Number);
+    const conf = diaryConfig();
+    return new Date(y, (m || 1) - 1, d || 1, conf.hour, conf.minute, 0, 0).getTime();
+  }
+
+  // 把当天消息按房间压缩成一份「有信息量」的摘要（纯函数在 memory-world 里，便于单测）。
+  // 每个日记任务用一个临时会话：跑完就归档，不在 DSH 里留一长串历史。
+  async function runDiaryTurn(promptText) {
+    const conf = diaryConfig();
+    const preset = resolvePresetName(conf.preset, { strict: true });
+    if (!preset) throw new Error(`日记 preset "${conf.preset}" 不在 DSH 可用清单（${dshPresetIds.join(', ') || '未知'}）`);
+    // 复用同一个工作区，避免每天新建一个「日记」工作区把 DSH 侧弄乱。
+    const wsFile = path.join(STATE_DIR, 'memory', 'diary-workspace.json');
+    const createWorkspace = async () => {
+      const dir = path.join(STATE_DIR, 'memory', 'diary-agent');
+      fs.mkdirSync(dir, { recursive: true });
+      const wsValue = unwrap(await api.workspace.create({ path: dir }), 'diary workspace.create');
+      const workspaceId = wsValue.workspace.workspaceId;
+      atomicWriteJson(wsFile, { workspaceId, at: Date.now() });
+      return workspaceId;
+    };
+    let workspaceId = readJsonSafe(wsFile, null)?.workspaceId;
+    if (!workspaceId) workspaceId = await createWorkspace();
+    let sessionId = '';
+    for (let attempt = 0; attempt < 2 && !sessionId; attempt += 1) {
+      try {
+        const value = unwrap(await api.sessions.create({ workspaceId, agentPreset: preset }), 'diary session.create');
+        sessionId = value.sessionId;
+      } catch (error) {
+        if (attempt > 0) throw error;
+        try { fs.unlinkSync(wsFile); } catch {}
+        workspaceId = await createWorkspace();
+      }
+    }
+    learnerSessions.add(sessionId);
+    api.events.follow(sessionId);
+    try {
+      await ensureChatModel(sessionId);
+      const accepted = await api.sessions.prompt({ sessionId, mode: 'queue', content: [{ type: 'text', text: promptText }] });
+      if (!accepted.result.ok) throw new Error(`${accepted.result.error.code}: ${accepted.result.error.message}`);
+      return await waitLearnerTurn(sessionId, conf.timeoutMs);
+    } finally {
+      learnerSessions.delete(sessionId);
+      try { await api.workspace.archiveSession({ sessionId }); } catch {}
+    }
+  }
+
+  async function writeDiaryFor(day, { catchUp = false } = {}) {
+    const conf = diaryConfig();
+    if (!conf.enabled) return false;
+    if (memoryWorld.readDiary(day)) return false;
+    const transcript = buildDiaryTranscript(memoryWorld.readMessages(day));
+    if (!transcript) {
+      log(`日记 ${day}：当天没有消息，跳过`);
+      return false;
+    }
+    if (!dshReady) {
+      return false;
+    }
+    const output = await runDiaryTurn(buildDiaryPrompt(day, transcript));
+    const text = cleanDiaryText(output, conf.maxChars);
+    if (!text) {
+      log(`日记 ${day}：模型返回为空，跳过`);
+      return false;
+    }
+    memoryWorld.writeDiary(day, text, { meta: { at: Date.now(), catchUp: !!catchUp } });
+    log(`日记 ${day} 已写（${text.length} 字${catchUp ? '，补写' : ''}）`);
+    return true;
+  }
+
+  function diaryTick() {
+    if (diaryRunning) return;
+    const conf = diaryConfig();
+    if (!conf.enabled) return;
+    const now = Date.now();
+    if (now < diaryRetryAfter) return;
+    const today = memoryDayKey(now);
+    const candidates = [];
+    if (now >= diaryDueAt(today)) candidates.push(today);
+    for (let i = 1; i <= conf.catchUpDays; i += 1) candidates.push(memoryDayKey(now - i * 86400000));
+    const target = candidates.find((day) => !memoryWorld.readDiary(day) && memoryWorld.readMessages(day).length > 0);
+    if (!target) return;
+    diaryRunning = true;
+    void (async () => {
+      try {
+        const ok = await writeDiaryFor(target, { catchUp: target !== today });
+        if (!ok) diaryRetryAfter = Date.now() + 10 * 60_000;
+      } catch (error) {
+        diaryRetryAfter = Date.now() + 10 * 60_000;
+        log(`日记 ${target} 失败：${error?.message ?? error}`);
+      } finally {
+        diaryRunning = false;
+      }
+    })();
+  }
+
+  function startDiaryScheduler() {
+    const conf = diaryConfig();
+    if (!conf.enabled) {
+      log('日记：未启用（socialV2.memory.diary.enabled=false）');
+      return;
+    }
+    const timer = setInterval(diaryTick, 60_000);
+    timer.unref?.();
+    const first = setTimeout(diaryTick, 15_000);
+    first.unref?.();
+    log(`日记：已启用，每天 ${String(conf.hour).padStart(2, '0')}:${String(conf.minute).padStart(2, '0')} 写一篇`);
   }
 
   function readFeedbackEntries() {
@@ -11182,7 +11951,8 @@ async function main() {
     const identityLine = selfIdentityTextV2();
     const st = getSocialV2State(key);
     const tokenLine = `【会话令牌】${st.agentToken}（调用二代状态工具时请在参数中带上此令牌）\n\n`;
-    const memoryText = formatMemoryV2(st);
+    const sessionMemoryText = formatMemoryV2(st);
+    const memoryText = composeWorldMemoryText(key, st, sessionMemoryText);
     const memoryLine = memoryText ? `${memoryText}\n\n` : '';
     // 注意：黑话表不在这里注入，deliverPromptNow 的 withSlangContext 会统一注入，
     // 避免唤醒 prompt 出现两份黑话表。
