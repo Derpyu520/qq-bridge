@@ -40,6 +40,27 @@ ok(/api\('\/api\/voice\/list/.test(html), '面板调用 /api/voice/list（操作
 ok(/api\('\/api\/voice\/send'/.test(html), '面板调用 /api/voice/send');
 ok(/typeof loadVoiceLibrary === 'function'|async function loadVoiceLibrary/.test(html), 'loadVoiceLibrary 已定义');
 
+console.log('## 控制台对外访问面板接线');
+ok(/id="section-console-access"[^>]*data-page="access"/.test(html), '面板挂在「访问与安全」页');
+ok(/id="consoleHostInput"/.test(html), '监听地址输入框存在');
+ok(/getElementById\('consoleHostSave'\)\.addEventListener/.test(html), '保存按钮已绑定事件');
+ok(/getElementById\('consoleHostClear'\)\.addEventListener/.test(html), '清除按钮已绑定事件');
+ok(/api\('\/api\/console\/access'/.test(html), '面板调用 /api/console/access');
+ok(/refreshConsoleAccess\(\)/.test(html), 'refreshConsoleAccess 已定义并被调用');
+
+console.log('## 控制台鉴权（HttpOnly cookie + 错误提示）');
+// 凭证必须放在脚本读不到的地方：localStorage 里出现令牌就是回退。
+ok(!/localStorage\.(getItem|setItem|removeItem)\('consoleToken'/.test(html), '不再把令牌写进 localStorage');
+ok(/credentials: 'same-origin'/.test(html), 'api() 显式依赖同源 cookie');
+ok(/fetch\('\/api\/console\/login'/.test(html) && /JSON\.stringify\(\{ token \}\)/.test(html), '登录走 POST /api/console/login 换 cookie');
+ok(!/headers\[['"]x-console-token['"]\]\s*=/.test(html), '页面不手动拼 x-console-token');
+ok(/console-token-invalid/.test(html), '识别「令牌错误」的 401 原因码');
+ok(/function requireConsoleToken\(/.test(html), '未授权时走登录弹层而不是 prompt()');
+ok(!/(^|[^.\w])prompt\('请输入控制台访问令牌/.test(html), '不再用 prompt() 收集令牌');
+ok(/id="consoleTokenForget"/.test(html) && /\/api\/console\/logout/.test(html), '「退出登录」调用 /api/console/logout 销毁凭证');
+ok(/id="consoleTokenState"/.test(html) && /refreshConsoleTokenState\(\)/.test(html), '状态行显示登录状态');
+ok(/HttpOnly cookie/.test(html), '说明凭证存在 HttpOnly cookie 里');
+
 console.log('## JS 语法');
 const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/gi)].map((m) => m[1]);
 const big = scripts.sort((a, b) => b.length - a.length)[0];
@@ -72,6 +93,7 @@ console.log('## fixture mock 覆盖');
 const fixture = fs.readFileSync(path.join(ROOT, 'scripts', 'console-ui-fixture.mjs'), 'utf8');
 ok(fixture.includes("case '/api/socialV2/voices'"), 'fixture mock 了 /api/socialV2/voices');
 ok(fixture.includes("case '/api/voice/send'"), 'fixture mock 了 /api/voice/send');
+ok(fixture.includes("case '/api/console/access'"), 'fixture mock 了 /api/console/access');
 
 console.log(bad === 0 ? '\n全部通过' : `\n${bad} 项失败`);
 if (bad > 0) process.exit(1);

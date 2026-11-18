@@ -300,6 +300,11 @@ export function makeFixtureState() {
     roleInjectMax: 8000,
     dshEffort: 'max',
     whitelist: { allow: { groups: [123456789, 100003], private: [100001] }, deny: { groups: [], private: [] }, ownerQQ: '100001' },
+    // 控制台对外访问：演示「只监听回环」的默认态（effective 与配置一致 = 无需重启）。
+    consoleHost: '',
+    // 实际已绑定的对外监听地址：与真实后端一样，保存配置**不会**热生效，
+    // 两者不一致就代表「待重启」。
+    consoleHostEffective: '',
     sessions: [
       { key: 'group:123456789', sessionId: 'demo-community-20260920', owner: false },
       { key: 'group:100003', sessionId: 'demo-development-20260920', owner: false },
@@ -447,6 +452,7 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
             globalSideEffect: true,
           });
           case '/api/whitelist': return json(state.whitelist);
+          case '/api/console/access': return json({ ok: true, consoleHost: state.consoleHost, effectiveConsoleHost: state.consoleHostEffective, consolePort: 4173 });
           case '/api/sessions': return json({ sessions: state.sessions });
           case '/api/pending': return json({ pending: [{ key: 'group:123456789', kind: 'approval', toolName: '演示工具', reason: '等待管理员确认（离线示例）' }] });
           case '/api/social': return json({ config: state.social, states: state.socialStates, pendingSummaries: { 'group:123456789': 2 } });
@@ -544,6 +550,13 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
           case '/api/dsh/effort': state.dshEffort = body.reasoningEffort; return json({ ok: true, reasoningEffort: body.reasoningEffort });
           case '/api/role-mode': state.roleMode = body.mode; return json({ ok: true });
           case '/api/whitelist': state.whitelist = body; return json({ ok: true });
+          case '/api/console/access': {
+            // 与真实后端同口径：保存只改配置，生效值要等重启。
+            const wanted = String(body.consoleHost ?? '').trim();
+            const restartRequired = wanted !== state.consoleHostEffective;
+            state.consoleHost = wanted;
+            return json({ ok: true, consoleHost: wanted, effectiveConsoleHost: state.consoleHostEffective, consolePort: 4173, restartRequired });
+          }
           case '/api/social': state.social = body; return json({ ok: true });
           case '/api/social/state': state.socialStates[body.key] = { phase: body.phase }; return json({ ok: true });
           case '/api/socialV2/config': state.v2 = body; return json({ ok: true });

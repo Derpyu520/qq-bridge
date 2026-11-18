@@ -2501,13 +2501,35 @@ button:active:not(:disabled) {
     </section>
 <section id="section-token" data-page="access" class="card">
       <h2>控制台访问令牌</h2>
-      <div class="meta">用于打开本控制台 / 调用管理 API 的令牌。可手动输入新令牌保存，或留空生成随机令牌。修改后当前页面会自动使用新令牌。</div>
+      <div class="meta">用于打开本控制台 / 调用管理 API 的令牌。可手动输入新令牌保存，或留空生成随机令牌。修改后当前浏览器会自动换用新凭证。登录凭证存放在 <b>HttpOnly cookie</b> 里：页面脚本读不到，所以这里不会回显当前令牌——要看令牌请读部署机上的 <code>config.json</code>（<code>consoleToken</code>）或 <code>state/console-token</code>。</div>
       <input type="password" id="consoleTokenInput" placeholder="输入新令牌（至少 16 位），留空则生成随机" autocomplete="new-password">
       <div class="row" style="margin-top:8px">
         <button id="consoleTokenSave" class="small">保存令牌</button>
         <button id="consoleTokenRandom" class="small">生成随机令牌</button>
+        <button id="consoleTokenForget" class="small" type="button">退出登录</button>
         <span class="meta" id="consoleTokenMsg"></span>
       </div>
+      <div class="meta" id="consoleTokenState" style="margin-top:8px"></div>
+    </section>
+    <section id="section-console-access" data-page="access" class="card">
+      <h2>控制台对外访问</h2>
+      <div id="consoleAccessState" style="padding:8px 10px;border-left:3px solid var(--warn-fg-strong);background:var(--warn-bg)">
+        <div class="meta" style="margin:0">正在读取…</div>
+      </div>
+      <div class="meta" style="margin-top:10px">默认控制台<b>只监听本机回环</b>（<code>127.0.0.1</code>），局域网里打不开。填一个<b>地址</b>，控制台会在该地址上<b>额外</b>开一个监听器；回环监听器始终保留（MCP 工具进程走 127.0.0.1）。</div>
+      <div class="row" style="margin-top:8px">
+        <input type="text" id="consoleHostInput" placeholder="留空 = 只监听回环；或填 IP（192.168.1.10）、主机名（nas.local）、0.0.0.0（所有网卡）" style="flex:1">
+        <button id="consoleHostSave" class="small">保存</button>
+        <button id="consoleHostClear" class="small">清除</button>
+      </div>
+      <div class="meta" id="consoleAccessMsg"></div>
+      <div id="consoleTokenWarn" style="display:none;margin-top:8px;padding:8px 10px;border-left:3px solid var(--warn-fg-strong);background:var(--warn-bg)">
+        <b>⚠️ 对外监听要求显式设置控制台令牌</b>
+        <div class="meta" style="margin:4px 0">自动生成的令牌只适合「只有本机能碰到控制台」的场景（它落在 <code>state/console-token</code>，靠文件系统权限兜底）。控制台一旦对外暴露，这个前提就不成立了。请在 <code>config.json</code> 里显式设置 <code>consoleToken</code>（至少 16 位，仅 <code>A-Za-z0-9_-</code>）后重启桥接。</div>
+      </div>
+      <div class="meta">接受具体 IP、主机名，或 <code>0.0.0.0</code> / <code>::</code>（监听所有网卡，含 tailscale0 —— 暴露面最大，令牌是唯一门槛）。<b>对外监听时必须显式设置 <code>consoleToken</code></b>，否则不会开对外监听器。</div>
+      <div class="meta">放行的是配置里那个地址本身：回环监听器永远只接受回环 Host，外来 Host 一律 403（DNS rebinding 硬化）。</div>
+      <div class="meta">监听器是<b>启动时</b>创建的，所以保存后要<b>重启桥接</b>才真正生效（见「运维」页的「重启桥接」）。</div>
     </section>
 <section id="section-test-send" data-page="operations" class="card">
       <h2>测试发送</h2>
@@ -2639,33 +2661,110 @@ button:active:not(:disabled) {
   <noscript><div class="connection-alert">控制台需要启用 JavaScript 才能加载状态及保存设置。</div></noscript>
 
 <script>
-(function () {
-  // 如果通过 ?token= 进入（控制台启用鉴权时根路径会重定向带 token），存到 localStorage
-  const qs = new URLSearchParams(location.search);
-  const token = qs.get('token');
-  if (token) {
-    localStorage.setItem('consoleToken', token);
-    history.replaceState({}, '', location.pathname + location.hash);
-  }
-})();
+// ── 控制台鉴权 ───────────────────────────────────────────────────────────
+// 凭证是服务端下发的 **HttpOnly cookie**，页面脚本读不到它 —— 这正是目的：
+// 万一出现 XSS，注入的脚本也拿不走一枚持久的最高权限令牌。
+// 浏览器会自动带上它，所以这里不需要（也不能）手动拼任何令牌头。
+// 刷新 / 重开 / 新标签页都沿用同一个 cookie，除非用户点「退出登录」或
+// 服务端明确回答 console-token-invalid（令牌被改过 / 失效）。
+//
+// 登录：`?token=` 引导由**服务端** 303 重定向直接种 cookie（令牌不进历史记录）；
+// 页面内遇到 401 时则弹登录层，POST /api/console/login 换 cookie。
+
+// 登录弹层：并发多个 401 只开一个，所有请求等同一个 Promise，登录成功后各自重试。
+let authGate = null;
+function requireConsoleToken(reason) {
+  if (authGate) { authGate.setReason(reason); return authGate.promise; }
+  let setReason = () => {};
+  const promise = new Promise((resolve, reject) => {
+    const overlay = document.createElement('div');
+    overlay.id = 'consoleAuthGate';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'consoleAuthTitle');
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:2000;display:grid;place-items:center;background:rgba(8,10,14,.62);padding:20px';
+    overlay.innerHTML = '<form style="width:min(380px,100%);background:var(--card-bg,#171a21);border:1px solid var(--card-border,#2a2f3a);border-radius:14px;padding:22px;box-shadow:0 18px 48px rgba(0,0,0,.35)">'
+      + '<h2 id="consoleAuthTitle" style="margin:0 0 6px;font-size:17px">请输入控制台访问令牌</h2>'
+      + '<p id="consoleAuthHint" class="meta" style="margin:0 0 14px"></p>'
+      + '<input id="consoleAuthInput" type="password" autocomplete="current-password" spellcheck="false" style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:9px;border:1px solid var(--card-border,#333a47);background:transparent;color:inherit;font-size:14px" aria-label="控制台访问令牌" placeholder="访问令牌">'
+      + '<div class="row" style="margin-top:12px"><button id="consoleAuthSubmit" class="small" type="submit">进入控制台</button><button id="consoleAuthCancel" class="small" type="button">稍后</button></div>'
+      + '</form>';
+    document.body.appendChild(overlay);
+    const form = overlay.querySelector('form');
+    const input = overlay.querySelector('#consoleAuthInput');
+    const hint = overlay.querySelector('#consoleAuthHint');
+    const submit = overlay.querySelector('#consoleAuthSubmit');
+    const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); cancel(); } };
+    const cancel = () => { close(); reject(new Error('未授权')); };
+    setReason = (r) => {
+      const invalid = r === 'invalid';
+      hint.textContent = invalid ? '令牌错误，请重新输入。' : '控制台已启用访问鉴权，请输入访问令牌。';
+      hint.className = invalid ? 'meta err' : 'meta';
+      if (invalid) { input.value = ''; }
+    };
+    setReason(reason || 'missing');
+    document.addEventListener('keydown', onKey);
+    overlay.querySelector('#consoleAuthCancel').addEventListener('click', cancel);
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const token = input.value.trim();
+      if (!token) { hint.textContent = '请输入访问令牌。'; hint.className = 'meta err'; input.focus(); return; }
+      submit.disabled = true;
+      hint.textContent = '正在验证…'; hint.className = 'meta';
+      try {
+        const ok = await consoleLogin(token);
+        if (!ok) {
+          hint.textContent = '令牌错误，请重新输入。'; hint.className = 'meta err';
+          input.value = ''; input.focus();
+          return;
+        }
+        close();
+        resolve();
+      } catch {
+        hint.textContent = '无法连接桥接，请确认服务在运行。'; hint.className = 'meta err';
+      } finally {
+        submit.disabled = false;
+      }
+    });
+    input.focus();
+  });
+  authGate = { promise, setReason };
+  promise.finally(() => { if (authGate && authGate.promise === promise) authGate = null; }).catch(() => {});
+  return promise;
+}
+
+/**
+ * 用令牌换 cookie。成功返回 true，401 返回 false，其它状态抛错。
+ * 这是**唯一**把令牌交给服务端的地方；令牌不进 URL，也不落到任何存储里。
+ */
+async function consoleLogin(token) {
+  const res = await fetch('/api/console/login', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ token }),
+  });
+  if (res.ok) return true;
+  if (res.status === 401) return false;
+  throw new Error('HTTP ' + res.status);
+}
 
 async function api(path, method, body, _retried = 0) {
   const headers = body ? {'content-type':'application/json'} : {};
-  const token = localStorage.getItem('consoleToken');
-  if (token) headers['x-console-token'] = token;
-  const res = await fetch(path, { method: method || 'GET', headers, body: body ? JSON.stringify(body) : undefined });
+  // credentials: 'same-origin'（fetch 默认值）会带上 HttpOnly cookie —— 显式写出来，
+  // 免得以后有人改成 'omit' 把登录静默弄坏。
+  const res = await fetch(path, { method: method || 'GET', headers, credentials: 'same-origin', body: body ? JSON.stringify(body) : undefined });
   if (res.status === 401) {
-    if (_retried >= 2) {
-      localStorage.removeItem('consoleToken');
-      throw new Error('未授权');
+    let payload = {};
+    try { payload = await res.json(); } catch {}
+    const invalid = payload.code === 'console-token-invalid';
+    // 令牌被改过 / cookie 失效才会走到 invalid；「没带令牌」是没登录。
+    // 两种情况都只需要重新登录，不需要（也没有）本地令牌可清。
+    if (_retried >= 1) {
+      throw new Error(payload.error || (invalid ? '控制台令牌错误' : '未授权：请先登录控制台'));
     }
-    const t = prompt('请输入控制台访问令牌：');
-    if (t) {
-      localStorage.setItem('consoleToken', t.trim());
-      return api(path, method, body, _retried + 1);
-    }
-    localStorage.removeItem('consoleToken');
-    throw new Error('未授权');
+    await requireConsoleToken(invalid ? 'invalid' : 'missing');
+    return api(path, method, body, _retried + 1);
   }
   return res.json();
 }
@@ -2996,6 +3095,42 @@ async function refreshWhitelist() {
   } catch {}
 }
 
+async function refreshConsoleAccess() {
+  try {
+    const r = await api('/api/console/access');
+    const host = String(r.consoleHost || '');
+    const eff = String(r.effectiveConsoleHost || '');
+    const port = r.consolePort;
+    const tokenReady = r.consoleTokenConfigured !== false;
+    const input = document.getElementById('consoleHostInput');
+    if (input && document.activeElement !== input) input.value = host;
+    const box = document.getElementById('consoleAccessState');
+    if (!box) return;
+    let html = '';
+    let warn = true;
+    if (eff) {
+      html += `<div class="meta" style="margin:0">⚠️ 控制台<b>已对 ${esc(eff)}:${esc(port)} 开放</b> —— 能连到这台机器的人都能打开它（能否从公网访问还取决于你的路由器/防火墙是否放行这个端口）。控制台令牌是唯一的门槛，别泄露出去。</div>`;
+    } else {
+      html += `<div class="meta" style="margin:0">✅ 控制台<b>只监听本机回环</b>（http://127.0.0.1:${esc(port)}），局域网内打不开。</div>`;
+      warn = false;
+    }
+    // 配置值与生效值可能不一致：监听器是启动时创建的，改完必须重启。
+    if (host && eff && host !== eff) {
+      html += `<div class="meta" style="margin:6px 0 0">配置里写的是 <b>${esc(host)}</b>，当前生效的是 <b>${esc(eff)}</b> —— 需要<b>重启桥接</b>才生效。</div>`;
+    } else if (host && !eff) {
+      html += `<div class="meta" style="margin:6px 0 0">已保存 <b>${esc(host)}</b>，<b>重启桥接</b>后才会对外监听。</div>`;
+    } else if (!host && eff) {
+      html += `<div class="meta" style="margin:6px 0 0">配置已清空，但当前仍在监听 <b>${esc(eff)}</b> —— <b>重启桥接</b>后才会关闭。</div>`;
+    }
+    box.innerHTML = html;
+    box.style.borderLeftColor = warn ? 'var(--warn-fg-strong)' : 'var(--ok)';
+    box.style.background = warn ? 'var(--warn-bg)' : 'transparent';
+    // 配了对外地址却没显式令牌 → 重启后也不会开对外监听，界面必须说清楚。
+    const tokenWarn = document.getElementById('consoleTokenWarn');
+    if (tokenWarn) tokenWarn.style.display = (host && !tokenReady) ? 'block' : 'none';
+  } catch {}
+}
+
 async function refreshSessions() {
   try {
     const s = await api('/api/sessions');
@@ -3171,6 +3306,32 @@ document.getElementById('wlSave').addEventListener('click', async () => {
   });
   if (r.ok) { refreshWhitelist(); refresh(); alert('白名单已保存并生效'); }
   else alert(r.error || '保存失败');
+});
+async function saveConsoleHost(value) {
+  const msg = document.getElementById('consoleAccessMsg');
+  try {
+    const r = await api('/api/console/access', 'POST', { consoleHost: value });
+    if (r.ok) {
+      msg.textContent = r.warning
+        ? `✅ 已保存；${r.warning}`
+        : (r.restartRequired ? '✅ 已保存；重启桥接后生效' : '✅ 已保存（当前已生效）');
+      msg.className = r.warning ? 'meta err' : 'meta ok';
+      refreshConsoleAccess();
+    } else {
+      msg.textContent = '❌ ' + (r.error || '保存失败');
+      msg.className = 'meta err';
+    }
+  } catch (e) {
+    msg.textContent = '❌ ' + (e?.message || '保存失败');
+    msg.className = 'meta err';
+  }
+}
+document.getElementById('consoleHostSave').addEventListener('click', () => {
+  saveConsoleHost(document.getElementById('consoleHostInput').value.trim());
+});
+document.getElementById('consoleHostClear').addEventListener('click', () => {
+  document.getElementById('consoleHostInput').value = '';
+  saveConsoleHost('');
 });
 document.getElementById('tsSend').addEventListener('click', async () => {
   const r = await api('/api/test-send', 'POST', {
@@ -4421,14 +4582,53 @@ async function changeConsoleToken(generate) {
     msg.className = 'meta err';
     return;
   }
-  // 保存到 localStorage，当前页面继续使用新令牌
-  localStorage.setItem('consoleToken', r.token);
+  // 服务端在改令牌的同一个响应里把当前浏览器的 cookie 换成了新值，
+  // 并把新令牌回显在这个输入框里供复制（它只活在这个 DOM 里，不进任何存储）。
   input.value = r.token;
-  msg.textContent = r.generated ? '已生成随机令牌，当前页面已自动使用。可点击显示后复制。' : '已保存新令牌';
+  refreshConsoleTokenState();
+  msg.textContent = r.generated
+    ? '已生成随机令牌，当前浏览器已自动沿用。点右侧眼睛可显示并复制；也保存在 config.json / state/console-token 里。'
+    : '已保存新令牌，当前浏览器已自动沿用';
   msg.className = 'meta ok';
 }
+
+/** 令牌区的状态行：明确告诉用户「现在是不是已登录、凭证存在哪」。 */
+async function refreshConsoleTokenState() {
+  const el = document.getElementById('consoleTokenState');
+  if (!el) return;
+  el.textContent = '正在检查登录状态…';
+  el.className = 'meta';
+  try {
+    const res = await fetch('/api/status', { credentials: 'same-origin' });
+    const ok = res.status === 200;
+    el.textContent = ok
+      ? '✅ 已登录。凭证保存在 HttpOnly cookie 里（页面脚本读不到），刷新 / 重开 / 新标签页自动沿用。'
+      : '⚠️ 未登录：下一次请求会弹出登录框。';
+    el.className = ok ? 'meta ok' : 'meta err';
+  } catch {
+    el.textContent = '⚠️ 无法连接桥接，登录状态未知。';
+    el.className = 'meta err';
+  }
+}
+
 document.getElementById('consoleTokenSave').addEventListener('click', () => changeConsoleToken(false));
 document.getElementById('consoleTokenRandom').addEventListener('click', () => changeConsoleToken(true));
+document.getElementById('consoleTokenForget').addEventListener('click', async () => {
+  if (!confirm('退出登录会清除浏览器里的登录凭证；下次打开控制台需要重新输入令牌。确定继续？')) return;
+  try {
+    await fetch('/api/console/logout', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+  } catch {}
+  location.href = '/';
+});
+
+// 进入页面时只刷新状态行：令牌在 HttpOnly cookie 里，脚本读不到，也**不该**回填。
+// 输入框保持空白，它的语义就是「要改成什么」。
+refreshConsoleTokenState();
 
 // Presentation layer: keep every existing control mounted so drafts and API contracts survive navigation.
 const consolePages = {
@@ -4546,7 +4746,7 @@ document.querySelectorAll('input,select,textarea').forEach(input => {
     input.setAttribute('aria-label', names[input.id] || input.placeholder || input.closest('section')?.querySelector('h2')?.textContent || '设置');
   }
 });
-const primaryActions = ['roleSet','roleCreate','socialSave','v2ConfigSave','v2ConfigSaveTop','wlSave','secSave','consoleTokenSave','tsSend','aiNotifySend','slangAdd','slangConfigSave','slangModalDirectConfirm'];
+const primaryActions = ['roleSet','roleCreate','socialSave','v2ConfigSave','v2ConfigSaveTop','wlSave','secSave','consoleTokenSave','consoleHostSave','tsSend','aiNotifySend','slangAdd','slangConfigSave','slangModalDirectConfirm'];
 primaryActions.forEach(id => document.getElementById(id)?.classList.add('primary'));
 document.querySelectorAll('.meta[id$="Msg"], .meta[id$="Msg2"]').forEach(el => el.setAttribute('role','status'));
 document.getElementById('section-mode').querySelector('h2').dataset.note = '选择后即时生效';
@@ -5055,8 +5255,8 @@ document.getElementById('usageClear').addEventListener('click', async () => {
 
 setConsolePage(location.hash.slice(1), { updateHash:false });
 
-refresh(); refreshRoles(); refreshWhitelist(); refreshSessions(); refreshPending(); refreshPresets(); loadSocialForm(); loadV2Config(); refreshV2Activity(); loadV2ToolLog(); loadV2SessionOptions(); refreshSocialStatus(); refreshSlang(); loadSlangConfig(); loadSecurity(); refreshSimPrompt(); refreshDshModel(); refreshUsage(); refreshUsageChart(); refreshUsageRecent();
-setInterval(() => { refresh(); refreshSessions(); refreshPending(); refreshSocialStatus(); refreshSlang(); }, 3000);
+refresh(); refreshRoles(); refreshWhitelist(); refreshConsoleAccess(); refreshSessions(); refreshPending(); refreshPresets(); loadSocialForm(); loadV2Config(); refreshV2Activity(); loadV2ToolLog(); loadV2SessionOptions(); refreshSocialStatus(); refreshSlang(); loadSlangConfig(); loadSecurity(); refreshSimPrompt(); refreshDshModel(); refreshUsage(); refreshUsageChart(); refreshUsageRecent();
+setInterval(() => { refresh(); refreshSessions(); refreshPending(); refreshSocialStatus(); refreshSlang(); refreshConsoleAccess(); }, 3000);
 // 用量看板只在本页可见时轮询：既保证「实时」，又不让其它页白白多打两份接口。
 setInterval(() => { if (currentConsolePage !== 'usage') return; refreshUsage(); refreshUsageChart(); refreshUsageRecent(); }, 3000);
 // 主题切换（纯前端，不发任何请求；选择写入 localStorage，未选择时跟随系统）
