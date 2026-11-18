@@ -642,6 +642,64 @@ input[type=checkbox] {
   flex-shrink:0;
   cursor:pointer
 }
+/* 开关（switch）：给「启用记忆插件」这类总开关用。
+   结构 <label class="switch"><input type=checkbox><span class="switch-track"><span class="switch-knob"></span></span></label>
+   隐藏原生 checkbox 但保留它的 checked/change 语义与键盘可达性（focus-visible 有描边）。 */
+.switch {
+  display:inline-flex;
+  position:relative;
+  align-items:center;
+  flex:0 0 auto;
+  cursor:pointer;
+  user-select:none
+}
+.switch input {
+  position:absolute;
+  width:1px;
+  height:1px;
+  opacity:0;
+  margin:0;
+  pointer-events:none
+}
+.switch-track {
+  position:relative;
+  width:44px;
+  height:24px;
+  flex:0 0 auto;
+  border-radius:999px;
+  background:var(--border-strong);
+  border:1px solid var(--border);
+  transition:background .18s ease,border-color .18s ease
+}
+.switch-knob {
+  position:absolute;
+  top:2px;
+  left:2px;
+  width:18px;
+  height:18px;
+  border-radius:50%;
+  background:var(--surface);
+  box-shadow:0 1px 3px rgba(32,46,73,.28);
+  transition:transform .18s ease
+}
+.switch input:checked+.switch-track {
+  background:var(--accent);
+  border-color:var(--accent)
+}
+.switch input:checked+.switch-track .switch-knob {
+  transform:translateX(22px)
+}
+.switch input:focus-visible+.switch-track {
+  outline:2px solid var(--accent-border-focus);
+  outline-offset:2px
+}
+.switch:hover .switch-track {
+  border-color:var(--accent-border-hover)
+}
+.switch input:disabled+.switch-track {
+  opacity:.5;
+  cursor:not-allowed
+}
 input[type=number] {
   font-variant-numeric:tabular-nums
 }
@@ -1771,6 +1829,7 @@ button:active:not(:disabled) {
       <button data-view="social-v2" class="nav-item"><span class="nav-icon" aria-hidden="true">◈</span>二代仿真<span class="nav-note">V2</span></button>
       <button data-view="social-v1" class="nav-item"><span class="nav-icon" aria-hidden="true">◇</span>一代仿真<span class="nav-note">V1</span></button>
       <button data-view="slang" class="nav-item"><span class="nav-icon" aria-hidden="true">▤</span>黑话词库</button>
+      <button data-view="memory" class="nav-item"><span class="nav-icon" aria-hidden="true">◎</span>拟人记忆<span class="nav-note">实验</span></button>
       <div class="nav-label">管理</div>
       <button data-view="usage" class="nav-item"><span class="nav-icon" aria-hidden="true">◧</span>令牌与花费</button>
       <button data-view="access" class="nav-item"><span class="nav-icon" aria-hidden="true">⊙</span>访问与安全</button>
@@ -2417,6 +2476,55 @@ button:active:not(:disabled) {
           <span class="meta" id="slangConfigMsg"></span>
         </div>
       </details>
+    </section>
+<section id="section-memory" data-page="memory" class="card span-all">
+      <h2>拟人记忆</h2>
+      <div class="meta">
+        记忆独立存放于 <code id="memDir">state/memory</code>：每个会话一份 <code>MEMORY.md</code>，另有跨会话共享的共享记忆。
+        关闭后唤醒提示回落到旧便签，已有数据保留。
+      </div>
+
+      <div class="row" style="margin-top:10px">
+        <label style="flex:1" for="memEnabled">启用记忆</label>
+        <label class="switch" title="开启 / 关闭记忆（写入 config.json，即时生效）">
+          <input type="checkbox" id="memEnabled" role="switch" aria-label="启用记忆">
+          <span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span>
+        </label>
+        <span class="meta" id="memEnabledMsg" role="status"></span>
+      </div>
+
+      <table style="margin-top:12px">
+        <tr><th>指标</th><th>值</th></tr>
+        <tr><td>会话</td><td id="memStatSessions">—</td></tr>
+        <tr><td>聊天流水</td><td id="memStatEvents">—</td></tr>
+        <tr><td>群友画像</td><td id="memStatProfiles">—</td></tr>
+        <tr><td>记忆条目</td><td id="memStatMemories">—</td></tr>
+        <tr><td>待复核</td><td id="memStatReview">—</td></tr>
+        <tr><td>记忆文件</td><td id="memStatFile">—</td></tr>
+      </table>
+
+      <div class="row" style="margin-top:12px">
+        <button id="memRetentionBtn" class="small">睡眠（记忆整理巩固）</button>
+        <span class="meta" id="memRetentionMsg" role="status"></span>
+      </div>
+
+      <details class="settings-group" style="margin-top:10px" open><summary>按会话查看 / 读取记忆正文</summary><div class="settings-content">
+        <table id="memSessions" style="margin-top:6px">
+          <tr><th>会话</th><th>条目</th><th>画像</th><th>最近记忆</th><th></th></tr>
+        </table>
+        <div class="row" style="margin-top:8px">
+          <button id="memReadFile" class="small">查看会话记忆</button>
+          <button id="memReadGlobal" class="small">查看共享记忆</button>
+          <button id="memRebuildFile" class="small">从流水重建</button>
+          <span class="meta" id="memFileMsg" role="status"></span>
+        </div>
+        <pre id="memFileBody" style="max-height:420px;overflow:auto;white-space:pre-wrap;margin-top:8px;font-size:12px"></pre>
+      </div></details>
+
+      <div class="row" style="margin-top:12px">
+        <button id="memResetAll" class="danger">清空全部记忆</button>
+        <span class="meta" id="memResetMsg" role="status"></span>
+      </div>
     </section>
 <section id="section-reference" data-page="reference" class="card span-all">
       <h2>DSH 侧 MCP 工具</h2>
@@ -4374,6 +4482,156 @@ document.getElementById('slangConfigSave').addEventListener('click', async () =>
   if (r.ok) loadSlangConfig();
 });
 
+// ── 记忆插件（低耦合：只走 /api/memory* 四个接口，关掉不影响其它功能）────────
+function renderMemorySessions(sessions) {
+  const table = document.getElementById('memSessions');
+  table.replaceChildren();
+  const head = document.createElement('tr');
+  for (const label of ['会话方', '类型', '条目', '画像', '最近记忆', '']) {
+    const th = document.createElement('th');
+    th.textContent = label;
+    head.append(th);
+  }
+  table.append(head);
+  if (!sessions.length) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 6;
+    td.className = 'meta';
+    td.textContent = '还没有记忆';
+    tr.append(td);
+    table.append(tr);
+    return;
+  }
+  for (const item of sessions) {
+    const tr = document.createElement('tr');
+    // 共享记忆那一行（_global）用不同底色区分，且不参与"会话"计数
+    if (item.isGlobal) tr.style.background = 'rgba(120,140,255,0.07)';
+    // 会话方：群名 / 好友昵称（服务端已解析好，拿不到就退回「群 123456」）
+    const kindLabel = item.isGlobal ? '共享' : (item.kind === 'group' ? '群' : item.kind === 'private' ? '私聊' : '—');
+    const cells = [
+      item.isGlobal ? '共享记忆' : (item.displayName || item.key),
+      kindLabel,
+      String(item.memories ?? 0),
+      String(item.profiles ?? 0),
+      item.lastEventAt ? new Date(Number(item.lastEventAt)).toLocaleString('zh-CN', { hour12: false }) : '—'
+    ];
+    for (const value of cells) {
+      const td = document.createElement('td');
+      td.textContent = value;
+      tr.append(td);
+    }
+    const action = document.createElement('td');
+    const pick = document.createElement('button');
+    pick.className = 'small';
+    pick.textContent = '读取';
+    pick.addEventListener('click', () => {
+      memorySelectedKey = item.isGlobal ? '_global' : item.key;
+      showMemoryFile(memorySelectedKey);
+    });
+    action.append(pick);
+    tr.append(action);
+    table.append(tr);
+  }
+}
+let memorySelectedKey = '';
+function showMemoryFile(key) {
+  const body = document.getElementById('memFileBody');
+  const msg = document.getElementById('memFileMsg');
+  if (!key) { msg.textContent = '先选一个会话'; msg.className = 'meta err'; return; }
+  msg.textContent = '读取中…';
+  msg.className = 'meta';
+  api('/api/memory/file?key=' + encodeURIComponent(key)).then(r => {
+    if (!r || r.ok === false) throw new Error((r && r.error) || '读取失败');
+    body.textContent = r.content || '（记忆文件还是空的）';
+    msg.textContent = `✅ ${r.file}（${r.chars} 字符）`;
+    msg.className = 'meta ok';
+  }).catch(error => {
+    body.textContent = '';
+    msg.textContent = '❌ ' + (error && error.message ? error.message : '读取失败');
+    msg.className = 'meta err';
+  });
+}
+function loadMemory() {
+  return api('/api/memory').then(r => {
+    if (!r || r.ok === false) throw new Error((r && r.error) || '读取失败');
+    const enabled = r.enabled !== false;
+    const toggle = document.getElementById('memEnabled');
+    toggle.checked = enabled;
+    toggle.setAttribute('aria-checked', String(enabled));
+    document.getElementById('memDir').textContent = r.dir || 'state/memory';
+    const totals = r.totals || {};
+    const sessions = Array.isArray(r.sessions) ? r.sessions : [];
+    document.getElementById('memStatSessions').textContent = String(totals.sessions ?? sessions.length);
+    document.getElementById('memStatEvents').textContent = String(totals.events ?? 0);
+    document.getElementById('memStatProfiles').textContent = String(totals.profiles ?? 0);
+    const totalChars = sessions.reduce((sum, s) => sum + (Number(s.memoryChars) || 0), 0);
+    document.getElementById('memStatFile').textContent = totalChars ? (totalChars + ' 字符') : '—';
+    const totalMems = sessions.reduce((sum, s) => sum + (Number(s.memories) || 0), 0);
+    document.getElementById('memStatReview').textContent = (totals.reviewCount ?? 0) + ' 条（由 AI 判断留还是忘）';
+    document.getElementById('memStatMemories').textContent = totalMems
+      ? `${totalMems} 条（长期 ${sessions.reduce((n, s) => n + (Number(s.longMemories) || 0), 0)} / 短期 ${sessions.reduce((n, s) => n + (Number(s.shortMemories) || 0), 0)}）`
+      : '0 条（等 AI 自己写）';
+    renderMemorySessions(sessions);
+    const st = document.getElementById('memEnabledMsg');
+    st.textContent = enabled ? '运行中' : '已关闭（回落到便签记忆）';
+    st.className = enabled ? 'meta ok' : 'meta err';
+  }).catch(error => {
+    const st = document.getElementById('memEnabledMsg');
+    st.textContent = '❌ ' + (error && error.message ? error.message : '读取失败');
+    st.className = 'meta err';
+  });
+}
+document.getElementById('memEnabled').addEventListener('change', async (event) => {
+  const enabled = event.target.checked;
+  event.target.setAttribute('aria-checked', String(enabled));
+  const r = await api('/api/memory/enabled', 'POST', { enabled });
+  const st = document.getElementById('memEnabledMsg');
+  if (r.ok) {
+    st.textContent = enabled ? '运行中' : '已关闭（回落到便签记忆）';
+    st.className = enabled ? 'meta ok' : 'meta err';
+    showConsoleToast(enabled ? '记忆已开启' : '记忆已关闭');
+  } else {
+    st.textContent = '❌ ' + (r.error || '失败');
+    st.className = 'meta err';
+    // 保存失败：把开关拨回去，别让界面显示一个没生效的状态
+    event.target.checked = !enabled;
+    event.target.setAttribute('aria-checked', String(!enabled));
+  }
+});
+document.getElementById('memReadFile').addEventListener('click', () => showMemoryFile(memorySelectedKey));
+document.getElementById('memReadGlobal').addEventListener('click', () => showMemoryFile('_global'));
+document.getElementById('memRebuildFile').addEventListener('click', async () => {
+  if (!memorySelectedKey) { const m = document.getElementById('memFileMsg'); m.textContent = '先选一个会话'; m.className = 'meta err'; return; }
+  if (!confirm('用事件流重新生成 ' + memorySelectedKey + ' 的 MEMORY.md？（会覆盖现有正文，事件数据不受影响）')) return;
+  const r = await api('/api/memory/rebuild', 'POST', { key: memorySelectedKey });
+  const msg = document.getElementById('memFileMsg');
+  msg.textContent = r.ok ? `✅ 已重建（${r.chars} 字符 / ${r.entries} 条）` : ('❌ ' + (r.error || '失败'));
+  msg.className = r.ok ? 'meta ok' : 'meta err';
+  if (r.ok) showMemoryFile(memorySelectedKey);
+});
+document.getElementById('memRetentionBtn').addEventListener('click', async () => {
+  const msg = document.getElementById('memRetentionMsg');
+  msg.textContent = '正在让 AI 进入睡眠整理…'; msg.className = 'meta';
+  const r = await api('/api/memory/sleep', 'POST', {});
+  if (r.ok) {
+    msg.textContent = `✅ 已触发 ${r.delivered}/${r.triggered} 个会话的模型整理`;
+    msg.className = 'meta ok';
+    if (r.hint) msg.textContent += `（${r.hint}）`;
+  } else {
+    msg.textContent = '❌ ' + (r.error || '失败');
+    msg.className = 'meta err';
+  }
+});
+document.getElementById('memResetAll').addEventListener('click', async () => {
+  if (!confirm('确定清空全部记忆？只删除 state/memory/ 下的文件，不可撤销。')) return;
+  const r = await api('/api/memory/reset', 'POST', {});
+  const msg = document.getElementById('memResetMsg');
+  msg.textContent = r.ok ? ('✅ 已清空 ' + (r.cleared ?? 0) + ' 个会话的记忆') : ('❌ ' + (r.error || '失败'));
+  msg.className = r.ok ? 'meta ok' : 'meta err';
+  if (r.ok) loadMemory();
+});
+
 function loadSecurity() {
   api('/api/security').then(r => {
     document.getElementById('secInterceptNotify').checked = r.security?.interceptNotify !== false;
@@ -4438,6 +4696,7 @@ const consolePages = {
   'social-v2': ['二代仿真', '自主参与，恰到好处。', '管理 AI 的工具、唤醒与发言节奏。展开需要调整的分组，修改后保存参数。'],
   'social-v1': ['一代仿真', '为自然对话，设定合适的节奏。', '调整参与概率、活跃周期和分条发送；所有配置项完整保留。'],
   slang: ['黑话词库', '读懂群聊里的，言外之意。', '从候选到确认，让 AI 逐渐熟悉大家的表达习惯。'],
+  memory: ['拟人记忆', '让每一次相遇，都留得下来。', 'AI 自己决定记什么、记多久；可随时开关，不影响其它功能。'],
   usage: ['令牌与花费', '每一次思考，都算得清楚。', '实时查看 AI 的 token 消耗与花费，可下钻到每个群、每个好友、每一轮对话。'],
   access: ['访问与安全', '明确边界，安心连接。', '管理允许对话的对象、管理员权限与控制台访问凭证。'],
   operations: ['调试与运维', '让桥接，始终井然有序。', '测试消息、引导 AI，或维护桥接进程与会话工作区。'],
@@ -4470,6 +4729,8 @@ function setConsolePage(page, { updateHash = true, focus = false, target = '' } 
   closeConsoleSearch();
   // 语音库按需加载：进入二代仿真页时才探测（避免每次开控制台都压网关）。
   if (page === 'social-v2' && typeof loadVoiceLibrary === 'function') loadVoiceLibrary();
+  // 记忆页按需刷新：统计要扫 state/memory/，没必要每次开控制台都跑。
+  if (page === 'memory' && typeof loadMemory === 'function') loadMemory();
   if (focus) {
     document.getElementById('mainContent').focus({ preventScroll: true });
     document.getElementById(target || 'mainContent')?.scrollIntoView({ block: 'start', behavior: 'instant' });
@@ -5055,7 +5316,7 @@ document.getElementById('usageClear').addEventListener('click', async () => {
 
 setConsolePage(location.hash.slice(1), { updateHash:false });
 
-refresh(); refreshRoles(); refreshWhitelist(); refreshSessions(); refreshPending(); refreshPresets(); loadSocialForm(); loadV2Config(); refreshV2Activity(); loadV2ToolLog(); loadV2SessionOptions(); refreshSocialStatus(); refreshSlang(); loadSlangConfig(); loadSecurity(); refreshSimPrompt(); refreshDshModel(); refreshUsage(); refreshUsageChart(); refreshUsageRecent();
+refresh(); refreshRoles(); refreshWhitelist(); refreshSessions(); refreshPending(); refreshPresets(); loadSocialForm(); loadV2Config(); refreshV2Activity(); loadV2ToolLog(); loadV2SessionOptions(); refreshSocialStatus(); refreshSlang(); loadSlangConfig(); loadMemory(); loadSecurity(); refreshSimPrompt(); refreshDshModel(); refreshUsage(); refreshUsageChart(); refreshUsageRecent();
 setInterval(() => { refresh(); refreshSessions(); refreshPending(); refreshSocialStatus(); refreshSlang(); }, 3000);
 // 用量看板只在本页可见时轮询：既保证「实时」，又不让其它页白白多打两份接口。
 setInterval(() => { if (currentConsolePage !== 'usage') return; refreshUsage(); refreshUsageChart(); refreshUsageRecent(); }, 3000);
@@ -5087,3 +5348,10 @@ setInterval(() => { if (currentConsolePage !== 'usage') return; refreshUsage(); 
 </script>
 </body>
 </html>
+
+
+
+
+
+
+

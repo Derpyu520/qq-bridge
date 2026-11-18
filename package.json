@@ -39,6 +39,7 @@
     "test:console-ui": "node scripts/test-console-ui.mjs",
     "test:preset-prompt": "node scripts/test-preset-prompt.mjs",
     "test:role-card": "node scripts/test-role-card.mjs",
+    "test:memory": "node scripts/test-memory.mjs",
     "preview:console": "node scripts/console-ui-fixture.mjs",
     "verify:adaptation": "node scripts/verify-dsh-022-adaptation.mjs",
     "test:dsh-auth": "node scripts/test-dsh-auth.mjs",
