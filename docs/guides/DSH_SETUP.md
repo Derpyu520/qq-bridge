@@ -26,6 +26,18 @@ DSH 0.2.2 起上游要求 Node.js **≥24.9**；桥接程序本身仍兼容 `>=2
 [DSH 0.2.2 适配记录](DSH_022_ADAPTATION.md)），但仍不能把某个环境成功或失败的结果
 推广到全部安装。
 
+## 分发形态（先看这段）
+
+| 问题 | 答案 |
+|---|---|
+| 用户拿到的是什么？ | **只有源码仓库**（`git clone`）。没有安装器、没有便携包、没有发布物。 |
+| 有没有脚本往用户目录复制文件？ | **没有**。安装动作只做两件事：链接 bundle、在 profile 的 `package.json` 里登记；不复制文件，不写 profile 的 `cordis.patch.yml`。 |
+| 有没有"升级"路径？ | **没有独立升级器**。`git pull` 覆盖整个工作目录即可；bundle 是 `link:` 安装，pull 完重启 DSH 就生效。 |
+
+因此交付面检查单里「安装包排除开发文件」「`[InstallDelete]` 清理」这类项**不适用**（没有安装器）；
+但下面这些仍然适用并已处理：旧注入区块的手动删除说明、bundle 清单与实际文件一致、
+`setup-dsh.mjs` 连跑不改 profile patch。
+
 ## 安装步骤
 
 在目标设备上：
@@ -70,7 +82,7 @@ DSH 0.2.2 起上游要求 Node.js **≥24.9**；桥接程序本身仍兼容 `>=2
    node scripts/setup-dsh.mjs
    ```
 
-   默认安装到 `web` profile；如果 DSH 使用其他 profile，可以传参：
+   不传参数时自动检测：`~/.dsh/profiles` 里有 `desktop` 就用 `desktop`，只有一个目录就用那个，否则报错要求显式传参。实际目标一定会打印出来。也可以显式指定：
 
    ```bash
    node scripts/setup-dsh.mjs <profile名>
@@ -79,22 +91,31 @@ DSH 0.2.2 起上游要求 Node.js **≥24.9**；桥接程序本身仍兼容 `>=2
    脚本会完成：
 
    - 安装 agent preset：通过 `plugins/qq-agent-presets` 这个 DSH bundle 把 `qq-chat` / `qq-chat-v2` 两条 `@deepseek-ai/dsh-agent-preset` 行插入 profile（DSH 0.1.7 起 preset **不再是** `~/.dsh/.agent-presets/<名>/` 目录，该目录完全不被读取）。patch 由 `scripts/build-agent-preset-patches.mjs` 从 `dsh/agent-presets/` 的权威源生成
-   - 在 `~/.dsh/profiles/web/cordis.patch.yml` 挂载：
-     - `mcp-snowluma`（`src/mcp-snowluma-safe.js`，带 `toolCallTimeoutMs: 725000`）
-     - `mcp-snowluma-host`（`src/mcp-host-server.js`）
-     - `mcp-web-search-safe`（`src/mcp-web-search-safe.js`）
-   - 在 `~/.dsh/profiles/web/package.json` 注册 `qq-mode-console` 与 `qq-agent-presets`（`dsh.profile.bundles` + `link:` 依赖），并维护 `node_modules` 下的 junction
+   - **只检查** `~/.dsh/profiles/<profile>/cordis.patch.yml`：发现旧版注入区块（`# === qq-bridge MCP BEGIN ===`）就打印处理办法，**不写这个文件**
+   - 在 `~/.dsh/profiles/<profile>/package.json` 注册 `qq-mode-console` 与 `qq-agent-presets`（`dsh.profile.bundles` + `link:` 依赖），并维护 `node_modules` 下的 junction
    - 把 `qq-mode` 的默认模式设为 `reserved2`（二代仿真）
    - 创建本地 `state/mode.json`（`mode: reserved2`）作为 DSH settings 不可用时的兜底
-   - 尝试自动执行 `dsh plugin --profile web install`（当 `dsh` CLI 在 PATH 中可用时），注册两个插件的 bundle 依赖；若 `dsh` 不在 PATH，缺失依赖时 DSH 会提示补跑
+   - 尝试自动执行 `dsh plugin --profile <profile> install`（当 `dsh` CLI 在 PATH 中可用时），注册两个插件的 bundle 依赖；若 `dsh` 不在 PATH，缺失依赖时 DSH 会提示补跑
 
-   > 脚本可重复运行（幂等）：它会重建 `qq-agent-presets` 的 preset patch、更新 MCP 路径并重建失效的插件链接。
-   > MCP 条目通过 YAML 解析后**按顶层 `insert` 内的条目 id 增删**（不依赖标记注释），支持带引号的 id、共享 `insert` 与行内 YAML，并保留其他插件配置和嵌套数据。
-   > 脚本在写入前验证 YAML；无法解析时停止，不覆盖配置或 preset。只修复历史版本在文件开头遗留的多余 `[]`，不会删除正文中的空数组或文本。
-   > YAML 格式与注释会在序列化时规范化；每次**实际改动内容**前，完整原文会保存在同目录的 `cordis.patch.yml.bak-<ISO 时间戳>`（例如 `cordis.patch.yml.bak-2026-10-31T13-10-31-123Z`），只保留最近 5 份；内容无需改动时不会新增备份。
+   **三个 MCP server 不在这里装**。它们由 `dsh/qq-bridge-mcp` 这个 bundle 自带：
+
+   ```
+   plugin_manager install_bundle target=link:C:\qq机器人\qq-bridge\dsh\qq-bridge-mcp
+   ```
+
+   | 行 id | serverName | 脚本 |
+   |---|---|---|
+   | `mcp-snowluma` | `snowluma` | `src/mcp-snowluma-safe.js`（带 `toolCallTimeoutMs: 725000`） |
+   | `mcp-snowluma-host` | `snowluma-host` | `src/mcp-host-server.js` |
+   | `mcp-web-search-safe` | `web-search-safe` | `src/mcp-web-search-safe.js` |
+
+   > 为什么不再注入：profile 的 `cordis.patch.yml` 是用户覆盖层，安装器写它就必须整文件读-改-写；而 `js-yaml` 不保留注释，会抹掉自己和其它安装器的标记，还会和 DSH 设置页并发丢更新。bundle 的 patch 随包发布、只读，`install_bundle` 只改 profile 的 `package.json`。
+   > 详见 [DSH_MCP_BUNDLE_MIGRATION.md](DSH_MCP_BUNDLE_MIGRATION.md)。
+
+   > 脚本可重复运行（幂等）：它会重建 `qq-agent-presets` 的 preset patch、重建失效的插件链接，并且**保证 profile patch 字节不变**。
    > 可用 `node scripts/test-audit-setup.mjs` 验证幂等性、配置保留、路径边界和 Windows CLI 调用；测试只使用独立的临时仓库和 DSH_HOME，不启动真实 DSH。
    > 已存在的 `qq-bridge/state/mode.json` 会被保留（不覆盖用户设置）；全新安装才会写入 `mode: reserved2`。
-   > 如果之后把 `qq-bridge` 目录移动/重新 clone 到别的路径，请重新运行一次本脚本，否则 DSH 里的 MCP/插件绝对路径会指向旧位置。
+   > 如果之后把 `qq-bridge` 目录移动/重新 clone 到别的路径，请重新运行一次本脚本，并重新装一次 MCP bundle，否则 DSH 里的 MCP/插件绝对路径会指向旧位置。
    > 也可用环境变量指定 DSH 根目录：`DSH_HOME=/path/to/.dsh node scripts/setup-dsh.mjs <profile>`。
    > `<profile>` 必须是单个目录名，不能包含路径分隔符或 `..` 路径跳转。离线准备配置时，可设置 `QQ_BRIDGE_SKIP_DSH_INSTALL=1` 跳过自动安装 bundle，随后手动运行 `dsh plugin --profile <profile> install`。
    > Windows 下脚本通过隐藏的 `cmd.exe` 调用 npm 的 `dsh.cmd` 启动器；`DSH_HOME` 和 profile 参数会传给该进程。
@@ -104,6 +125,48 @@ DSH 0.2.2 起上游要求 Node.js **≥24.9**；桥接程序本身仍兼容 `>=2
    必须重启 DSH（或让 DSH 重新加载 profile），新 preset 和 MCP 工具才会生效。
 
    > 默认模式为 **`reserved2`（二代仿真）**，即“文本不自动转发、AI 通过工具自主收发”。如果你想改用 `chat` / `closed-agent` / `reserved`，在**桥接控制台**（默认 `http://127.0.0.1:3100`）顶部按钮切换即可 —— 桥接会同时写入 DSH 设置与本地 `state/mode.json`，**无需重启**（每 5 秒轮询即时生效）。本地文件保存模式兜底与 `closedAgentPreset`；正常情况下模式以 DSH 设置为准，请通过控制台切换。
+
+## 从旧版升级（MCP 行已改由 bundle 提供）
+
+老版本的 `setup-dsh.mjs` 会往 profile 的 `cordis.patch.yml` 里注入一段
+`# === qq-bridge MCP BEGIN === … END ===` 区块。现在这些行由 `@local/qq-bridge-mcp`
+这个 bundle 提供；**旧区块如果还留着，会和 bundle 插同一个 id，同名 server 冲突，
+工具会消失。**
+
+**不删会怎样**：`mcp__snowluma__*`、`mcp__snowluma-host__*`、`mcp__web-search-safe__*`
+三组工具直接不可用；日志里能看到同 id 两份或 server 名冲突。
+
+**只删 qq-bridge 自己的行，不要"整段删除"。**
+DSH 设置页把新行追加到 YAML 序列末尾，而尾随注释留在最后 —— 所以只装了 qq-bridge 的机器上，
+用户自己的设置行（`agent-preset-registry` / `web` / `web-search-deepseek` 等）**会落在这个区块内部**。
+按"BEGIN 到 END 整段删掉"会把这些一起删掉，预设选择和网页搜索配置就没了。
+
+处理步骤：
+
+1. 打开 `%USERPROFILE%\.dsh\profiles\<profile>\cordis.patch.yml`；
+2. 在 `BEGIN` 与 `END` 之间，只删掉这三个 `- insert:` 块：
+   `mcp-snowluma` / `mcp-snowluma-host` / `mcp-web-search-safe`；
+3. 若还有这三个 id 的 `- id:` 覆盖行（例如带 `disabled: true` 的），一并删掉；
+4. **区块里的其它行一律保留**；
+5. **最后**再删 `# === qq-bridge MCP BEGIN ===` 与 `# === qq-bridge MCP END ===`
+   两条标记行（先删行、后删标记，避免边界消失后误删）；
+6. 保存，重启 DSH，并立刻装 bundle：
+
+   ```
+   plugin_manager install_bundle target=link:<仓库路径>\dsh\qq-bridge-mcp
+   ```
+
+删完自查两件事：
+
+```powershell
+# ① 不应该再有 qq-bridge 的痕迹
+Select-String -Path "$env:USERPROFILE\.dsh\profiles\<profile>\cordis.patch.yml" -Pattern 'mcp-snowluma|qq-bridge MCP'
+# ② 用户自己的配置应该还在
+Select-String -Path "$env:USERPROFILE\.dsh\profiles\<profile>\cordis.patch.yml" -Pattern '^- id: '
+```
+
+`setup-dsh.mjs` 启动时会**只读**检查这个文件：发现遗留区块只打印提示，不会替你改；
+它也不会再往 profile patch 写任何东西。
 
 ## 验证是否装好
 

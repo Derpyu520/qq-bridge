@@ -72,7 +72,14 @@ Copy-Item config.example.json config.json
 node scripts/setup-dsh.mjs
 ```
 
-这一步会把聊天预设和 MCP 工具接入 DSH，**首次安装也必须执行**。完成后重启 DSH；使用非 `web` profile 时见[安装指南](docs/guides/DSH_SETUP.md#安装步骤)。
+这一步会安装聊天预设并注册两个插件 bundle（`qq-mode-console` / `qq-agent-presets`），**首次安装也必须执行**。
+三个 MCP server 不在这一步，它们由 `dsh/qq-bridge-mcp` 这个 bundle 自带，用插件管理器装一次即可：
+
+```
+plugin_manager install_bundle target=link:<仓库路径>\dsh\qq-bridge-mcp
+```
+
+完成后重启 DSH；使用非默认 profile 时见[安装指南](docs/guides/DSH_SETUP.md#安装步骤)。
 
 ### 4. 启动并测试
 

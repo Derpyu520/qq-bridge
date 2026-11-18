@@ -48,40 +48,54 @@ function test(name, fn) {
 }
 
 try {
-  test('shared inserts, quoted IDs, flow YAML and unrelated nested arrays survive repeat setup', () => {
-    const source = `# user patch\n- insert:\n    - id: mcp-snowluma\n      name: old\n    - id: custom\n      name: custom-plugin\n      config:\n        empty:\n          []\n        nested:\n          - id: mcp-snowluma-host\n            value: keep\n- insert:\n    - id: 'mcp-snowluma-host' # previous setup\n      name: old\n- {insert: [{id: mcp-web-search-safe, name: old}]}\n`;
+  test('profile patch is left byte-identical across repeat setup', () => {
+    // 真实形态：只有用户自己的行，没有安装器区块。
+    const source = `# user patch\n- id: custom\n  name: custom-plugin\n  config:\n    empty:\n      []\n    nested:\n      - id: mcp-snowluma-host\n        value: keep\n- insert:\n    - id: user-second\n      name: other\n`;
     const f = fixture('structured', source);
-    const originalCustom = yaml.load(source)[0].insert[1];
     for (let i = 0; i < 2; i++) {
       const result = f.run();
       assert.equal(result.status, 0, result.stderr || result.error?.message);
-      const doc = yaml.load(fs.readFileSync(f.patchFile, 'utf8'));
-      const entries = doc.flatMap((op) => op.insert || []);
-      assert.deepEqual(entries.find((entry) => entry.id === 'custom'), originalCustom);
-      for (const id of ['mcp-snowluma', 'mcp-snowluma-host', 'mcp-web-search-safe']) {
-        assert.equal(entries.filter((entry) => entry.id === id).length, 1, `${id} duplicate`);
-      }
-      assert.equal(entries.find((entry) => entry.id === 'mcp-snowluma').config.toolCallTimeoutMs, 725000);
+      assert.equal(fs.readFileSync(f.patchFile, 'utf8'), source, 'profile patch 不允许被改写');
     }
     const pkg = JSON.parse(fs.readFileSync(path.join(f.home, 'profiles/web/package.json')));
     assert.equal(pkg.dependencies.existing, '1.0.0');
     assert.deepEqual(pkg.dsh.profile.bundles, ['existing', 'qq-mode-console', 'qq-agent-presets']);
   });
 
-  test('legacy root [] is repaired without altering literal strings', () => {
-    const f = fixture('legacy', `[]\n- insert:\n    - id: custom\n      name: custom\n      config:\n        text: |\n          []\n          keep me\n`);
-    const result = f.run();
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(yaml.load(fs.readFileSync(f.patchFile, 'utf8'))[0].insert[0].config.text, '[]\nkeep me\n');
+  test('MCP rows live in the bundle patch instead of the profile', () => {
+    const bundlePatch = path.join(root, 'dsh/qq-bridge-mcp/cordis.patch.yml');
+    const doc = yaml.load(fs.readFileSync(bundlePatch, 'utf8'));
+    const entries = doc.flatMap((op) => op.insert || []);
+    assert.deepEqual(entries.map((entry) => entry.id),
+      ['mcp-snowluma', 'mcp-snowluma-host', 'mcp-web-search-safe']);
+    for (const entry of entries) assert.equal(entry.name, '@deepseek-ai/dsh-mcp-client');
+    assert.equal(entries.find((entry) => entry.id === 'mcp-snowluma').config.toolCallTimeoutMs, 725000);
+
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, 'dsh/qq-bridge-mcp/package.json'), 'utf8'));
+    assert.equal(pkg.dsh.bundle.patch, './cordis.patch.yml');
+    for (const entry of pkg.files) {
+      if (entry.includes('*')) continue;
+      assert.ok(fs.existsSync(path.join(root, 'dsh/qq-bridge-mcp', entry)), `files 里的 ${entry} 不存在`);
+    }
   });
 
-  test('malformed patch fails before replacing user configuration or presets', () => {
+  test('legacy root [] is reported but never rewritten', () => {
+    const source = `[]\n- insert:\n    - id: custom\n      name: custom\n      config:\n        text: |\n          []\n          keep me\n`;
+    const f = fixture('legacy', source);
+    const result = f.run();
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(fs.readFileSync(f.patchFile, 'utf8'), source);
+    assert.match(result.stdout, /空数组/, '应提示手工删除独立成行的 []');
+  });
+
+  test('malformed patch is left untouched and does not block the rest of the install', () => {
     const source = '- insert: [broken\n';
     const f = fixture('malformed', source);
     const result = f.run();
-    assert.notEqual(result.status, 0);
+    assert.equal(result.status, 0, result.stderr);
     assert.equal(fs.readFileSync(f.patchFile, 'utf8'), source);
-    assert.equal(fs.existsSync(path.join(f.home, '.agent-presets')), false);
+    const pkg = JSON.parse(fs.readFileSync(path.join(f.home, 'profiles/web/package.json')));
+    assert.ok(pkg.dsh.profile.bundles.includes('qq-agent-presets'));
   });
 
   test('profile traversal is rejected before filesystem changes', () => {

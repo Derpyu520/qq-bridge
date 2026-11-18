@@ -72,7 +72,14 @@ When running on the same machine, normally leave `dsh.authToken` empty so the br
 node scripts/setup-dsh.mjs
 ```
 
-This installs the chat presets and MCP tools into DSH. **It is required for a fresh installation.** Restart DSH afterwards. For profiles other than `web`, see the [setup guide](docs/guides/DSH_SETUP.md#安装步骤).
+This installs the chat presets and registers the two plugin bundles (`qq-mode-console` / `qq-agent-presets`). **It is required for a fresh installation.**
+The three MCP servers are not installed by this step — they ship in the `dsh/qq-bridge-mcp` bundle:
+
+```
+plugin_manager install_bundle target=link:<repo>\dsh\qq-bridge-mcp
+```
+
+Restart DSH afterwards. For non-default profiles, see the [setup guide](docs/guides/DSH_SETUP.md#安装步骤).
 
 ### 4. Start and test
 

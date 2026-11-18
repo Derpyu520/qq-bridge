@@ -14,6 +14,7 @@
 | 文档 | 内容 | 状态 |
 | --- | --- | --- |
 | [DSH 安装指南](guides/DSH_SETUP.md) | 兼容范围、依赖安装、DSH 插件与 preset、启动验证和常见故障排查 | ✅ |
+| [MCP 加载方式迁移](guides/DSH_MCP_BUNDLE_MIGRATION.md) | 停止往 `cordis.patch.yml` 注入，改走 bundle：原因、runbook、验收 | ✅ **改 DSH 安装逻辑前必读** |
 | [权限与安全规则](../RULES.md) | 四种模式、权限分层、人格与仿真提示词、黑话学习和管理命令 | ✅ |
 | [控制台「令牌与花费」看板](guides/TOKEN_USAGE_CONSOLE.md) | 用量来源、计价口径、API、配置和存储 | ✅ |
 | [控制台离线预览与回归](guides/CONSOLE-UI-TESTING.md) | `npm run preview:console`、`npm run test:console-ui` 与基线维护 | ✅ |

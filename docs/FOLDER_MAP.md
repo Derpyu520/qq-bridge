@@ -44,7 +44,7 @@ DSH/                         ← 工作区根（不是仓库根）
 | `test-audit-*.mjs` | 离线审计子模块，覆盖桥接、协议、网络、运行时、权限和安装边界 |
 | `test-dsh-*.mjs` | DSH 契约测试；有些使用离线夹具，有些需要活的 DSH，环境要求以各文件和 `package.json` 为准 |
 | `console-ui-*` | 控制台离线预览、fixture 和 API 基线；说明见 [CONSOLE-UI-TESTING](guides/CONSOLE-UI-TESTING.md) |
-| `setup-*.mjs` | DSH 插件、preset 与 MCP 的幂等安装 |
+| `setup-*.mjs` | DSH 插件与 preset 的幂等安装；**不写** profile 的 `cordis.patch.yml`，只做只读检查（MCP 行由 `dsh/qq-bridge-mcp` bundle 提供） |
 | `verify-*.mjs` | DSH 适配和 persona 一致性检查 |
 | `probe-*.mjs` | 本机兼容性检查，鉴权路径以各脚本为准（部分使用 `probe-auth.mjs`）。`probe-snowluma-heartbeat` 只读；`probe-020-settings` 将读取的 mode 原值写回以验证写入路径；`probe-020-protocol` 会创建测试会话 / 工作区，结束后归档会话、删除工作区并清理临时目录。可能连接真实本机服务，不属于纯离线套件 |
 | `scan-*.mjs` | 工具名、依赖或其他静态对账 |

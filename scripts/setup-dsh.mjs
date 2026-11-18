@@ -5,26 +5,31 @@
 //   1. 安装两套 agent preset：qq-chat、qq-chat-v2
 //      （DSH 0.1.7 机制：作为 qq-agent-presets bundle 的 patch 层插入
 //        @deepseek-ai/dsh-agent-preset 行；~/.dsh/.agent-presets/ 目录已不再被读取）
-//   2. 在 DSH profile 的 cordis.patch.yml 中挂载三个 MCP server：
-//      mcp-snowluma / mcp-snowluma-host / mcp-web-search-safe
-//   3. 在 profile package.json 中注册两个 bundle：qq-mode-console、qq-agent-presets
+//   2. 在 profile package.json 中注册两个 bundle：qq-mode-console、qq-agent-presets
+//   3. 只**检查**、不修改 profile 的 cordis.patch.yml
+//
+// 三个 MCP server（mcp-snowluma / mcp-snowluma-host / mcp-web-search-safe）的行
+// 现在由 dsh/qq-bridge-mcp 这个 bundle 自带（`plugin_manager install_bundle`）。
+// 脚本不再写 profile patch —— 整文件 yaml.dump 会抹掉注释、其它安装器的标记，
+// 并和 DSH 设置页并发丢更新。发现遗留注入区块时只提示，不动用户文件。
 //
 // 用法：
 //   node scripts/setup-dsh.mjs [profile]
 //
-// 默认 profile 为 web；可用环境变量 DSH_HOME 指定 DSH 根目录。
+// profile 取命令行参数；不传时自动检测（只认存在的目录，并且一定打印实际目标）。
+// 旧版默认写死 'web'，而桌面版实际用 'desktop'——排障时会看错文件，所以这里不再猜。
+// 可用环境变量 DSH_HOME 指定 DSH 根目录。
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import yaml from 'js-yaml';
 import { BUNDLE_DIR, PRESETS, buildPatches, patchFileFor } from './build-agent-preset-patches.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 const DSH_HOME = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
-const PROFILE = process.argv[2] || 'web';
+const PROFILE = resolveProfile(process.argv[2]);
 
 // A profile is a directory name, never a path (same boundary as DSH itself).
 if (PROFILE === '.' || PROFILE === '..' || PROFILE === 'node_modules'
@@ -41,37 +46,36 @@ function fatal(msg) {
   process.exit(1);
 }
 
-function ensureDir(p) {
-  fs.mkdirSync(p, { recursive: true });
+/**
+ * 解析目标 profile。
+ * - 传参：直接用（仍受下面的名字边界校验约束）。
+ * - 不传参：profiles 目录里有 desktop 就用 desktop；只有一个目录就用它；
+ *   其余情况要求显式传参 —— 宁可报错，也不要"装错 profile 却以为装好了"。
+ */
+function resolveProfile(arg) {
+  if (arg) return arg;
+  const dir = path.join(DSH_HOME, 'profiles');
+  let names = [];
+  try {
+    names = fs.readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch {
+    fatal(`没有指定 profile，也读不到 ${dir}；请显式传参：node scripts/setup-dsh.mjs <profile>`);
+  }
+  if (names.includes('desktop')) {
+    log(`未指定 profile：自动选用 desktop（现有：${names.join(', ')}）`);
+    return 'desktop';
+  }
+  if (names.length === 1) {
+    log(`未指定 profile：自动选用唯一的 ${names[0]}`);
+    return names[0];
+  }
+  fatal(`未指定 profile，且无法从「${names.join(', ') || '空'}」里唯一确定；请显式传参：node scripts/setup-dsh.mjs <profile>`);
 }
 
-/**
- * 备份一个即将被覆盖的文件。
- *
- * 为什么不用 `flag: 'wx'`（写一次就永不更新）：那样第一次安装会留下一个备份，
- * 之后每次 setup 都静默跳过 —— 用户后来手工改过的内容再被覆盖时，桌上那份备份
- * 早已过期，等于「有备份但救不回来」。改为每次覆盖前打时间戳快照，只保留最近 N 份。
- */
-function backupBeforeOverwrite(file, keep = 5) {
-  if (!fs.existsSync(file)) return null;
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const dest = `${file}.bak-${stamp}`;
-  try {
-    fs.copyFileSync(file, dest);
-  } catch (error) {
-    log(`⚠️ 备份失败（${file}）：${error?.message ?? error}；继续但请自行确认原内容`);
-    return null;
-  }
-  try {
-    const dir = path.dirname(file);
-    const prefix = `${path.basename(file)}.bak-`;
-    const snaps = fs.readdirSync(dir).filter((f) => f.startsWith(prefix)).sort();
-    // 时间戳升序 ⇒ 前面的是最旧的，只保留最后 keep 份
-    for (const f of snaps.slice(0, Math.max(0, snaps.length - keep))) {
-      fs.rmSync(path.join(dir, f), { force: true });
-    }
-  } catch {}
-  return dest;
+function ensureDir(p) {
+  fs.mkdirSync(p, { recursive: true });
 }
 
 // ── agent preset：DSH 0.1.7 机制 ─────────────────────────────────────────────
@@ -118,89 +122,35 @@ function reportLegacyPresetDir() {
   }
 }
 
-function yamlSingleQuote(s) {
-  return `'${String(s).replace(/'/g, "''")}'`;
-}
+/**
+ * 旧版安装器把三个 MCP 行注入 profile 的 cordis.patch.yml，并用整文件 yaml.dump
+ * 重写它。那条路已经退役：现在这些行由 dsh/qq-bridge-mcp bundle 提供。
+ *
+ * 这个函数只**读**文件，发现历史遗留就提示人怎么处理，绝不写。
+ */
+function inspectProfilePatch() {
+  const patchFile = path.join(DSH_HOME, 'profiles', PROFILE, 'cordis.patch.yml');
+  if (!fs.existsSync(patchFile)) {
+    log(`cordis.patch.yml: 不存在（profile ${PROFILE}）；MCP 行由 @local/qq-bridge-mcp bundle 提供`);
+    return;
+  }
+  const text = fs.readFileSync(patchFile, 'utf8');
 
-// 由桥接托管的 MCP 条目 id：脚本对这三个 id 拥有所有权，可安全地按 id 增删。
-const MANAGED_MCP_IDS = ['mcp-snowluma', 'mcp-snowluma-host', 'mcp-web-search-safe'];
+  if (text.includes('# === qq-bridge MCP BEGIN ===')) {
+    log('⚠️ cordis.patch.yml 里还有 qq-bridge 注入区块（# === qq-bridge MCP BEGIN ===）。');
+    log('   这些行现在由 @local/qq-bridge-mcp bundle 拥有，双份会撞 id，三组 MCP 工具会消失。');
+    log('   请手工删掉该区块（只删 BEGIN…END 之间，保留 web / agent-preset-registry 等其它行），');
+    log('   然后重启 DSH。本脚本不会替你改这个文件。');
+  } else {
+    log(`cordis.patch.yml: 无遗留注入区块；MCP 行由 @local/qq-bridge-mcp bundle 提供`);
+  }
 
-function mcpEntries() {
-  const node = process.execPath;
-  const servers = {
-    'mcp-snowluma': { serverName: 'snowluma', script: path.join(REPO_ROOT, 'src', 'mcp-snowluma-safe.js'), toolCallTimeoutMs: 725000 },
-    'mcp-snowluma-host': { serverName: 'snowluma-host', script: path.join(REPO_ROOT, 'src', 'mcp-host-server.js') },
-    'mcp-web-search-safe': { serverName: 'web-search-safe', script: path.join(REPO_ROOT, 'src', 'mcp-web-search-safe.js') },
-  };
-  let out = '# === qq-bridge MCP BEGIN ===\n';
-  out += '# 由 scripts/setup-dsh.mjs 维护；这段区块会被整体替换，请勿手工编辑内部条目。\n';
-  for (const [id, s] of Object.entries(servers)) {
-    out += `- insert:\n`;
-    out += `    - id: ${id}\n`;
-    out += `      name: '@deepseek-ai/dsh-mcp-client'\n`;
-    out += `      config:\n`;
-    out += `        serverName: ${s.serverName}\n`;
-    out += `        transport: stdio\n`;
-    out += `        command: ${yamlSingleQuote(node)}\n`;
-    out += `        args:\n`;
-    out += `          - ${yamlSingleQuote(s.script)}\n`;
-    // qq_wait_for_messages 最长可等 10 分钟；DSH 默认 60s 会提前掐断工具调用。
-    if (s.toolCallTimeoutMs) out += `        toolCallTimeoutMs: ${s.toolCallTimeoutMs}\n`;
+  // 历史版本的脚本会在文件开头留下独立成行的 `[]`，DSH 启动会报 YAML 解析失败。
+  // 旧脚本会顺手删掉它；现在不再写文件，所以只提示怎么手工处理。
+  if (/^[ \t]*\[\][ \t]*$/m.test(text)) {
+    log('⚠️ cordis.patch.yml 里有独立成行的空数组 `[]`：DSH 启动会报 YAMLException。');
+    log('   删掉那一行（正文里的 `[]` 是用户数据，不要动），然后重启 DSH。');
   }
-  out += '# === qq-bridge MCP END ===\n';
-  return out;
-}
-
-function prepareCordisPatch() {
-  const profileDir = path.join(DSH_HOME, 'profiles', PROFILE);
-  const patchFile = path.join(profileDir, 'cordis.patch.yml');
-  const original = fs.existsSync(patchFile) ? fs.readFileSync(patchFile, 'utf8') : '';
-  const lines = original.replace(/^\uFEFF/, '').split(/\r?\n/);
-  // Repair only the historical invalid *root* [] followed by block operations.
-  // A nested [] or a line inside a literal scalar is user data and must survive.
-  const first = lines.findIndex((line) => line.trim() && !line.trimStart().startsWith('#'));
-  if (first >= 0 && lines[first].trim() === '[]'
-      && lines.slice(first + 1).some((line) => /^-\s/.test(line))) {
-    lines.splice(first, 1);
-  }
-  let doc;
-  try { doc = yaml.load(lines.join('\n')) ?? []; }
-  catch (error) { fatal(`failed to parse ${patchFile}; file unchanged: ${error.message}`); }
-  if (!Array.isArray(doc)) fatal(`${patchFile} must contain a YAML array; file unchanged`);
-  let removed = 0;
-  const kept = [];
-  for (const operation of doc) {
-    if (!operation || typeof operation !== 'object' || Array.isArray(operation)) {
-      fatal(`invalid patch operation in ${patchFile}; file unchanged`);
-    }
-    if (!Object.hasOwn(operation, 'insert')) { kept.push(operation); continue; }
-    if (!Array.isArray(operation.insert)) fatal(`insert must be an array in ${patchFile}; file unchanged`);
-    const entries = operation.insert.filter((entry) => {
-      if (!MANAGED_MCP_IDS.includes(entry?.id)) return true;
-      removed++;
-      return false;
-    });
-    // Retain shared insert parents and their selectors/other operation fields.
-    if (entries.length || Object.keys(operation).length > 1) kept.push({ ...operation, insert: entries });
-  }
-  const text = (kept.length ? `${yaml.dump(kept, { lineWidth: -1, noRefs: true })}\n` : '') + mcpEntries();
-  return { patchFile, original, text, removed };
-}
-
-function patchCordis({ patchFile, original, text, removed }) {
-  ensureDir(path.dirname(patchFile));
-  // Parsing/serialization normalizes formatting; keep the original text (including comments).
-  if (original && original !== text) {
-    backupBeforeOverwrite(patchFile);
-  }
-  const temporary = `${patchFile}.${process.pid}.tmp`;
-  try {
-    fs.writeFileSync(temporary, text, 'utf8');
-    fs.renameSync(temporary, patchFile);
-  } finally {
-    fs.rmSync(temporary, { force: true });
-  }
-  log(`cordis.patch.yml: MCP 条目已同步（清理旧条目 ${removed} 条，写入 ${MANAGED_MCP_IDS.length} 条）`);
 }
 
 /**
@@ -351,14 +301,13 @@ function autoInstallProfileBundles() {
   }
 }
 
-// Validate the existing YAML before changing any presets or configuration.
-const cordisPatch = prepareCordisPatch();
+// profile patch 只读检查：MCP 行由 bundle 拥有，脚本不再写这个文件。
+inspectProfilePatch();
 regeneratePresetPatches();
-patchCordis(cordisPatch);
 const links = {};
 for (const name of BUNDLE_NAMES) links[name] = ensureBundle(name);
 patchProfilePackage(links);
 reportLegacyPresetDir();
 ensureLocalModeFile();
 autoInstallProfileBundles();
-log('Done. Restart DSH (or reload the profile) so the new presets/MCP take effect.');
+log('Done. Restart DSH (or reload the profile) so the new presets take effect.');

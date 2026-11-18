@@ -1,0 +1,15 @@
+{
+  "name": "@local/qq-bridge-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
