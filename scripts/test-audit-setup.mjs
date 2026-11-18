@@ -36,7 +36,7 @@ function fixture(name, patch = '') {
   }));
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'path'));
   Object.assign(env, { PATH: path.dirname(process.execPath), DSH_HOME: home, HOME: home, USERPROFILE: home, QQ_BRIDGE_SKIP_DSH_INSTALL: '1' });
-  const run = (profile = 'web', extraEnv = {}) => spawnSync(process.execPath, [path.join(repo, 'scripts/setup-dsh.mjs'), profile], {
+  const run = (profile = 'web', extraEnv = {}) => spawnSync(process.execPath, [path.join(repo, 'scripts/setup-dsh.mjs'), ...(profile === null ? [] : [profile])], {
     env: { ...env, ...extraEnv }, cwd: repo, encoding: 'utf8', timeout: 15000,
   });
   return { repo, home, patchFile, run };
@@ -48,6 +48,87 @@ function test(name, fn) {
 }
 
 try {
+  for (const profile of ['web', 'desktop', 'custom-profile']) {
+    test(`no argument selects the only initialized ${profile} profile`, () => {
+      const f = fixture(`auto-${profile}`);
+      const profiles = path.join(f.home, 'profiles');
+      if (profile !== 'web') fs.renameSync(path.join(profiles, 'web'), path.join(profiles, profile));
+      const result = f.run(null);
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, new RegExp(`auto-selected profile: ${profile}`));
+      assert.match(fs.readFileSync(path.join(profiles, profile, 'cordis.patch.yml'), 'utf8'), /mcp-snowluma/);
+      if (profile !== 'web') assert.equal(fs.existsSync(path.join(profiles, 'web')), false);
+    });
+  }
+
+  test('ambiguous discovery writes nothing; an explicit profile resolves it', () => {
+    const f = fixture('auto-ambiguous');
+    const dir = path.join(f.home, 'profiles/desktop');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'cordis.yml'), '[]\n');
+    const before = fs.readdirSync(f.home, { recursive: true }).sort();
+    const preset = path.join(f.repo, 'plugins/qq-agent-presets/presets/qq-chat.patch.yml');
+    const presetBefore = fs.readFileSync(preset, 'utf8');
+    const result = f.run(null);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /multiple DSH profiles found: desktop, web/);
+    assert.match(result.stderr, /setup-dsh\.mjs <profile>/);
+    assert.deepEqual(fs.readdirSync(f.home, { recursive: true }).sort(), before);
+    assert.equal(fs.readFileSync(f.patchFile, 'utf8'), '');
+    assert.equal(fs.readFileSync(preset, 'utf8'), presetBefore);
+    assert.equal(fs.existsSync(path.join(f.repo, 'state')), false);
+    assert.equal(f.run('desktop').status, 0);
+    assert.equal(fs.readFileSync(f.patchFile, 'utf8'), '');
+  });
+
+  for (const layout of ['missing', 'empty', 'uninitialized']) {
+    test(`discovery refuses implicit creation with ${layout} profiles`, () => {
+      const f = fixture(`auto-${layout}`);
+      const profiles = path.join(f.home, 'profiles');
+      fs.rmSync(profiles, { recursive: true });
+      if (layout !== 'missing') fs.mkdirSync(profiles);
+      if (layout === 'uninitialized') {
+        fs.mkdirSync(path.join(profiles, 'scratch'));
+        fs.writeFileSync(path.join(profiles, 'scratch/package.json'), '{"name":"ordinary-package"}');
+      }
+      const before = fs.readdirSync(f.home, { recursive: true }).sort();
+      const result = f.run(null);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /no initialized DSH profile found/);
+      assert.deepEqual(fs.readdirSync(f.home, { recursive: true }).sort(), before);
+      assert.equal(fs.existsSync(path.join(f.repo, 'state')), false);
+    });
+  }
+
+  test('discovery ignores empty directories, reserved names, backup files and malformed metadata', () => {
+    const f = fixture('auto-ignore');
+    const profiles = path.join(f.home, 'profiles');
+    for (const name of ['scratch', 'node_modules', 'broken', 'null-package']) fs.mkdirSync(path.join(profiles, name));
+    fs.writeFileSync(path.join(profiles, 'node_modules/cordis.yml'), '[]');
+    fs.writeFileSync(path.join(profiles, 'broken/package.json'), '{');
+    fs.writeFileSync(path.join(profiles, 'null-package/package.json'), 'null');
+    fs.writeFileSync(path.join(profiles, 'desktop.bak'), 'backup');
+    assert.equal(f.run(null).status, 0);
+    assert.equal(fs.existsSync(path.join(profiles, 'scratch/cordis.patch.yml')), false);
+  });
+
+  test('a DSH profile package alone is sufficient for discovery', () => {
+    const f = fixture('auto-package');
+    fs.unlinkSync(f.patchFile);
+    const result = f.run(null);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /auto-selected profile: web/);
+  });
+
+  test('an explicit profile can still be created in a fresh DSH_HOME', () => {
+    const f = fixture('explicit-new');
+    fs.rmSync(path.join(f.home, 'profiles'), { recursive: true });
+    const result = f.run('custom');
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(fs.existsSync(path.join(f.home, 'profiles/custom/cordis.patch.yml')));
+    assert.equal(fs.existsSync(path.join(f.home, 'profiles/web')), false);
+  });
+
   test('shared inserts, quoted IDs, flow YAML and unrelated nested arrays survive repeat setup', () => {
     const source = `# user patch\n- insert:\n    - id: mcp-snowluma\n      name: old\n    - id: custom\n      name: custom-plugin\n      config:\n        empty:\n          []\n        nested:\n          - id: mcp-snowluma-host\n            value: keep\n- insert:\n    - id: 'mcp-snowluma-host' # previous setup\n      name: old\n- {insert: [{id: mcp-web-search-safe, name: old}]}\n`;
     const f = fixture('structured', source);

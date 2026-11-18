@@ -12,7 +12,7 @@
 // 用法：
 //   node scripts/setup-dsh.mjs [profile]
 //
-// 默认 profile 为 web；可用环境变量 DSH_HOME 指定 DSH 根目录。
+// 未指定 profile 时只自动选择唯一已初始化的 profile；可用 DSH_HOME 指定 DSH 根目录。
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -24,11 +24,52 @@ import { BUNDLE_DIR, PRESETS, buildPatches, patchFileFor } from './build-agent-p
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 const DSH_HOME = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
-const PROFILE = process.argv[2] || 'web';
 
 // A profile is a directory name, never a path (same boundary as DSH itself).
-if (PROFILE === '.' || PROFILE === '..' || PROFILE === 'node_modules'
-    || /[\\/\x00-\x1f<>:"|?*]/.test(PROFILE) || /[. ]$/.test(PROFILE)) {
+function validProfileName(name) {
+  return name !== '.' && name !== '..' && name !== 'node_modules'
+    && !/[\\/\x00-\x1f<>:"|?*]/.test(name) && !/[. ]$/.test(name);
+}
+
+function discoverProfile() {
+  const profilesDir = path.join(DSH_HOME, 'profiles');
+  let entries;
+  try { entries = fs.readdirSync(profilesDir, { withFileTypes: true }); }
+  catch (error) {
+    if (error.code !== 'ENOENT') fatal(`cannot inspect DSH profiles: ${error.message}`);
+    entries = [];
+  }
+  const candidates = entries.filter((entry) => {
+    if (!entry.isDirectory() || !validProfileName(entry.name)) return false;
+    const dir = path.join(profilesDir, entry.name);
+    // 空目录、node_modules 与备份文件不是已初始化的 profile。
+    for (const file of ['cordis.yml', 'cordis.patch.yml']) {
+      try { if (fs.statSync(path.join(dir, file)).isFile()) return true; }
+      catch (error) {
+        if (error.code !== 'ENOENT') fatal(`cannot inspect profile ${entry.name}: ${error.message}`);
+      }
+    }
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+      return !!pkg?.dsh?.profile && typeof pkg.dsh.profile === 'object' && !Array.isArray(pkg.dsh.profile);
+    } catch (error) {
+      if (error.code === 'ENOENT' || error instanceof SyntaxError) return false;
+      fatal(`cannot inspect profile ${entry.name}: ${error.message}`);
+    }
+  }).map((entry) => entry.name).sort();
+  if (candidates.length === 1) {
+    log(`auto-selected profile: ${candidates[0]}`);
+    return candidates[0];
+  }
+  if (candidates.length > 1) {
+    fatal(`multiple DSH profiles found: ${candidates.join(', ')}. Specify one explicitly: node scripts/setup-dsh.mjs <profile>`);
+  }
+  fatal('no initialized DSH profile found. Check DSH_HOME, start DSH once, or specify a profile explicitly: node scripts/setup-dsh.mjs <profile>');
+}
+
+// 必须先选定/校验目标，再生成 preset 或写任何安装配置。显式参数始终优先。
+const PROFILE = process.argv[2] || discoverProfile();
+if (!validProfileName(PROFILE)) {
   fatal(`invalid profile name: ${JSON.stringify(PROFILE)}`);
 }
 
