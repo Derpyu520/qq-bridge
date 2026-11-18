@@ -28,6 +28,7 @@ import { safeFetchBuffer, looksLikeImageBuffer } from './safe-fetch.js';
 import { normalizeImageForModel } from './media-normalize.js';
 import { AUDIO_EXTS, cleanupTemp, describeAudio, formatBytes, formatDuration, inspectAudio, listAudioFiles, parseTargetKey, processAudioVolume, resolveAudioProcessing, resolveAudioSource, safeJoinLibrary } from './send-voice-lib.js';
 import { discoverSnowLumaConnection, persistSnowLumaEndpoint, persistToken } from './snowluma-conn.js';
+import { resolveWsTarget, planWsPairUpdate, planConfigUpdate } from './ws-token.js';
 import { hardenDir, manualDirCommand } from './state-acl.mjs';
 import { extractForwardIds, forwardIdFromData, sanitizeForwardId, formatForwardResponse } from './forward.js';
 import { resolvePriceTable } from './model-prices.js';
@@ -12767,9 +12768,30 @@ async function main() {
   }
 
   // QQ 侧（SnowLuma OneBot WebSocket 客户端）
+  // SnowLuma 每个账号的 HTTP token 与 WS token 不同；WS 首次握手必须用**同一端点**的 WS token。
+  // 显式 wsToken 会钉住其配置端点（发现到的其他端点不生效）；只有未显式配置时才按发现结果跟随。
+  // 有显式 wsToken 且关闭端点跟随时跳过发现（避免无谓的 HTTP 探测）；其余情况自发现一次。
+  const followEndpoint = cfg.snowluma?.followDiscoveredEndpoint !== false;
+  const skipDiscovery = !followEndpoint && typeof cfg.snowluma.wsToken === 'string' && !!cfg.snowluma.wsToken.trim();
+  let initialDiscovery = null;
+  if (!skipDiscovery) {
+    try {
+      initialDiscovery = await discoverSnowLumaConnection({ cfg, timeoutMs: 4000 });
+    } catch (error) {
+      initialDiscovery = null;
+    }
+  }
+  const initialTarget = resolveWsTarget({
+    configuredWsUrl: cfg.snowluma.wsUrl,
+    configuredWsToken: cfg.snowluma.wsToken,
+    httpToken: cfg.snowluma.accessToken,
+    discovered: initialDiscovery,
+    followEndpoint
+  });
+  if (initialTarget.warning) log('⚠️ ' + initialTarget.warning);
   const bot = new SnowLumaWebSocketClient({
-    url: cfg.snowluma.wsUrl,
-    accessToken: cfg.snowluma.accessToken || undefined,
+    url: initialTarget.url,
+    accessToken: initialTarget.token,
     reconnect: true
   });
 
@@ -12897,35 +12919,59 @@ async function main() {
       try { return new URL(String(a)).href.replace(/\/+$/, '') === new URL(String(b)).href.replace(/\/+$/, ''); }
       catch { return false; }
     };
-    const acceptHttpToken = followEndpoint || sameEndpoint(r.baseUrl, cfg.snowluma.httpUrl || 'http://127.0.0.1:3000');
-    const acceptWsToken = !!r.wsUrl && typeof r.wsToken === 'string'
-      && (followEndpoint || sameEndpoint(r.wsUrl, cfg.snowluma.wsUrl));
+    const explicitWsToken = typeof cfg.snowluma.wsToken === 'string' ? cfg.snowluma.wsToken.trim() : '';
+    const acceptHttpToken = explicitWsToken
+      ? sameEndpoint(r.baseUrl, cfg.snowluma.httpUrl || 'http://127.0.0.1:3000')
+      : (followEndpoint || sameEndpoint(r.baseUrl, cfg.snowluma.httpUrl || 'http://127.0.0.1:3000'));
+    // 启动与自愈共用同一套 URL/token 配对规则（resolveWsTarget / planWsPairUpdate），
+    // 并且必须基于**变更前**的配置计算，避免把 A 端点的显式 token 贴到 B 端点。
+    const preWsUrl = cfg.snowluma.wsUrl;
+    const preWsToken = cfg.snowluma.wsToken;
+    const plan = planWsPairUpdate({
+      configuredWsUrl: preWsUrl,
+      configuredWsToken: preWsToken,
+      httpToken: cfg.snowluma.accessToken,
+      discovered: r,
+      followEndpoint,
+      currentUrl: bot.url,
+      currentToken: bot.accessToken
+    });
+    if (plan.warning) log('⚠️ ' + plan.warning);
+    const configUpdate = planConfigUpdate({
+      plan,
+      followEndpoint,
+      configuredWsToken: preWsToken,
+      configuredWsUrl: preWsUrl,
+      configuredHttpUrl: cfg.snowluma.httpUrl,
+      discoveredBaseUrl: r.baseUrl
+    });
+    if (configUpdate.warning) log('⚠️ ' + configUpdate.warning);
     const httpToken = acceptHttpToken ? r.token : cfg.snowluma.accessToken;
-    const wsToken = (acceptWsToken ? r.wsToken : bot.accessToken) || undefined;
-    const wsUrl = followEndpoint && acceptWsToken ? r.wsUrl : cfg.snowluma.wsUrl;
-    const wsChanged = bot.accessToken !== wsToken || bot.url !== wsUrl;
-    bot.accessToken = wsToken;
+    // 显式配置的 wsToken 钉住其配置端点：自愈/重连不得把发现到的其他端点与它配成一对，
+    // 也不得把发现到的 URL 持久化在旧显式 token 旁边。
+    const wsChanged = plan.changed;
+    bot.accessToken = plan.token;
     // 端口也是 per-account 的（实测：换账号后 WS 从 3001 之类变到别的端口），
     // 只换 token 不换 URL 会一直 1006 重连。
-    bot.url = wsUrl;
+    bot.url = plan.url;
     if (wsChanged) log('🔄 SnowLuma WS 连接已更新');
     if (acceptHttpToken && cfg.snowluma.accessToken !== httpToken) {
       log('🔄 SnowLuma HTTP token 已更新');
       cfg.snowluma.accessToken = httpToken;
     }
-    if (!acceptHttpToken || !acceptWsToken) {
+    if (!acceptHttpToken) {
       log('   已按 snowluma.followDiscoveredEndpoint=false 忽略其他端点及其凭据');
     }
     // 把确认可用的端点写回 config.json：下次启动直接就对了，不用再自愈一遍。
     // ⚠️ 必须在**改 cfg 之前**算出要写什么，但写文件时对照的是**文件里**的旧值 ——
     //    这里显式传 wsUrl，且不依赖 cfg 的内存值来判断"是否需要写"。
     // 关掉端点跟随时不写 URL：否则"我设了别处"这件事会被自愈持久化地抹掉。
-    cfg.snowluma.wsUrl = wsUrl;
-    if (followEndpoint && r.baseUrl) cfg.snowluma.httpUrl = r.baseUrl;
+    cfg.snowluma.wsUrl = configUpdate.wsUrl;
+    cfg.snowluma.httpUrl = configUpdate.httpUrl;
     try {
       const w = persistSnowLumaEndpoint(path.join(ROOT, 'config.json'), {
         ...(acceptHttpToken ? { accessToken: httpToken } : {}),
-        ...(followEndpoint ? { wsUrl, httpUrl: r.baseUrl } : {})
+        ...(configUpdate.persist.wsUrl ? { wsUrl: configUpdate.persist.wsUrl, httpUrl: configUpdate.persist.httpUrl } : {})
       });
       if (w.updated) log(`   已写回 config.json：${Object.keys(w.changed).join(' / ')}`);
       else log('   config.json 端点已是最新，无需改写');
@@ -12972,8 +13018,8 @@ async function main() {
     snowlumaHealth.connected = false;
     log(`SnowLuma 连接断开（code=${info?.code ?? '?'}），重连中…`);
     // 连不上时最常见的原因就是换了 QQ 账号 → token 变了；顺手自愈。
-    // 注意 1006 在**每次启动**都可能出现一次：HTTP token 与 WS token 是两个不同的值，
-    // config.json 里存的是前者，WS 需要用自愈发现的那个（详见 bot.connect() 处的说明）。
+    // 首次握手已经使用同一端点的 WS token（显式配置或发现），正常启动不再依赖 1006 自愈；
+    // 若仍出现 1006，自愈会按同一套 URL/token 配对规则重算一次。
     void healTokenIfStale(`close code=${info?.code ?? '?'}`);
   });
   bot.on('error', (error) => {

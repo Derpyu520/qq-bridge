@@ -19,6 +19,7 @@
     "wsUrl": "ws://127.0.0.1:3001",
     "httpUrl": "http://127.0.0.1:3000",
     "accessToken": "",
+    "wsToken": "",
     "followDiscoveredEndpoint": true,
     "silenceWarnMs": 600000,
     "launcherPath": "",
