@@ -8,8 +8,9 @@
 > 适配目标：`@deepseek-ai/dsh` **0.2.2-rc.1**（上一版适配目标 0.2.1-rc.2，
 > 记录见 [DSH_021_ADAPTATION.md](DSH_021_ADAPTATION.md)）。本文写于 2026-11-05。
 >
-> 版本身份：桥接 `v0.2.2-rc1`，是 0.2.2 线第 1 个候选发布，GitHub Release 标记为
-> prerelease；桥接的 `rc1` 与上游 DSH 的 `rc.1` 是各自独立的版本身份。
+> 版本身份：本文写于 `v0.2.2-rc1`，它是 0.2.2 线第 1 个候选发布，GitHub Release 当时标记为
+> prerelease；0.2.2 线的最终归档版本为 `v0.2.2-final`。桥接的 `rc1` 与上游 DSH 的 `rc.1`
+> 是各自独立的版本身份。
 >
 > **上游行为标注**：文中“协议层/线协议/实测”等指 DSH API 的兼容性验证；
 > “本机签名密钥/Cookie 生成”等指 qq-bridge 自身的本机鉴权行为，不是 SnowLuma 或 DSH 的机制。
@@ -284,13 +285,15 @@ CI 的 audit 主 job 保留原名、跑 Node 24；另加一条 Node 22 兼容 jo
 
 ## 8. 版本与发布
 
-- 本仓库版本：`0.2.2-rc1`（`package.json` / `package-lock.json` / 两个插件 /
+- 本仓库版本：`0.2.2-final`（归档版本；`package.json` / `package-lock.json` / 两个插件 /
   三个 MCP server 的 `serverInfo.version` 全部一致，由 `verify:adaptation` §3 强制）。
 - 适配目标：DSH `0.2.2-rc.1`；上一版适配目标 `0.2.1-rc.2`，发布线
   `v0.2.1-r1` / `v0.2.1-r2` 保留为历史。
 - 发布流程：适配分支最终验证并提交 → 合入 `dev` → 通过 PR 将 `dev` 合入受保护的
   `main` → 将合并提交快进同步回 `dev` → 打 `v0.2.2-rc1` 标签并创建 GitHub
   prerelease（不替换 stable latest）；**不**在 `main` 上直接改代码。
+- 归档版本 `v0.2.2-final` 沿用同一流程：打 tag 并发布为正式 release（Latest，非
+  prerelease），随后把仓库转为只读归档。
 - 0.2.2 线使用 `rcN` 表示候选发布；旧版 `rN` 标签维持历史含义，见
   [DSH_020 附录 H](DSH_020_ADAPTATION.md#h-版本号方案历史-rn-与当前候选发布)。
 
